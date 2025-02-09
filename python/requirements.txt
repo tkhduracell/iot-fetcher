@@ -1,0 +1,9 @@
+pybalboa==1.0.2
+
+influxdb-client[async]==1.48.0
+tuya-connector-python==0.1.2
+schedule==1.2.2
+
+ngenicpy==0.3.3
+
+iaqualink==0.5.0

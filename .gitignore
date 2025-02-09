@@ -1,0 +1,5 @@
+.env
+.vscode
+
+esp32-*/
+venv/
