@@ -10,6 +10,7 @@ from elpris import elpris
 from ngenic import ngenic
 from aqualink import aqualink
 from airquality import airquality
+from aquatemp import aquatemp
 
 logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s %(message)s')
@@ -27,6 +28,7 @@ def main():
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
     schedule.every(5).minutes.do(balboa)
+    schedule.every(5).minutes.do(aquatemp)
 
     schedule.every(6).hours.at(':05').do(elpris)
     schedule.every(1).hours.at(':05').do(airquality)
