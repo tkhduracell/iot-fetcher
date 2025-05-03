@@ -14,7 +14,7 @@ from iaqualink.const import (
     AQUALINK_API_KEY,
 )
 
-from influx import write_influx, Point, WritePrecision
+from influx import write_influx, Point
 
 aqualink_username = os.environ['AQUALINK_USERNAME'] or ''
 aqualink_password = os.environ['AQUALINK_PASSWORD'] or ''

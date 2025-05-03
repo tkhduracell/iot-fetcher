@@ -12,16 +12,14 @@ influx_bucket = os.environ['INFLUX_BUCKET'] or 'irisgatan'
 
 
 def write_influx(points: List[Point]):
-    # Create InfluxDB client
-    logging.info("Connecting to InfluxDB...")
+    logging.debug("Connecting to InfluxDB...")
     influx_client = InfluxDBClient(
         url=f"http://{influx_host}", token=influx_token, debug=False)
 
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 
-    # Write data to InfluxDB
     logging.info("Writing points to InfluxDB... %s",
-                 ', '.join(map(lambda x: x._name, points)))
+                 ', '.join(map(lambda x: f"{x._name} ({len(x._fields)} fields, {len(x._tags)} tags)", points)))
     try:
         write_api.write(bucket=influx_bucket,
                         org=influx_org,
