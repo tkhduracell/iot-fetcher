@@ -5,7 +5,7 @@ import requests
 
 from influx import write_influx, Point, WritePrecision
 
-areas = map(lambda i: f"SE{i}", range(1, 5))
+areas = ["SE4"]
 
 
 class EnergyData(TypedDict):
@@ -34,9 +34,9 @@ def elpris():
 
 def _elpris():
     logging.info("Fetching energy prices from Elpriset justnu...")
-    points = []
+
     for area in areas:
-        for i in range(-2, 1):
+        for i in range(-7, 1):
             url = get_elpris_price_url(area=area, day_offset=i)
             logging.info(f"Fetching energy prices from {url}...")
             resp = requests.get(url)
@@ -49,13 +49,11 @@ def _elpris():
 
             values = [EnergyData(p) for p in json]
 
-            areapoints = [Point("energy_price")
-                          .tag("area", area)
-                          .field("SEK_per_kWh", float(p['SEK_per_kWh']))
-                          .field("100th_SEK_per_kWh", round(p['SEK_per_kWh'] * 100))
-                          .field("EUR_per_kWh", float(p['EUR_per_kWh']))
-                          .time(p['time_start'], write_precision=WritePrecision.S)
-                          for p in values]
-            points.extend(areapoints)
-
-    write_influx(points)
+            points = [Point("energy_price")
+                      .tag("area", area)
+                      .field("SEK_per_kWh", float(p['SEK_per_kWh']))
+                      .field("100th_SEK_per_kWh", round(p['SEK_per_kWh'] * 100))
+                      .field("EUR_per_kWh", float(p['EUR_per_kWh']))
+                      .time(p['time_start'], write_precision=WritePrecision.S)
+                      for p in values]
+            write_influx(points)

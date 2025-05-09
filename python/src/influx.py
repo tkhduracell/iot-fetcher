@@ -2,7 +2,7 @@ import logging
 import os
 from typing import List
 from influxdb_client import InfluxDBClient, Point, WritePrecision
-from influxdb_client.client.write_api import SYNCHRONOUS
+from influxdb_client.client.write_api import SYNCHRONOUS, ASYNCHRONOUS
 
 # InfluxDB configuration
 influx_host = os.environ['INFLUX_HOST'] or "192.168.67.52:6666"
@@ -16,10 +16,15 @@ def write_influx(points: List[Point]):
     influx_client = InfluxDBClient(
         url=f"http://{influx_host}", token=influx_token, debug=False)
 
-    write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+    write_api = influx_client.write_api(write_options=ASYNCHRONOUS)
 
-    logging.info("Writing points to InfluxDB... %s",
-                 ', '.join(map(lambda x: f"{x._name} ({len(x._fields)} fields, {len(x._tags)} tags)", points)))
+    if len(points) > 4:
+        logging.info("Writing points to InfluxDB... %s (and %d more)",
+                     ', '.join(map(lambda x: f"{x._name}", points[0:3])), len(points)-3)
+    else:
+        logging.info("Writing points to InfluxDB... %s",
+                     ', '.join(map(lambda x: f"{x._name} ({len(x._fields)} fields, {len(x._tags)} tags)", points)))
+
     try:
         write_api.write(bucket=influx_bucket,
                         org=influx_org,
