@@ -2,6 +2,8 @@ import logging
 import os
 import time
 import schedule
+import threading
+from web import app as flask_app
 
 # from tuya_connector import TuyaOpenAPI, TUYA_LOGGER
 
@@ -25,6 +27,9 @@ if os.environ.get('PYDEBUGGER', None):
 
 def main():
 
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
     schedule.every(5).minutes.do(balboa)
@@ -44,6 +49,11 @@ def main():
             break
         except Exception as e:
             logging.info(f"An error occurred: {e}")
+
+
+def run_flask():
+    port = int(os.environ.get('WEB_UI_PORT', 8080))
+    flask_app.run(host='0.0.0.0', port=port)
 
 
 if __name__ == '__main__':
