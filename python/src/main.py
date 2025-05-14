@@ -27,9 +27,9 @@ if os.environ.get('PYDEBUGGER', None):
 
 def main():
 
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
+    if 'WEB_UI_PORT' in os.environ:
+        run_flask()
+    
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
     schedule.every(5).minutes.do(balboa)
@@ -53,7 +53,12 @@ def main():
 
 def run_flask():
     port = int(os.environ.get('WEB_UI_PORT', 8080))
-    flask_app.run(host='0.0.0.0', port=port)
+    def run():
+        flask_app.run(host='0.0.0.0', port=port)
+    
+    logging.info("Web UI port is set, starting Flask server on port {port}...")
+    flask_thread = threading.Thread(target=run, daemon=True)
+    flask_thread.start()
 
 
 if __name__ == '__main__':
