@@ -1,0 +1,28 @@
+{
+  "name": "Python Flask Web UI",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "workspaceFolder": "/workspace",
+  "forwardPorts": [8080],
+  "containerEnv": {
+    "WEB_UI_PORT": "8080"
+  },
+  "postCreateCommand": {
+    "py": "pip install --no-cache-dir -r python/requirements.txt",
+    "npm": "npm install -C webui"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

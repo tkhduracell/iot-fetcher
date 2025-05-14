@@ -4,3 +4,5 @@
 esp32-*/
 venv/
 pinout.png
+
+**/node_modules
