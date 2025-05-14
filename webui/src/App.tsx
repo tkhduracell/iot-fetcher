@@ -2,8 +2,11 @@ import React from 'react';
 import LatestValue from './components/LatestValue';
 import HealthBadge from './components/HealthBadge';
 import RefreshBadge from './components/RefreshBadge';
+import useAutoReload from './useAutoReload';
 
 const App: React.FC = () => {
+    useAutoReload();
+
     return (
         <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-4">
             {/* Top right badges */}
