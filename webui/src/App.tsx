@@ -5,13 +5,13 @@ import RefreshBadge from './components/RefreshBadge';
 
 const App: React.FC = () => {
     return (
-        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative">
+        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-4">
             {/* Top right badges */}
             <div className="absolute top-4 right-4 flex items-center z-10">
                 <RefreshBadge />
                 <HealthBadge />
             </div>
-            <div className="container mx-auto py-8">
+            <div className="container mx-auto py-8 flex flex-col gap-4">
                 <h1 className="text-3xl font-bold mb-4">Hello Irisgatan</h1>
                 {/* LatestValue components in a single row */}
                 <div className="flex flex-row gap-4 min-h-[20vh]">
