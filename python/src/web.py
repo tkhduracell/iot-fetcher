@@ -15,13 +15,16 @@ def assets(filename):
     assets_folder = os.path.join(dist_folder, 'assets')
     return send_from_directory(assets_folder, filename)
 
-@app.route('/influx/api/v2/query', methods=['POST', 'GET'])
-def influx_proxy():
+@app.route('/influx/api/v2/<route>', methods=['POST', 'GET'])
+def influx_proxy(route):
+    if route not in ['query', 'health']:
+        return Response('Not authorized', status=403)
+    
     influx_host = os.environ.get('INFLUX_HOST')
     influx_token = os.environ.get('INFLUX_TOKEN')
     if not influx_host or not influx_token:
         return Response('Missing INFLUX_HOST or INFLUX_TOKEN', status=500)
-    url = f"http://{influx_host}/api/v2/query"
+    url = f"http://{influx_host}/api/v2/{route}"
     headers = dict(request.headers)
     headers['Authorization'] = f"Token {influx_token}"
     resp = requests.request(
