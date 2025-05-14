@@ -24,7 +24,10 @@ def influx_proxy(route):
     influx_token = os.environ.get('INFLUX_TOKEN')
     if not influx_host or not influx_token:
         return Response('Missing INFLUX_HOST or INFLUX_TOKEN', status=500)
-    url = f"http://{influx_host}/api/v2/{route}"
+    if route == 'health':
+        url = f"http://{influx_host}/{route}"
+    else:
+        url = f"http://{influx_host}/api/v2/{route}"
     headers = dict(request.headers)
     headers['Authorization'] = f"Token {influx_token}"
     resp = requests.request(
