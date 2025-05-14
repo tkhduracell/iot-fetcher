@@ -40,6 +40,29 @@ const App: React.FC = () => {
                         />
                     </div>
                 </div>
+                <div className="flex flex-row gap-4 min-h-[20vh]">
+                    <div className="flex-1">
+                        <LatestValue
+                            measurement="aqua_temp"
+                            field="temp_incoming"
+                            title="Pool Ingående"
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <LatestValue
+                            measurement="aqua_temp"
+                            field="temp_outgoing"
+                            title="Pool Utgående"
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <LatestValue
+                            measurement="aqua_temp"
+                            field="temp_target"
+                            title="Pool Måltemp"
+                        />
+                    </div>
+                </div>
                 {/* Add more grid items as needed */}
             </div>
         </div>
