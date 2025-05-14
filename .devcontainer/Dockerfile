@@ -15,6 +15,6 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && node --version && npm --version
 
 COPY python/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt flask requests
+RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["python", "python/src/web.py"]
