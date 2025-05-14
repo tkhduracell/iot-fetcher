@@ -38,8 +38,8 @@ const LatestValue: React.FC<LatestValueProps> = ({
 
   return (
     <div className="p-4 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col items-center justify-center h-full">
-      <h2 className="text-xl font-semibold mb-2">{title || field}</h2>
-      <div className="text-6xl font-bold">
+      <h2 className="text-lg md:text-xl font-semibold mb-2">{title || field}</h2>
+      <div className="text-5xl md:text-6xl font-bold">
         {initalLoading && (
           <>...</>
         )}
