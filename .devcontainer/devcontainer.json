@@ -10,10 +10,16 @@
   "containerEnv": {
     "WEB_UI_PORT": "8080"
   },
+  
   "postCreateCommand": {
     "py": "pip install --no-cache-dir -r python/requirements.txt",
     "npm": "npm install -C webui"
   },
+  
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
   "customizations": {
     "vscode": {
       "extensions": [
