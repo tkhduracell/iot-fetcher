@@ -2,7 +2,7 @@ import React from 'react';
 import LatestValue from './components/LatestValue';
 import HealthBadge from './components/HealthBadge';
 import RefreshBadge from './components/RefreshBadge';
-import useAutoReload from './useAutoReload';
+import useAutoReload from './hooks/useAutoReload';
 
 const App: React.FC = () => {
     useAutoReload();

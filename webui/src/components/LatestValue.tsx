@@ -1,5 +1,5 @@
 import React from 'react';
-import useFluxQuery from './useFluxQuery';
+import useFluxQuery from '../hooks/useFluxQuery';
 import { flux } from '@influxdata/influxdb-client-browser';
 
 interface LatestValueProps {

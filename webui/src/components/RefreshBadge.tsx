@@ -1,5 +1,5 @@
 import React from 'react';
-import { globals } from './globals';
+import { globals } from '../globals';
 
 const RefreshBadge: React.FC = () => {
     const refreshSec = Math.round(globals.queryReloadInterval / 1000);

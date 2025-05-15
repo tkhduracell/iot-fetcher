@@ -1,26 +1,28 @@
-import React from 'react';
-import { flux, InfluxDB } from '@influxdata/influxdb-client-browser';
-import { globals } from './globals';
+import {useState, useEffect} from 'react';
+import { InfluxDB } from '@influxdata/influxdb-client-browser';
+import { queryReloadInterval, queryJitterInterval } from '../globals';
 
-function useFluxQuery({ fluxQuery }: { fluxQuery: string }) {
+function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { fluxQuery: string, reloadInterval?: number  }) {
   const url = '/influx';
   const token = 'hardcoded-token'; // Replace with your actual token
   const org = 'home';
 
-  const [loading, setLoading] = React.useState(true);
-  const [initalLoading, setInitalLoading] = React.useState(true);
-  const [error, setError] = React.useState<Error | null>(null);
-  const [result, setResult] = React.useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [initalLoading, setInitalLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [result, setResult] = useState<any[]>([]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false;
     let intervalId: NodeJS.Timeout | null = null;
+    let timerId: NodeJS.Timeout | null = null;
+
+    const client = new InfluxDB({ url, token });
+    const queryApi = client.getQueryApi(org);
 
     const runQuery = () => {
       setLoading(true);
       setError(null);
-      const client = new InfluxDB({ url, token });
-      const queryApi = client.getQueryApi(org);
       const rows: any[] = [];
       queryApi.queryRows(fluxQuery, {
         next(row, tableMeta) {
@@ -43,12 +45,17 @@ function useFluxQuery({ fluxQuery }: { fluxQuery: string }) {
       });
     };
 
-    runQuery();
-    intervalId = setInterval(runQuery, globals.queryReloadInterval);
+    const jitter = Math.random() * queryJitterInterval;
+    timerId = setTimeout(() => {
+      if (cancelled) return;
+      runQuery();
+      intervalId = setInterval(runQuery, reloadInterval);
+    }, jitter);
 
     return () => {
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
+      if (timerId) clearTimeout(timerId);
     };
   }, [fluxQuery]);
 
