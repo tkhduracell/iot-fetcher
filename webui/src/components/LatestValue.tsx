@@ -9,6 +9,7 @@ interface LatestValueProps {
   filter?: Record<string, string>;
   title?: string;
   decimals?: number;
+  unit?: string;
 }
 
 const LatestValue: React.FC<LatestValueProps> = ({
@@ -17,6 +18,7 @@ const LatestValue: React.FC<LatestValueProps> = ({
   field,
   filter = {},
   title,
+  unit,
   decimals = 1,
 }) => {
   filter = {
@@ -34,7 +36,7 @@ const LatestValue: React.FC<LatestValueProps> = ({
     |> yield(name: "last")`;
 
   const { initalLoading, loading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
-  const value = result.length > 0 ? result[0]._value : null;
+  const value: number = result.length > 0 ? result[0]._value : null;
 
   return (
     <div className="p-4 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col items-center justify-center h-full">
@@ -49,7 +51,7 @@ const LatestValue: React.FC<LatestValueProps> = ({
               'text-gray-500 dark:text-gray-400' : 
               'text-blue-700 dark:text-blue-200'
             }>
-            {value?.toFixed(decimals) }
+            {value?.toFixed(decimals).replace(/\.0$/, '')} { unit }
           </div>
         )}
       </div>
