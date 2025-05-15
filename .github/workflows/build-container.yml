@@ -41,5 +41,5 @@ jobs:
       uses: docker/build-push-action@v6
       with:
         context: .
-        push: ${{ toJSON(github.ref == 'refs/heads/master') }}
+        push: ${{ toJSON(github.ref == 'refs/heads/main') }}
         tags: europe-docker.pkg.dev/${{secrets.GCP_PROJECT_ID }}/images/iot-fetcher:latest
