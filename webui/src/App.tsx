@@ -14,7 +14,7 @@ const App: React.FC = () => {
                 <RefreshBadge />
                 <HealthBadge />
             </div>
-            <div className="container mx-auto py-8 flex flex-col gap-4">
+            <div className="container mx-auto py-0 flex flex-col gap-4">
                 <h1 className="text-3xl font-bold mb-4">Hello Irisgatan</h1>
                 {/* LatestValue components in a single row */}
                 <div className="flex flex-row gap-4 min-h-[20vh]">
@@ -24,6 +24,7 @@ const App: React.FC = () => {
                             field="temperature_C"
                             filter={{node: "a84f4c8f-47c5-465d-878e-957c0affb60b"}}
                             title="Ngenic Inomhus"
+                            unit='°C'
                         />
                     </div>
                     <div className="flex-1">
@@ -32,6 +33,7 @@ const App: React.FC = () => {
                             field="temperature_C"
                             filter={{node: "efc2897b-d9d3-41dd-81c6-b376d4bd4996"}}
                             title="Ngenic Utomhus"
+                            unit='°C'
                         />
                     </div>
                     <div className="flex-1">
@@ -40,6 +42,7 @@ const App: React.FC = () => {
                             field="target_temperature_C"
                             filter={{node: "a84f4c8f-47c5-465d-878e-957c0affb60b"}}
                             title="Ngenic Mål"
+                            unit='°C'
                         />
                     </div>
                 </div>
@@ -49,6 +52,7 @@ const App: React.FC = () => {
                             measurement="aqua_temp"
                             field="temp_incoming"
                             title="Pool Ingående"
+                            unit='°C'
                         />
                     </div>
                     <div className="flex-1">
@@ -56,6 +60,7 @@ const App: React.FC = () => {
                             measurement="aqua_temp"
                             field="temp_outgoing"
                             title="Pool Utgående"
+                            unit='°C'
                         />
                     </div>
                     <div className="flex-1">
@@ -63,9 +68,40 @@ const App: React.FC = () => {
                             measurement="aqua_temp"
                             field="temp_target"
                             title="Pool Måltemp"
+                            unit='°C'
                         />
                     </div>
                 </div>
+                <div className="flex flex-row gap-4 min-h-[20vh]">
+                    <div className="flex-1">
+                        <LatestValue
+                            measurement="tibber"
+                            field="accumulatedCost"
+                            title="Dygnskostnad"
+                            unit="Kr"
+                            decimals={0}
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <LatestValue
+                            measurement="tibber"
+                            field="accumulatedConsumption"
+                            title="Dygnskonsumtion"
+                            unit="KWh"
+                            decimals={0}
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <LatestValue
+                            measurement="tibber"
+                            field="power"
+                            title="Effekt"
+                            unit="W"
+                            decimals={0}
+                        />
+                    </div>
+                </div>
+                
                 {/* Add more grid items as needed */}
             </div>
         </div>
