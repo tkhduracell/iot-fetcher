@@ -28,9 +28,18 @@ jobs:
         project_id: ${{secrets.GCP_PROJECT_ID }}
         workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER_ID }}
 
+    - name: Setup Gcloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        
+    - name: Configure Docker credentials
+      run: |
+        gcloud auth configure-docker europe-docker.pkg.dev
+
     - name: Build and push Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
-        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        push: ${{ github.ref == 'refs/heads/master' }}
         tags: europe-docker.pkg.dev/${{secrets.GCP_PROJECT_ID }}/images/iot-fetcher:latest
