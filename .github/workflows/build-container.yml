@@ -21,12 +21,12 @@ jobs:
 
     - uses: 'google-github-actions/auth@v2'
       with:
-        project_id: ${{env.GCP_PROJECT_ID }}
-        workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER_ID }}
+        project_id: ${{secrets.GCP_PROJECT_ID }}
+        workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER_ID }}
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v6
       with:
         context: .
         push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        tags: europe-docker.pkg.dev/${{env.GCP_PROJECT_ID }}/images/iot-fetcher:latest
+        tags: europe-docker.pkg.dev/${{secrets.GCP_PROJECT_ID }}/images/iot-fetcher:latest
