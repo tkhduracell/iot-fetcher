@@ -36,10 +36,6 @@ jobs:
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
         
-    - name: Configure Docker credentials
-      run: |
-        gcloud auth configure-docker europe-docker.pkg.dev
-
     - uses: docker/login-action@v3
       with:
         registry: europe-docker.pkg.dev
