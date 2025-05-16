@@ -9,6 +9,11 @@ GCLOUD_IDENTITY_POOL=github-deployer-auth-pool
 GCLOUD_IDENTITY_PROVIDER=github-deployer-auth-provider
 
 gcloud iam service-accounts create ${GCLOUD_SERVICE_ACCOUNT} --project "${GCLOUD_PROJECT}"
+
+gcloud projects add-iam-policy-binding "${GCLOUD_PROJECT}" \
+    --member="serviceAccount:${GCLOUD_SERVICE_ACCOUNT_EMAIL}" \
+    --role="roles/artifactregistry.writer"
+exit 0
 gcloud services enable iamcredentials.googleapis.com --project "${GCLOUD_PROJECT}"
 
 gcloud iam workload-identity-pools create ${GCLOUD_IDENTITY_POOL} --project="${GCLOUD_PROJECT}" --location="global" --display-name="GitHub Deploy Auth Pool"
