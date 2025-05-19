@@ -25,6 +25,7 @@ jobs:
 
     - uses: 'google-github-actions/auth@v2'
       id: auth
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
         token_format: access_token
         project_id: ${{secrets.GCP_PROJECT_ID }}
@@ -32,6 +33,7 @@ jobs:
         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
         
     - uses: docker/login-action@v3
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
         registry: europe-docker.pkg.dev
         username: oauth2accesstoken
