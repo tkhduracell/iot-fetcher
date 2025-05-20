@@ -1,15 +1,10 @@
 import React from 'react';
 import useFluxQuery from '../hooks/useFluxQuery';
 import { flux } from '@influxdata/influxdb-client-browser';
+import { ConfigValue } from '../types';
 
-interface LatestValueProps {
+interface LatestValueProps extends ConfigValue {
   bucket?: string;
-  measurement: string;
-  field: string;
-  filter?: Record<string, string>;
-  title?: string;
-  decimals?: number;
-  unit?: string;
 }
 
 const LatestValue: React.FC<LatestValueProps> = ({
