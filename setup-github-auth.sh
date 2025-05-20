@@ -1,20 +1,20 @@
 #!/bin/bash
 
-# export GCLOUD_PROJECT=""
-export GITHUB_REPO="tkhduracell/iot-fetcher"
+export GCLOUD_PROJECT=""
+export GITHUB_REPO="user/repo"
 
 GCLOUD_SERVICE_ACCOUNT=github-deployer-account
 GCLOUD_SERVICE_ACCOUNT_EMAIL="${GCLOUD_SERVICE_ACCOUNT}@${GCLOUD_PROJECT}.iam.gserviceaccount.com"
 GCLOUD_IDENTITY_POOL=github-deployer-auth-pool
 GCLOUD_IDENTITY_PROVIDER=github-deployer-auth-provider
 
+gcloud services enable iamcredentials.googleapis.com --project "${GCLOUD_PROJECT}"
+
 gcloud iam service-accounts create ${GCLOUD_SERVICE_ACCOUNT} --project "${GCLOUD_PROJECT}"
 
 gcloud projects add-iam-policy-binding "${GCLOUD_PROJECT}" \
     --member="serviceAccount:${GCLOUD_SERVICE_ACCOUNT_EMAIL}" \
     --role="roles/artifactregistry.writer"
-exit 0
-gcloud services enable iamcredentials.googleapis.com --project "${GCLOUD_PROJECT}"
 
 gcloud iam workload-identity-pools create ${GCLOUD_IDENTITY_POOL} --project="${GCLOUD_PROJECT}" --location="global" --display-name="GitHub Deploy Auth Pool"
 
@@ -35,8 +35,6 @@ gcloud iam service-accounts add-iam-policy-binding "${GCLOUD_SERVICE_ACCOUNT_EMA
 
 WORKLOAD_IDENTITY_PROVIDER_ID=$(gcloud iam workload-identity-pools providers list --project="${GCLOUD_PROJECT}" --location="global" --workload-identity-pool="${GCLOUD_WORKLOAD_IDENTITY_POOL_ID}" --format="value(name)")
 
-echo "WORKLOAD_IDENTITY_PROVIDER_ID: "
-echo "${WORKLOAD_IDENTITY_PROVIDER_ID}"
-
-echo "GCLOUD_SERVICE_ACCOUNT_EMAIL: "
-echo "${GCLOUD_SERVICE_ACCOUNT_EMAIL}"
+echo ""
+echo "WORKLOAD_IDENTITY_PROVIDER_ID: ${WORKLOAD_IDENTITY_PROVIDER_ID}"
+echo "GCLOUD_SERVICE_ACCOUNT_EMAIL: ${GCLOUD_SERVICE_ACCOUNT_EMAIL}"

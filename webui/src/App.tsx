@@ -1,11 +1,52 @@
 import React from 'react';
+import { HashRouter, Routes, Route, useParams, useNavigate } from 'react-router';
 import LatestValue from './components/LatestValue';
 import HealthBadge from './components/HealthBadge';
 import RefreshBadge from './components/RefreshBadge';
 import useAutoReload from './hooks/useAutoReload';
+import LatestValueFullscreen from './components/LatestValueFullscreen';
+import { values } from './values';
+import { Config, ConfigRow } from './types';
 
-const App: React.FC = () => {
+
+// Helper to get fullscreen state from router params
+function useFullscreenParams(values: Config) {
+  const params = useParams();
+  const navigate = useNavigate();
+  const rowIdx = params.row ? parseInt(params.row, 10) : null;
+  const colIdx = params.col ? parseInt(params.col, 10) : null;
+  const fullscreenProps = (rowIdx !== null && colIdx !== null && values[rowIdx]?.[colIdx]) ? values[rowIdx][colIdx] : null;
+
+  const openFullscreen = (row: number, col: number) => {
+    navigate(`/fullscreen/${row}/${col}`);
+  };
+  const closeFullscreen = () => {
+    navigate('/');
+  };
+  return { fullscreenProps, openFullscreen, closeFullscreen };
+}
+
+// Renders a single row of LatestValue cards
+const Row: React.FC<{row: ConfigRow; rowIdx: number; onOpen: (row: number, col: number) => void;}> = ({ row, rowIdx, onOpen }) => (
+  <div className="flex flex-row gap-4 min-h-[20vh]">
+    {row.map((item, colIdx) => (
+      <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}`} onClick={() => onOpen(rowIdx, colIdx)}>
+        <LatestValue {...item} />
+      </div>
+    ))}
+  </div>
+);
+
+// Renders the full grid of LatestValue cards
+const Grid: React.FC<{values: Config; onOpen: (row: number, col: number) => void;}> = ({ values, onOpen }) => (
+  <>{values.map((row, rowIdx) => (
+    <Row row={row} rowIdx={rowIdx} onOpen={onOpen} key={rowIdx} />
+  ))}</>
+);
+
+const AppContent: React.FC = () => {
     useAutoReload();
+    const { fullscreenProps, openFullscreen, closeFullscreen } = useFullscreenParams(values);
 
     return (
         <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-4">
@@ -16,96 +57,23 @@ const App: React.FC = () => {
             </div>
             <div className="container mx-auto py-0 flex flex-col gap-4">
                 <h1 className="text-3xl font-bold mb-4">Hello Irisgatan</h1>
-                {/* LatestValue components in a single row */}
-                <div className="flex flex-row gap-4 min-h-[20vh]">
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="ngenic_node_sensor_measurement_value"
-                            field="temperature_C"
-                            filter={{node: "a84f4c8f-47c5-465d-878e-957c0affb60b"}}
-                            title="Ngenic Inomhus"
-                            unit='°C'
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="ngenic_node_sensor_measurement_value"
-                            field="temperature_C"
-                            filter={{node: "efc2897b-d9d3-41dd-81c6-b376d4bd4996"}}
-                            title="Ngenic Utomhus"
-                            unit='°C'
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="ngenic_node_sensor_measurement_value"
-                            field="target_temperature_C"
-                            filter={{node: "a84f4c8f-47c5-465d-878e-957c0affb60b"}}
-                            title="Ngenic Mål"
-                            unit='°C'
-                        />
-                    </div>
-                </div>
-                <div className="flex flex-row gap-4 min-h-[20vh]">
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="aqua_temp"
-                            field="temp_incoming"
-                            title="Pool Ingående"
-                            unit='°C'
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="aqua_temp"
-                            field="temp_outgoing"
-                            title="Pool Utgående"
-                            unit='°C'
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="aqua_temp"
-                            field="temp_target"
-                            title="Pool Måltemp"
-                            unit='°C'
-                        />
-                    </div>
-                </div>
-                <div className="flex flex-row gap-4 min-h-[20vh]">
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="tibber"
-                            field="accumulatedCost"
-                            title="Dygnskostnad"
-                            unit="Kr"
-                            decimals={0}
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="tibber"
-                            field="accumulatedConsumption"
-                            title="Dygnskonsumtion"
-                            unit="KWh"
-                            decimals={0}
-                        />
-                    </div>
-                    <div className="flex-1">
-                        <LatestValue
-                            measurement="tibber"
-                            field="power"
-                            title="Effekt"
-                            unit="W"
-                            decimals={0}
-                        />
-                    </div>
-                </div>
-                
-                {/* Add more grid items as needed */}
+                <Grid values={values} onOpen={openFullscreen} />
             </div>
+            { fullscreenProps && <LatestValueFullscreen 
+                open={!!fullscreenProps}
+                onClose={closeFullscreen} 
+                {...fullscreenProps} /> }
         </div>
     );
 };
+
+const App: React.FC = () => (
+  <HashRouter>
+    <Routes>
+      <Route path="/" element={<AppContent />} />
+      <Route path="/fullscreen/:row/:col" element={<AppContent />} />
+    </Routes>
+  </HashRouter>
+);
 
 export default App;
