@@ -7,5 +7,7 @@ export type ConfigValue = {
   filter?: Record<string, any>;
   title: string;
   unit: string;
+  window?: "5m" | "60m" ;
+  range?: "-15m" | "-1h" ;
   decimals?: number;
 };

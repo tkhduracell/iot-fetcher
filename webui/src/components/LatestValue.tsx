@@ -15,6 +15,8 @@ const LatestValue: React.FC<LatestValueProps> = ({
   title,
   unit,
   decimals = 1,
+  window = "5m",
+  range = "-15m",
 }) => {
   filter = {
     '_measurement': measurement,
@@ -25,14 +27,16 @@ const LatestValue: React.FC<LatestValueProps> = ({
     .map(([k,v]) => `|> filter(fn: (r) => r["${k}"] == "${v}") `)
     .join('\n    ')
   const fluxQuery = `from(bucket: "${bucket}")
-    |> range(start: -15m)
+    |> range(start: ${range})
     ${ filterQuery }
-    |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+    |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
     |> yield(name: "last")`;
 
   const { initalLoading, loading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
+  if (measurement === 'enery_price' && !loading) {
+    debugger;
+  }
   const value: number = result.length > 0 ? result[0]._value : null;
-
   return (
     <div className="p-4 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col items-center justify-center h-full">
       <h2 className="text-lg md:text-xl font-semibold mb-2">{title || field}</h2>
