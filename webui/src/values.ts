@@ -16,12 +16,10 @@ export const values: Config = [
     ],
     [ 
         { measurement: 'tibber', field: 'accumulatedCost', title: 'Dygnskostnad', unit: 'Kr', decimals: 0 },
-        { measurement: 'tibber', field: 'accumulatedConsumption', title: 'Dygnskonsumtion', unit: 'KWh', decimals: 0 },
-        { measurement: 'tibber', field: 'power', title: 'Effekt', unit: 'W', decimals: 0 }
-    ],
-    [
         { measurement: 'energy_price', field: '100th_SEK_per_kWh', title: 'Timpris (kWh)', 
             unit: 'Öre', decimals: 0, window: '5m', range: "-1h",
             filter: { area: 'SE4' } },
+        { measurement: 'tibber', field: 'accumulatedConsumption', title: 'Dygnskonsumtion', unit: 'KWh', decimals: 0 },
+        { measurement: 'tibber', field: 'power', title: 'Effekt', unit: 'W', decimals: 0 }
     ]
 ];
