@@ -17,6 +17,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
   measurement,
   title,
   field,
+  window = "60m",
 }) => {
   if (!open) return null;
 
@@ -35,11 +36,10 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
   const fluxQuery = `from(bucket: "${bucket}")
     |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
     ${ filterQuery }
-    |> aggregateWindow(every: 5m, fn: last, createEmpty: false)
+    |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
     |> yield(name: "last")`;
 
   const { initalLoading, loading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
-  const value: number = result.length > 0 ? result[0]._value : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
@@ -59,7 +59,9 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
             .
             { field }
             </div>
-          <div className="text-6xl">{value}</div>
+          <div className="text-6xl">
+            { result.map((item) => <div>{item._value}</div>) }
+          </div>
         </div>
       </div>
     </div>

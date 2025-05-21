@@ -1,5 +1,6 @@
+import { Config } from "./types";
 
-export const values = [
+export const values: Config = [
     [
         { measurement: 'ngenic_node_sensor_measurement_value', field: 'temperature_C', 
          filter: {node: 'a84f4c8f-47c5-465d-878e-957c0affb60b'}, title: 'Ngenic Inomhus', unit: '°C' },
@@ -18,4 +19,9 @@ export const values = [
         { measurement: 'tibber', field: 'accumulatedConsumption', title: 'Dygnskonsumtion', unit: 'KWh', decimals: 0 },
         { measurement: 'tibber', field: 'power', title: 'Effekt', unit: 'W', decimals: 0 }
     ],
-] as const;
+    [
+        { measurement: 'energy_price', field: '100th_SEK_per_kWh', title: 'Timpris (kWh)', 
+            unit: 'Öre', decimals: 0, window: '5m', range: "-1h",
+            filter: { area: 'SE4' } },
+    ]
+];
