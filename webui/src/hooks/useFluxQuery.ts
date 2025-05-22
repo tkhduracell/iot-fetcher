@@ -8,7 +8,7 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
   const org = 'home';
 
   const [loading, setLoading] = useState(true);
-  const [initalLoading, setInitalLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [result, setResult] = useState<any[]>([]);
 
@@ -39,7 +39,7 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
           if (!cancelled) {
             setResult(rows);
             setLoading(false)
-            setInitalLoading(false);
+            setInitialLoading(false);
           }
         }
       });
@@ -59,7 +59,7 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
     };
   }, [fluxQuery]);
 
-  return { initalLoading, loading, error, result };
+  return { initialLoading, loading, error, result };
 }
 
 export default useFluxQuery;
