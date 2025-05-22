@@ -1,0 +1,96 @@
+import React from 'react';
+import useFluxQuery from '../hooks/useFluxQuery';
+import { startOfDay, endOfDay } from 'date-fns';
+
+const EnergyPriceBar: React.FC = () => {
+  // Removed entry from values.ts:
+  // { measurement: 'energy_price', field: '100th_SEK_per_kWh', title: 'Timpris (kWh)', 
+  //   unit: 'Öre', decimals: 0, window: '5m', range: "-1h", filter: { area: 'SE4' } }
+
+  const bucket = 'irisgatan';
+  const measurement = 'energy_price';
+  const field = '100th_SEK_per_kWh';
+  const filter = { area: 'SE4' };
+
+  const start = startOfDay(new Date());
+  const end = endOfDay(new Date());
+
+  const filterQuery = Object.entries(filter)
+    .map(([k, v]) => `|> filter(fn: (r) => r["${k}"] == "${v}")`)
+    .join('\n    ');
+
+  const fluxQuery = `from(bucket: "${bucket}")
+  |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
+  |> filter(fn: (r) => r["_measurement"] == "${measurement}" and r["_field"] == "${field}")
+  ${filterQuery}
+  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+  |> yield(name: "mean")`;
+
+  const { loading, error, result } = useFluxQuery({ fluxQuery });
+
+  if (loading) return <div>Loading energy price...</div>;
+  if (error) return <div>Error loading energy price: {error.message}</div>;
+
+  const values = result.map(p => p._value).filter(v => v !== undefined && v !== null) as number[];
+  if (values.length === 0) {
+    return <div>No energy price data available</div>;
+  }
+
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const range = maxValue - minValue;
+  const bucketSize = range / 3;
+
+  const getBucketColorClass = (value: number): string => {
+    if (value <= minValue + bucketSize) {
+      return 'bg-green-200 dark:bg-green-700';
+    } else if (value <= minValue + 2 * bucketSize) {
+      return 'bg-yellow-200 dark:bg-yellow-700';
+    } else {
+      return 'bg-red-200 dark:bg-red-700';
+    }
+  };
+  const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute:
+    '2-digit', hour12: false });
+  const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit',
+    hour12: false });
+    const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
+      return (
+        <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col">
+          <div className="w-full flex flex-row justify-between p-0 m-0 text-xs text-gray-600 dark:text-gray-300">
+            <div>{startStr}</div>
+            <div>{dateStr}</div>
+            <div>{endStr}</div>
+          </div>
+          <div className="w-full flex gap-2 flex-wrap">
+            {result.map((point: any, idx: number) => {
+              const colorClass = point._value !== undefined && point._value !== null
+                ? getBucketColorClass(point._value)
+                : 'bg-gray-200 dark:bg-gray-700';
+              return (
+                <div key={idx} className={
+                  `${colorClass} flex flex-1 rounded p-2 
+                  text-center text-gray-600
+                   dark:text-gray-300`
+                }></div>
+              );
+            })}
+          </div>
+
+          <div className="w-full flex flex-row justify-between p-0 my-1 text-xs text-gray-600 dark:text-gray-300">
+            <div className='bg-green-200 dark:bg-green-700 rounded px-2 py-0.5'>
+              Min {minValue.toFixed(0)} öre
+            </div>
+            <div className='bg-yellow-200 dark:bg-yellow-700 rounded px-2 py-0.5'>
+              &lt; {(minValue + 1 * bucketSize).toFixed(0)} öre 
+              &lt; {(minValue + 2 * bucketSize).toFixed(0)} öre &lt; 
+            </div>
+            <div className='bg-red-200 dark:bg-red-700 rounded px-2 py-0.5'>
+              Max {(maxValue).toFixed(0)} öre
+            </div>
+          </div>
+        </div>
+      );
+};
+
+export default EnergyPriceBar;

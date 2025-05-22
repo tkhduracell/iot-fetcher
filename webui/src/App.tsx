@@ -6,6 +6,7 @@ import RefreshBadge from './components/RefreshBadge';
 import useAutoReload from './hooks/useAutoReload';
 import LatestValueFullscreen from './components/LatestValueFullscreen';
 import { values } from './values';
+import EnergyPriceBar from './components/EnergyPriceBar';
 import { Config, ConfigRow } from './types';
 
 
@@ -58,6 +59,7 @@ const AppContent: React.FC = () => {
             <div className="container mx-auto py-0 flex flex-col gap-4">
                 <h1 className="text-3xl font-bold mb-4">Hello Irisgatan</h1>
                 <Grid values={values} onOpen={openFullscreen} />
+                <EnergyPriceBar />
             </div>
             { fullscreenProps && <LatestValueFullscreen 
                 open={!!fullscreenProps}
