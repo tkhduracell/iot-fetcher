@@ -50,14 +50,14 @@ const AppContent: React.FC = () => {
     const { fullscreenProps, openFullscreen, closeFullscreen } = useFullscreenParams(values);
 
     return (
-        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-4">
+        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative py-4">
             {/* Top right badges */}
             <div className="absolute top-4 right-4 flex items-center z-10">
                 <RefreshBadge />
                 <HealthBadge />
             </div>
             <div className="container mx-auto py-0 flex flex-col gap-4">
-                <h1 className="text-3xl font-bold mb-4">Hello Irisgatan</h1>
+                <h1 className="text-3xl font-bold">Hello Irisgatan</h1>
                 <Grid values={values} onOpen={openFullscreen} />
                 <EnergyPriceBar />
             </div>
