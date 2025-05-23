@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import useFluxQuery from '../hooks/useFluxQuery';
 import { startOfDay, endOfDay, differenceInMinutes } from 'date-fns';
 
@@ -30,20 +30,23 @@ const EnergyPriceBar: React.FC = () => {
   const start = startOfDay(new Date());
   const end = endOfDay(new Date());
 
-  const filterQuery = Object.entries(filter)
-    .map(([k, v]) => `|> filter(fn: (r) => r["${k}"] == "${v}")`)
-    .join('\n    ');
+  const fluxQuery = useMemo(() => {
+    const filterQuery = Object.entries(filter)
+      .map(([k, v]) => `|> filter(fn: (r) => r["${k}"] == "${v}")`)
+      .join('\n    ');
 
-  const fluxQuery = `from(bucket: "${bucket}")
-  |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
-  |> filter(fn: (r) => r["_measurement"] == "${measurement}" and r["_field"] == "${field}")
-  ${filterQuery}
-  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
-  |> yield(name: "mean")`;
+    return `from(bucket: "${bucket}")
+      |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
+      |> filter(fn: (r) => r["_measurement"] == "${measurement}" and r["_field"] == "${field}")
+      ${filterQuery}
+      |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+      |> yield(name: "mean")
+    `;
+  }, [bucket, measurement, field, filter, start, end]);
 
   const { initialLoading, error, result } = useFluxQuery({ fluxQuery });
 
-  if (initialLoading) return <Wrapper>Hämtar energipriser...</Wrapper>;
+  if (initialLoading && !error) return <Wrapper>Hämtar energipriser...</Wrapper>;
   if (error) return <Wrapper>Fel uppstod vid laddning: {error.message}</Wrapper>;
 
   const values = result.map(p => p._value).filter(v => v !== undefined && v !== null) as number[];
@@ -68,10 +71,9 @@ const EnergyPriceBar: React.FC = () => {
       return 'bg-red-200 dark:bg-red-700';
     }
   };
-  const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute:
-    '2-digit', hour12: false });
-  const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit',
-    hour12: false });
+  
+  const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     
   const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
 
@@ -86,8 +88,8 @@ const EnergyPriceBar: React.FC = () => {
             {result.map((point: Point) => {
               const colorClass = getBucketColorClass(point._value);
               const time = new Date(point._time);
-              const isNow = ( differenceInMinutes(time, Date.now()) < 59 && 
-                differenceInMinutes(time, Date.now()) > 0 );
+              const diff = differenceInMinutes(time, Date.now());
+              const isNow = ( diff < 59 &&  diff > 0 );
               return (
                 <div className='flex flex-1 flex-col justify-end' key={[point._measurement, point._field, point._time].join('|')}>
                   <div className={
