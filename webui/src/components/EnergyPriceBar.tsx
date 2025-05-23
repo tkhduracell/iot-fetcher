@@ -1,6 +1,6 @@
 import React from 'react';
 import useFluxQuery from '../hooks/useFluxQuery';
-import { startOfDay, endOfDay } from 'date-fns';
+import { startOfDay, endOfDay, differenceInMinutes } from 'date-fns';
 
 const EnergyPriceBar: React.FC = () => {
   // Removed entry from values.ts:
@@ -26,9 +26,9 @@ const EnergyPriceBar: React.FC = () => {
   |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
   |> yield(name: "mean")`;
 
-  const { loading, error, result } = useFluxQuery({ fluxQuery });
+  const { initialLoading, error, result } = useFluxQuery({ fluxQuery });
 
-  if (loading) return <div>Loading energy price...</div>;
+  if (initialLoading) return <div>Loading energy price...</div>;
   if (error) return <div>Error loading energy price: {error.message}</div>;
 
   const values = result.map(p => p._value).filter(v => v !== undefined && v !== null) as number[];
@@ -42,6 +42,9 @@ const EnergyPriceBar: React.FC = () => {
   const bucketSize = range / 3;
 
   const getBucketColorClass = (value: number): string => {
+    if (value === undefined || value === null) {
+      return 'bg-gray-200 dark:bg-gray-700';
+    }
     if (value <= minValue + bucketSize) {
       return 'bg-green-200 dark:bg-green-700';
     } else if (value <= minValue + 2 * bucketSize) {
@@ -56,28 +59,33 @@ const EnergyPriceBar: React.FC = () => {
     hour12: false });
     const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
       return (
-        <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col">
-          <div className="w-full flex flex-row justify-between p-0 m-0 text-xs text-gray-600 dark:text-gray-300">
+        <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col gap-2">
+          <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
             <div>{startStr}</div>
             <div>{dateStr}</div>
             <div>{endStr}</div>
           </div>
           <div className="w-full flex gap-2 flex-wrap">
             {result.map((point: any, idx: number) => {
-              const colorClass = point._value !== undefined && point._value !== null
-                ? getBucketColorClass(point._value)
-                : 'bg-gray-200 dark:bg-gray-700';
+              const colorClass = getBucketColorClass(point._value);
+              const time = new Date(point._time);
+              const hh = time.getHours();
+              const isNow = ( differenceInMinutes(time, Date.now()) < 59 && 
+                differenceInMinutes(time, Date.now()) > 0 );
               return (
-                <div key={idx} className={
-                  `${colorClass} flex flex-1 rounded p-2 
-                  text-center text-gray-600
-                   dark:text-gray-300`
-                }></div>
+                <div className='flex flex-1 flex-col justify-end'>
+                  <div key={idx} className={
+                    `${colorClass} rounded p-0 text-xs flex
+                    text-center text-gray-600 justify-center items-center
+                    dark:text-gray-300 ${isNow ? 'h-8' : 'h-3'}`}>
+                      { isNow && `${point._value.toFixed(0)}` }
+                  </div>
+                </div>
               );
             })}
           </div>
 
-          <div className="w-full flex flex-row justify-between p-0 my-1 text-xs text-gray-600 dark:text-gray-300">
+          <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
             <div className='bg-green-200 dark:bg-green-700 rounded px-2 py-0.5'>
               Min {minValue.toFixed(0)} öre
             </div>
