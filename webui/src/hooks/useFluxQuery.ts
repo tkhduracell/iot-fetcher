@@ -2,7 +2,7 @@ import {useState, useEffect} from 'react';
 import { InfluxDB } from '@influxdata/influxdb-client-browser';
 import { queryReloadInterval, queryJitterInterval } from '../globals';
 
-function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { fluxQuery: string, reloadInterval?: number  }) {
+function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { fluxQuery: string, reloadInterval?: number }) {
   const url = '/influx';
   const token = 'hardcoded-token'; // Replace with your actual token
   const org = 'home';
@@ -32,16 +32,16 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
           if (!cancelled) {
             setError(e instanceof Error ? e : new Error(String(e)));
             setLoading(false);
-            setResult([])
+            setResult([]);
           }
         },
         complete() {
           if (!cancelled) {
             setResult(rows);
-            setLoading(false)
+            setLoading(false);
             setInitialLoading(false);
           }
-        }
+        },
       });
     };
 
@@ -57,7 +57,7 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
       if (intervalId) clearInterval(intervalId);
       if (timerId) clearTimeout(timerId);
     };
-  }, [fluxQuery]);
+  }, [fluxQuery, reloadInterval]);
 
   return { initialLoading, loading, error, result };
 }
