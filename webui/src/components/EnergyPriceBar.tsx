@@ -42,7 +42,7 @@ const EnergyPriceBar: React.FC = () => {
       |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
       |> yield(name: "mean")
     `;
-  }, [bucket, measurement, field, filter]);
+  }, [bucket, measurement, field, filter, start, end]);
 
   const { initialLoading, error, result } = useFluxQuery({ fluxQuery });
 
