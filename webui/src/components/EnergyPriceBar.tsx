@@ -9,6 +9,14 @@ type Point = {
   _value: number | null;
 }
 
+const Wrapper = (props: { children: React.ReactNode }) => {
+  return (
+    <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col gap-2 items-center justify-center">
+      {props.children}
+    </div>
+  );
+}
+
 const EnergyPriceBar: React.FC = () => {
   // Removed entry from values.ts:
   // { measurement: 'energy_price', field: '100th_SEK_per_kWh', title: 'Timpris (kWh)', 
@@ -35,12 +43,12 @@ const EnergyPriceBar: React.FC = () => {
 
   const { initialLoading, error, result } = useFluxQuery({ fluxQuery });
 
-  if (initialLoading) return <div>Loading energy price...</div>;
-  if (error) return <div>Error loading energy price: {error.message}</div>;
+  if (initialLoading) return <Wrapper>Hämtar energipriser...</Wrapper>;
+  if (error) return <Wrapper>Fel uppstod vid laddning: {error.message}</Wrapper>;
 
   const values = result.map(p => p._value).filter(v => v !== undefined && v !== null) as number[];
   if (values.length === 0) {
-    return <div>No energy price data available</div>;
+    return <Wrapper>Inga energipriser tillgängliga.</Wrapper>;
   }
 
   const minValue = Math.min(...values);
@@ -64,10 +72,11 @@ const EnergyPriceBar: React.FC = () => {
     '2-digit', hour12: false });
   const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit',
     hour12: false });
-    const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
+    
+  const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
 
       return (
-        <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col gap-2">
+        <Wrapper>
           <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
             <div>{startStr}</div>
             <div>{dateStr}</div>
@@ -104,7 +113,7 @@ const EnergyPriceBar: React.FC = () => {
               Max {(maxValue).toFixed(0)} öre
             </div>
           </div>
-        </div>
+        </Wrapper>
       );
 };
 
