@@ -2,6 +2,13 @@ import React from 'react';
 import useFluxQuery from '../hooks/useFluxQuery';
 import { startOfDay, endOfDay, differenceInMinutes } from 'date-fns';
 
+type Point = {
+  _measurement: string;
+  _field: string;
+  _time: string;
+  _value: number | null;
+}
+
 const EnergyPriceBar: React.FC = () => {
   // Removed entry from values.ts:
   // { measurement: 'energy_price', field: '100th_SEK_per_kWh', title: 'Timpris (kWh)', 
@@ -41,7 +48,7 @@ const EnergyPriceBar: React.FC = () => {
   const range = maxValue - minValue;
   const bucketSize = range / 3;
 
-  const getBucketColorClass = (value: number): string => {
+  const getBucketColorClass = (value: number | null): string => {
     if (value === undefined || value === null) {
       return 'bg-gray-200 dark:bg-gray-700';
     }
@@ -58,6 +65,7 @@ const EnergyPriceBar: React.FC = () => {
   const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit',
     hour12: false });
     const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
+
       return (
         <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col gap-2">
           <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
@@ -66,19 +74,18 @@ const EnergyPriceBar: React.FC = () => {
             <div>{endStr}</div>
           </div>
           <div className="w-full flex gap-2 flex-wrap">
-            {result.map((point: any, idx: number) => {
+            {result.map((point: Point) => {
               const colorClass = getBucketColorClass(point._value);
               const time = new Date(point._time);
-              const hh = time.getHours();
               const isNow = ( differenceInMinutes(time, Date.now()) < 59 && 
                 differenceInMinutes(time, Date.now()) > 0 );
               return (
-                <div className='flex flex-1 flex-col justify-end'>
-                  <div key={idx} className={
+                <div className='flex flex-1 flex-col justify-end' key={[point._measurement, point._field, point._time].join('|')}>
+                  <div className={
                     `${colorClass} rounded p-0 text-xs flex
                     text-center text-gray-600 justify-center items-center
                     dark:text-gray-300 ${isNow ? 'h-8' : 'h-3'}`}>
-                      { isNow && `${point._value.toFixed(0)}` }
+                      { isNow && `${point._value?.toFixed(0)}` }
                   </div>
                 </div>
               );
