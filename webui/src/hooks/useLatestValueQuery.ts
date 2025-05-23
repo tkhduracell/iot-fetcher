@@ -8,9 +8,10 @@ export interface LatestValueQueryParams {
   filter?: {[key: string]: string};
   window?: string;
   range?: string;
+  reload?: number;
 }
 
-function useLatestValueQuery({ bucket = "irisgatan", measurement, field, filter = {}, window = "5m", range = "-15m" }: LatestValueQueryParams) {
+function useLatestValueQuery({ bucket = "irisgatan", measurement, field, filter = {}, window = "5m", range = "-15m", reload }: LatestValueQueryParams) {
   const fullFilter = useMemo(() => ({
     '_measurement': measurement,
     '_field': field,
@@ -27,7 +28,7 @@ function useLatestValueQuery({ bucket = "irisgatan", measurement, field, filter 
     |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
     |> yield(name: "last")`, [bucket, range, filterQuery, window]);
 
-  return useFluxQuery({ fluxQuery: fluxQuery.toString() });
+  return useFluxQuery({ fluxQuery: fluxQuery.toString(), reloadInterval: reload });
 }
 
 export default useLatestValueQuery;

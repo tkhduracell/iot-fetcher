@@ -39,7 +39,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
     |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
     |> yield(name: "last")`;
 
-  const { initalLoading, loading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
+  const { initialLoading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
@@ -51,7 +51,10 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
         >
           &times;
         </button>
-        
+
+        { initialLoading && !error && <div className="text-2xl">Loading...</div> }
+        { error && <div className="text-2xl">Error: {error.message}</div> }
+
         <div className="flex flex-col gap-4 items-center h-full align-items-center text-gray-600 dark:text-gray-300">
           <div className="text-6xl">{ title }</div>
           <div className="text-2xl font-bold">

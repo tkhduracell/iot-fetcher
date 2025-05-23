@@ -10,4 +10,5 @@ export type ConfigValue = {
   window?: "5m" | "60m" ;
   range?: "-15m" | "-1h" ;
   decimals?: number;
+  reload?: number;
 };
