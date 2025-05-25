@@ -17,6 +17,6 @@ export const values: Config = [
     [ 
         { measurement: 'tibber', field: 'accumulatedCost', title: 'Dygnskostnad', unit: 'Kr', decimals: 0 },
         { measurement: 'tibber', field: 'accumulatedConsumption', title: 'Dygnskonsumtion', unit: 'KWh', decimals: 0 },
-        { measurement: 'tibber', field: 'power', title: 'Effekt', unit: 'W', decimals: 0, reload: 5000 }
+        { measurement: 'tibber', field: 'power', title: 'Effekt', unit: 'W', decimals: 0, reload: 10000 }
     ]
 ];
