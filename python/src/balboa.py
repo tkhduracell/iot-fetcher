@@ -22,7 +22,7 @@ def balboa():
     except pybalboa.exceptions.SpaConnectionError:
         logging.info("Unable to connect to balboa spa...")
     except Exception:
-        logging.exception("Unexpected error in balboa spa")
+        logging.warning("Unexpected error in balboa spa")
 
 
 async def _balboa():
