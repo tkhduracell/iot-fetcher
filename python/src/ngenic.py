@@ -28,7 +28,7 @@ def _ngenic():
         tunes = ngenic.tunes()
 
         for tune in tunes:
-            logging.info("Tune %s, Name: %s, Tune Name: %s" %
+            logging.debug("Tune %s, Name: %s, Tune Name: %s" %
                          (
                              tune.uuid(),
                              tune["name"],
@@ -40,7 +40,7 @@ def _ngenic():
 
         rooms = tune.rooms()
         for room in rooms:
-            logging.info("Room %s, Name: %s, Target Temperature: %d" %
+            logging.debug("Room %s, Name: %s, Target Temperature: %d" %
                          (
                              room.uuid(),
                              room["name"],
@@ -52,7 +52,7 @@ def _ngenic():
         points: List[Point] = []
 
         for node in nodes:
-            logging.info("Node %s, Type: %s, Mesurements: %s" %
+            logging.debug("Node %s, Type: %s, Mesurements: %s" %
                          (
                              node.uuid(),
                              node.get_type().name,
