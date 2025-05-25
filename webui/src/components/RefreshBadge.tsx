@@ -11,7 +11,7 @@ const RefreshBadge: React.FC = () => {
     <button
       onClick={reloadPage}
       title="Reload page"
-      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-full shadow text-sm font-semibold"
+      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-full shadow text-sm font-semibold cursor-pointer"
     >
       Reload
     </button>
