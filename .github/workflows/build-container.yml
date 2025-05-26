@@ -39,12 +39,22 @@ jobs:
         username: oauth2accesstoken
         password: '${{ steps.auth.outputs.access_token }}'
 
-    - name: Build and push Docker image
+    - name: Build And Push Docker image
       uses: docker/build-push-action@v6
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
         context: .
         platforms: linux/amd64,linux/arm64
-        push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        push: true
         tags: europe-docker.pkg.dev/${{secrets.GCP_PROJECT_ID }}/images/iot-fetcher:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v6
+      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max
