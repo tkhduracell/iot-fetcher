@@ -104,14 +104,14 @@ const EnergyPriceBar: React.FC = () => {
           </div>
 
           <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
-            <div className='bg-green-200 dark:bg-green-700 rounded px-2 py-0.5'>
+            <div className='bg-green-400 dark:bg-green-700 rounded px-2 py-0.5'>
               Min {minValue.toFixed(0)} öre
             </div>
-            <div className='bg-yellow-200 dark:bg-yellow-700 rounded px-2 py-0.5'>
+            <div className='bg-yellow-400 dark:bg-yellow-700 rounded px-2 py-0.5'>
               &lt; {(minValue + 1 * bucketSize).toFixed(0)} öre 
               &lt; {(minValue + 2 * bucketSize).toFixed(0)} öre &lt; 
             </div>
-            <div className='bg-red-200 dark:bg-red-700 rounded px-2 py-0.5'>
+            <div className='bg-red-400 dark:bg-red-700 rounded px-2 py-0.5'>
               Max {(maxValue).toFixed(0)} öre
             </div>
           </div>
