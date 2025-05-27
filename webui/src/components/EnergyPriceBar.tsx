@@ -64,11 +64,11 @@ const EnergyPriceBar: React.FC = () => {
       return 'bg-gray-200 dark:bg-gray-700';
     }
     if (value <= minValue + bucketSize) {
-      return 'bg-green-200 dark:bg-green-700';
+      return 'bg-green-400 dark:bg-green-700';
     } else if (value <= minValue + 2 * bucketSize) {
-      return 'bg-yellow-200 dark:bg-yellow-700';
+      return 'bg-yellow-400 dark:bg-yellow-700';
     } else {
-      return 'bg-red-200 dark:bg-red-700';
+      return 'bg-red-400 dark:bg-red-700';
     }
   };
   
