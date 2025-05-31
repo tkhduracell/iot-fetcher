@@ -20,7 +20,7 @@ RUN if [ "${TARGETARCH}" = "amd64" ]; then \
         export NODE_ARCH=${TARGETARCH}; \
     fi;\
     (cd /tmp && \
-    wget https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
+    wget -q https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
     && tar -xf node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz --strip-components=1 -C /usr/local \
     && rm node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz)
 
