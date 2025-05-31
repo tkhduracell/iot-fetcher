@@ -10,7 +10,7 @@ RUN npm run build
 FROM python:3.13
 WORKDIR /app
 
-ARG TARGETARCH 
+ARG TARGETARCH=linux-arm64
 ARG NODE_VERSION=22.14.0
 
 # If the architecture is amd64, set linux-x64 as the architecture
@@ -18,9 +18,8 @@ RUN if [ "${TARGETARCH}" = "amd64" ]; then \
         export NODE_ARCH=linux-x64; \
     else \
         export NODE_ARCH=${TARGETARCH}; \
-    fi
-
-RUN (cd /tmp && \
+    fi;\
+    (cd /tmp && \
     wget https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
     && tar -xf node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz --strip-components=1 -C /usr/local \
     && rm node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz)
