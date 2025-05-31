@@ -24,7 +24,7 @@ def aqualink():
     try:
         asyncio.run(_aqualink())
     except:
-        logging.exception("Failed to run aqualink module")
+        logging.warn("Failed to run aqualink module")
 
 
 async def _aqualink():
@@ -58,7 +58,6 @@ async def _aqualink():
         write_influx(points)
 
 IAQUA_DEVICE_URL = "https://r-api.iaqualink.net/v2/devices/"
-
 
 class I2DSystem(AqualinkSystem):
     NAME = "i2d"

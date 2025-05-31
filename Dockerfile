@@ -10,17 +10,41 @@ RUN npm run build
 FROM python:3.13
 WORKDIR /app
 
-COPY python/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ARG TARGETARCH=linux-arm64
+ARG NODE_VERSION=22.14.0
+
+# If the architecture is amd64, set linux-x64 as the architecture
+RUN if [ "${TARGETARCH}" = "amd64" ]; then \
+        export NODE_ARCH=linux-x64; \
+    else \
+        export NODE_ARCH=${TARGETARCH}; \
+    fi;\
+    (cd /tmp && \
+    wget -q https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
+    && tar -xf node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz --strip-components=1 -C /usr/local \
+    && rm node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz)
+
+COPY python/requirements.txt python/
+RUN pip install --no-cache-dir -r python/requirements.txt
 
 ARG PYDEBUGGER=0
 RUN if [ "$PYDEBUGGER" = "1" ]; then \
         pip install debugpy; \
     fi
 
-COPY python/src .
+# Copy Python stack
+COPY python/ ./python
+
+# Copy Node.js stack
+COPY nodejs/ ./nodejs
+RUN npm --prefix nodejs ci
 
 # Copy built frontend from previous stage
-COPY --from=frontend-build /app/dist ./dist
+COPY --from=frontend-build /app/dist ./webui/dist
+COPY webui/web.py webui/requirements.txt ./webui/
+RUN pip install --no-cache-dir -r webui/requirements.txt
 
-CMD [ "python", "./main.py" ]
+# Copy start script
+COPY start.sh .
+
+CMD ["/bin/sh", "./start.sh"]
