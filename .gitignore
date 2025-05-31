@@ -6,3 +6,6 @@ venv/
 pinout.png
 
 **/node_modules
+
+nodejs/example.js
+nodejs/persistent.json

@@ -2,10 +2,6 @@ import logging
 import os
 import time
 import schedule
-import threading
-from web import app as flask_app
-
-# from tuya_connector import TuyaOpenAPI, TUYA_LOGGER
 
 from balboa import balboa
 from elpris import elpris
@@ -26,10 +22,6 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-
-    if 'WEB_UI_PORT' in os.environ:
-        run_flask()
-    
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
     schedule.every(5).minutes.do(balboa)
@@ -49,16 +41,6 @@ def main():
             break
         except Exception as e:
             logging.info(f"An error occurred: {e}")
-
-
-def run_flask():
-    port = int(os.environ.get('WEB_UI_PORT', 8080))
-    def run():
-        flask_app.run(host='0.0.0.0', port=port)
-    
-    logging.info("Web UI port is set, starting Flask server on port {port}...")
-    flask_thread = threading.Thread(target=run, daemon=True)
-    flask_thread.start()
 
 
 if __name__ == '__main__':

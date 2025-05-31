@@ -10,17 +10,34 @@ RUN npm run build
 FROM python:3.13
 WORKDIR /app
 
-COPY python/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ARG NODE_VERSION=22.16.0
+ARG NODE_ARCH=linux-arm64
+RUN (cd /tmp && \
+    wget https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
+    && tar -xf node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz --strip-components=1 -C /usr/local \
+    && rm node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz)
+
+COPY python/requirements.txt python/
+RUN pip install --no-cache-dir -r python/requirements.txt
 
 ARG PYDEBUGGER=0
 RUN if [ "$PYDEBUGGER" = "1" ]; then \
         pip install debugpy; \
     fi
 
-COPY python/src .
+# Copy Python stack
+COPY python/ ./python
+
+# Copy Node.js stack
+COPY nodejs/ ./nodejs
+RUN npm --prefix nodejs ci
 
 # Copy built frontend from previous stage
-COPY --from=frontend-build /app/dist ./dist
+COPY --from=frontend-build /app/dist ./webui/dist
+COPY webui/web.py webui/requirements.txt ./webui/
+RUN pip install --no-cache-dir -r webui/requirements.txt
 
-CMD [ "python", "./main.py" ]
+# Copy start script
+COPY start.sh .
+
+CMD ["/bin/sh", "./start.sh"]
