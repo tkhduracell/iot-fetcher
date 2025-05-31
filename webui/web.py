@@ -51,7 +51,7 @@ def influx_proxy(route):
 
 if __name__ == '__main__':
     port = int(os.environ.get('WEB_UI_PORT', 8080))
-    logging.info("Web UI port is set, starting Flask server on port {port}...")
+    logging.info("Web UI port is set, starting Flask server on port %d...", port)
     app.run(host='0.0.0.0', port=port)
 
 

@@ -6,23 +6,18 @@ RUN npm ci
 COPY webui/ .
 RUN npm run build
 
+FROM node:22 AS node
+
 # Stage 2: Python backend
 FROM python:3.13
 WORKDIR /app
 
-ARG TARGETARCH=linux-arm64
-ARG NODE_VERSION=22.14.0
-
-# If the architecture is amd64, set linux-x64 as the architecture
-RUN if [ "${TARGETARCH}" = "amd64" ]; then \
-        export NODE_ARCH=linux-x64; \
-    else \
-        export NODE_ARCH=${TARGETARCH}; \
-    fi;\
-    (cd /tmp && \
-    wget -q https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
-    && tar -xf node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz --strip-components=1 -C /usr/local \
-    && rm node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz)
+COPY --from=node /usr/lib /usr/lib
+COPY --from=node /usr/local/share /usr/local/share/usr/local/bin
+COPY --from=node /usr/local/lib /usr/local/lib
+COPY --from=node /usr/local/include /usr/local/include
+COPY --from=node /usr/local/bin /usr/local/bin
+RUN node -v && npm -v
 
 COPY python/requirements.txt python/
 RUN pip install --no-cache-dir -r python/requirements.txt
