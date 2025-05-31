@@ -10,8 +10,9 @@ RUN npm run build
 FROM python:3.13
 WORKDIR /app
 
+ARG TARGETARCH 
 ARG NODE_VERSION=22.16.0
-ARG NODE_ARCH=linux-arm64
+ARG NODE_ARCH=linux-${TARGETARCH}
 RUN (cd /tmp && \
     wget https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz \
     && tar -xf node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz --strip-components=1 -C /usr/local \
