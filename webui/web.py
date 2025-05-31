@@ -1,11 +1,14 @@
 import os
-from flask import Flask, send_from_directory, request, Response
+import logging
 import requests
 
-app = Flask(__name__)
+from flask import Flask, send_from_directory, request, Response
+
+logging.basicConfig(level=logging.INFO)
 
 dist_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist')
 
+app = Flask('webui')
 @app.route('/')
 def index():
     return send_from_directory(dist_folder,'index.html')
@@ -48,4 +51,7 @@ def influx_proxy(route):
 
 if __name__ == '__main__':
     port = int(os.environ.get('WEB_UI_PORT', 8080))
+    logging.info("Web UI port is set, starting Flask server on port %d...", port)
     app.run(host='0.0.0.0', port=port)
+
+
