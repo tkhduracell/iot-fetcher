@@ -11,12 +11,14 @@ const username = process.env.EUFY_USERNAME!
 const password = process.env.EUFY_PASSWORD!
 const country = process.env.EUFY_COUNTRY || 'se'
 
-const task = cron.schedule('*/30 * * * *', eufy, {});
+const task = cron.schedule('*/5 * * * *', eufy, {});
 
 // Immediately execute the task once at startup
+console.log('INFO', 'Run task immediately');
 task.execute()
 
 // Start the task to run according to the schedule
+console.log('INFO', 'Starting scheduler');
 task.start()
 
 async function eufy() {
