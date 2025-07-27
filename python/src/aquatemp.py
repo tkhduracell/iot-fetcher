@@ -78,7 +78,7 @@ def getDevices(token: str, user_id: str) -> List[dict]:
         logging.error(f"Failed to fetch device list: {devices_response.text}")
         return []
     devices_response = devices_response.json().get('objectResult', [])
-    print(f"Found {len(devices_response)} devices")
+    logging.info(f"Found {len(devices_response)} devices")
 
     devices_response_share = requests.post(
         f"{cloudurl}/app/device/getMyAppectDeviceShareDataList?lang=en", headers=headers, json={
