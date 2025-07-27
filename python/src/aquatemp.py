@@ -113,7 +113,11 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
 
 
 def _aquatemp():
-    token, user_id = getToken()
+    token_data = getToken()
+    if not token_data:
+        logging.error("Failed to get token for Aquatemp, aborting task.")
+        return
+    token, user_id = token_data
     
     logging.info("Fetching Aquatemp device list...")
     devices = getDevices(token, user_id)
