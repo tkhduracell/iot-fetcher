@@ -75,7 +75,8 @@ def getDevices(token: str, user_id: str) -> List[dict]:
         })
     if devices_response.status_code != 200:
         logging.error(f"Failed to fetch device list: {devices_response.text}")
-        return
+        logging.error(f"Failed to fetch device list: {devices_response.text}")
+        return []
     devices_response = devices_response.json().get('objectResult', [])
     print(f"Found {len(devices_response)} devices")
 
