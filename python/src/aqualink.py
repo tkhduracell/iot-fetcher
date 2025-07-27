@@ -24,7 +24,7 @@ def aqualink():
     try:
         asyncio.run(_aqualink())
     except:
-        logging.waring("Failed to run aqualink module", exc_info=True)
+        logging.warning("Failed to run aqualink module", exc_info=True)
 
 
 async def _aqualink():
