@@ -58,15 +58,16 @@ def getToken() -> Optional[str]:
 
     resp = login_response.json()
     token = resp.get('objectResult', {}).get('x-token')
+    user_id = resp.get('objectResult', {}).get('userId')
 
     if not token:
         logging.error(
             "Failed to retrieve token from login response. \n%s", login_response.json())
         return None
-    return token
+    return token, user_id
 
 
-def getDevices(token: str) -> List[dict]:
+def getDevices(token: str, user_id: str) -> List[dict]:
     headers = {"x-token": token}
     devices_response = requests.post(
         f"{cloudurl}/app/device/deviceList?lang=en", headers=headers, json={
@@ -75,8 +76,24 @@ def getDevices(token: str) -> List[dict]:
     if devices_response.status_code != 200:
         logging.error(f"Failed to fetch device list: {devices_response.text}")
         return
+    devices_response = devices_response.json().get('objectResult', [])
+    print(f"Found {len(devices_response)} devices")
 
-    return devices_response.json().get('objectResult', [])
+    devices_response_share = requests.post(
+        f"{cloudurl}/app/device/getMyAppectDeviceShareDataList?lang=en", headers=headers, json={
+            'appId': '14',
+            'toUser': user_id
+        })
+    if devices_response_share.status_code != 200:
+        logging.error(
+            f"Failed to fetch shared devices: {devices_response_share.text}")
+        return []
+    devices_response_share = devices_response_share.json().get('objectResult', [])
+    print(f"Found {len(devices_response_share)} shared devices")
+
+    out = devices_response + devices_response_share
+    logging.info("Devices: %s", pformat(out))
+    return out
 
 
 def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
@@ -96,13 +113,18 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
 
 
 def _aquatemp():
+    token, user_id = getToken()
+    
     logging.info("Fetching Aquatemp device list...")
-
-    token = getToken()
-    devices = getDevices(token)
+    devices = getDevices(token, user_id)
 
     points: List[Point] = []
-
+    if not devices:
+        logging.error("No devices found or failed to fetch devices.")
+        return
+    
+    logging.info(f"Found {len(devices)} Aquatemp devices")
+    
     for device in devices:
         deviceCode = device.get('deviceCode')
 
