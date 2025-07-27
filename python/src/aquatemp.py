@@ -89,7 +89,7 @@ def getDevices(token: str, user_id: str) -> List[dict]:
             f"Failed to fetch shared devices: {devices_response_share.text}")
         return []
     devices_response_share = devices_response_share.json().get('objectResult', [])
-    print(f"Found {len(devices_response_share)} shared devices")
+    logging.info(f"Found {len(devices_response_share)} shared devices")
 
     out = devices_response + devices_response_share
     logging.info("Devices: %s", pformat(out))
