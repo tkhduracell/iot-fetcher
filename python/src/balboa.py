@@ -43,9 +43,6 @@ async def _balboa():
                 spa.available}, connected: {spa.connected})')
             return
 
-        logging.info(f"{spa.last_message_received} {(datetime.datetime.now().replace(
-            tzinfo=None) - spa.last_message_received.replace(tzinfo=None)).total_seconds()} sec ago")
-
         temperature = spa.temperature
         temperature_unit = spa.temperature_unit
 

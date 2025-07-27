@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import time
 import schedule
 
@@ -22,6 +23,16 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality']:
+        module_name = sys.argv[1]
+        logging.info(f"Running module: {module_name}")
+        for m in [balboa, elpris, ngenic, aqualink, aquatemp, airquality]:
+            if m.__name__ == module_name:
+                logging.info(f"Executing {module_name} module...")
+                m()
+        return
+    
+    logging.info("Starting the scheduler...")
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
     schedule.every(5).minutes.do(balboa)

@@ -6,6 +6,9 @@ from flask import Flask, send_from_directory, request, Response
 
 logging.basicConfig(level=logging.INFO)
 
+# Disable requests logging
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
 dist_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist')
 
 app = Flask('webui')
