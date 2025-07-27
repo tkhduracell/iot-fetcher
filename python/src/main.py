@@ -23,7 +23,7 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
         for m in [balboa, elpris, ngenic, aqualink, aquatemp, airquality]:
