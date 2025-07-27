@@ -6,9 +6,10 @@ RUN npm ci
 COPY webui/ .
 RUN npm run build
 
+# Stage 2: Node binaries
 FROM node:22 AS node
 
-# Stage 2: Python backend
+# Stage 3: Python backend
 FROM python:3.13
 WORKDIR /app
 
@@ -42,4 +43,4 @@ RUN pip install --no-cache-dir -r webui/requirements.txt
 # Copy start script
 COPY start.sh .
 
-CMD ["/bin/sh", "./start.sh"]
+ENTRYPOINT ["/bin/sh", "./start.sh"]
