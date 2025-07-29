@@ -139,13 +139,19 @@ def _aquatemp():
             .tag('device_id', device['deviceId'])\
             .tag('device_model', device['custModel'])
 
+        has_fields = False
         for deviceDataObject in deviceData:
             metricName = CODES.get(
                 deviceDataObject['code'], 'unknown_' + deviceDataObject['code'])
-            if deviceDataObject['value']:
+            if deviceDataObject.get('value'):
                 p = p.field(metricName, float(deviceDataObject['value']))
+                has_fields = True
             else:
                 logging.warning(f"Device {deviceCode} has no value for {metricName}, skipping.")
-        points.append(p)
+        
+        if has_fields:
+            points.append(p)
+        else:
+            logging.warning(f"Device {deviceCode} has no valid data points, skipping influx write for this device.")
 
     write_influx(points)
