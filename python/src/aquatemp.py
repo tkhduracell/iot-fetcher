@@ -93,7 +93,6 @@ def getDevices(token: str, user_id: str) -> List[dict]:
     logging.info(f"Found {len(devices_response_share)} shared devices")
 
     out = devices_response + devices_response_share
-    logging.info("Devices: %s", pformat(out))
     return out
 
 
@@ -143,8 +142,10 @@ def _aquatemp():
         for deviceDataObject in deviceData:
             metricName = CODES.get(
                 deviceDataObject['code'], 'unknown_' + deviceDataObject['code'])
-            p = p.field(metricName, float(deviceDataObject['value']))
-
+            if deviceDataObject['value']:
+                p = p.field(metricName, float(deviceDataObject['value']))
+            else:
+                logging.warning(f"Device {deviceCode} has no value for {metricName}, skipping.")
         points.append(p)
 
     write_influx(points)
