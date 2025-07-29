@@ -1,0 +1,60 @@
+version: "2.4"
+
+volumes:
+  database:
+  database-config:
+  garmin-tokens:
+  influx:
+
+services:
+  database:
+    image: influxdb:2
+    container_name: influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - database:/var/lib/influxdb
+      - database-config:/etc/influxdb2/influx-configs.txt
+
+  influx-3:
+    image: influxdb:3-core
+    container_name: influxdb-3
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    volumes:
+      - influx:/home/influxdb3/.influxdb3
+    command: 
+      - influxdb3
+      - serve
+      - --node-id=rpi3
+      - --object-store=file
+      - --data-dir=/home/influxdb3/.influxdb3
+
+  iot-fetcher:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
+    container_name: iot-fetcher
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - database
+
+  tibber-influx-bridge:
+    image: tkhduracell/tibber-influxdb-bridge:latest
+    container_name: tibber-influxdb-bridge
+    restart: unless-stopped
+    depends_on:
+      - database
+
+  garmin-influx-bridge:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
+    container_name: garmin-influx-bridge
+    restart: unless-stopped
+    volumes:
+      - garmin-tokens:/home/appuser/.garminconnect
+    depends_on:
+      - influx-3
+      
+    
