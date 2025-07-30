@@ -16,6 +16,9 @@ from iaqualink.const import (
 
 from influx import write_influx, Point
 
+# Configure module-specific logger
+logger = logging.getLogger(__name__)
+
 aqualink_username = os.environ['AQUALINK_USERNAME'] or ''
 aqualink_password = os.environ['AQUALINK_PASSWORD'] or ''
 
@@ -24,11 +27,11 @@ def aqualink():
     try:
         asyncio.run(_aqualink())
     except:
-        logging.warning("Failed to run aqualink module", exc_info=True)
+        logger.warning("[aqualink] Failed to run aqualink module", exc_info=True)
 
 
 async def _aqualink():
-    logging.info("Fetching Aqualink data...")
+    logger.info("[aqualink] Fetching Aqualink data...")
 
     async with AqualinkClient(aqualink_username, aqualink_password) as c:
         points: List[Point] = []

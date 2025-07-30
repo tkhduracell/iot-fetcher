@@ -10,6 +10,9 @@ from ngenicpy.models.measurement import Measurement, MeasurementType
 
 from influx import write_influx, Point
 
+# Configure module-specific logger
+logger = logging.getLogger(__name__)
+
 ngenic_token = os.environ['NGENIC_TOKEN'] or ''
 
 logging.getLogger("httpx").setLevel(level=logging.WARNING)
@@ -19,17 +22,17 @@ def ngenic():
     try:
         _ngenic()
     except:
-        logging.exception("Failed to execute ngenice module")
+        logger.exception("[ngenic] Failed to execute ngenice module")
 
 
 def _ngenic():
-    logging.info("Fetching Ngenic data...")
+    logger.info("[ngenic] Fetching Ngenic data...")
     with Ngenic(token=ngenic_token) as ngenic:
 
         tunes = ngenic.tunes()
 
         for tune in tunes:
-            logging.debug("Tune %s, Name: %s, Tune Name: %s" %
+            logger.debug("[ngenic] Tune %s, Name: %s, Tune Name: %s" %
                          (
                              tune.uuid(),
                              tune["name"],
@@ -41,7 +44,7 @@ def _ngenic():
 
         rooms = tune.rooms()
         for room in rooms:
-            logging.debug("Room %s, Name: %s, Target Temperature: %d" %
+            logger.debug("[ngenic] Room %s, Name: %s, Target Temperature: %d" %
                          (
                              room.uuid(),
                              room["name"],
@@ -53,7 +56,7 @@ def _ngenic():
         points: List[Point] = []
 
         for node in nodes:
-            logging.debug("Node %s, Type: %s, Mesurements: %s" %
+            logger.debug("[ngenic] Node %s, Type: %s, Mesurements: %s" %
                          (
                              node.uuid(),
                              node.get_type().name,

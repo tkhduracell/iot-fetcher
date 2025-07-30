@@ -4,6 +4,9 @@ import os
 
 from influx import write_influx, Point, WritePrecision
 
+# Configure module-specific logger
+logger = logging.getLogger(__name__)
+
 BASE_URL = "https://airquality.googleapis.com/v1/currentConditions"
 
 GOOGLE_API_KEY = os.environ['GOOGLE_API_KEY']
@@ -14,14 +17,14 @@ def airquality():
     try:
         _airquality()
     except Exception as e:
-        logging.exception(f"Failed to execute airquality module: {e}")
+        logger.exception(f"[airquality] Failed to execute airquality module: {e}")
 
 
 def _airquality():
-    logging.info("Fetching air quality data from Google API...")
+    logger.info("[airquality] Fetching air quality data from Google API...")
 
     url = f"{BASE_URL}:lookup?key={GOOGLE_API_KEY}"
-    logging.info(f"Fetching air quality data from {url}...")
+    logger.info(f"[airquality] Fetching air quality data from {url}...")
 
     try:
         [lat, lng] = GOOGLE_LAT_LNG.split(',')
@@ -37,12 +40,12 @@ def _airquality():
             ]
         })
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error making API request: {e}")
+        logger.error(f"[airquality] Error making API request: {e}")
         return
 
     if resp.status_code != 200:
-        logging.error(
-            f"Error when fetching air quality data: {
+        logger.error(
+            f"[airquality] Error when fetching air quality data: {
                 resp.status_code} - {resp.text}"
         )
         return
