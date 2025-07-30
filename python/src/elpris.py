@@ -5,6 +5,9 @@ import requests
 
 from influx import write_influx, Point, WritePrecision
 
+# Configure module-specific logger
+logger = logging.getLogger(__name__)
+
 areas = ["SE4"]
 
 
@@ -29,20 +32,20 @@ def elpris():
     try:
         _elpris()
     except:
-        logging.exception("Failed to execute elpris module")
+        logger.exception("[elpris] Failed to execute elpris module")
 
 
 def _elpris():
-    logging.info("Fetching energy prices from Elpriset justnu...")
+    logger.info("[elpris] Fetching energy prices from Elpriset justnu...")
 
     for area in areas:
         for i in range(-7, 1):
             url = get_elpris_price_url(area=area, day_offset=i)
-            logging.info(f"Fetching energy prices from {url}...")
+            logger.info(f"[elpris] Fetching energy prices from {url}...")
             resp = requests.get(url)
 
             if (resp.status_code != 200):
-                logging.info("Error when fetching energy prices: " + str(resp))
+                logger.info("[elpris] Error when fetching energy prices: " + str(resp))
                 continue
 
             json: List[dict] = resp.json()

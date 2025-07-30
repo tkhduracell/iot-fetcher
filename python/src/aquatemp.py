@@ -10,6 +10,8 @@ from influx import write_influx, Point
 
 from _decorators import memoize_for_hours
 
+# Configure module-specific logger
+logger = logging.getLogger(__name__)
 
 CODES = {
     'T02': 'temp_incoming',
@@ -26,7 +28,7 @@ def aquatemp():
     try:
         _aquatemp()
     except Exception as e:
-        logging.exception(f"Failed to execute aquatemp module: {e}")
+        logger.exception(f"[aquatemp] Failed to execute aquatemp module: {e}")
 
 
 cloudurl = os.environ['AQUATEMP_BASEURL']
@@ -47,13 +49,13 @@ def getToken() -> Optional[str]:
         "loginSource": 'IOS'
     }
 
-    logging.info('Getting new AquaTemp token...')
+    logger.info('[aquatemp] Getting new AquaTemp token...')
     login_response = requests.post(
         f"{cloudurl}/app/user/login?lang=en", json=login_payload)
 
     if login_response.status_code != 200:
-        logging.error(
-            f"Failed to login: {login_response.url} {login_response.status_code} {login_response.text}")
+        logger.error(
+            f"[aquatemp] Failed to login: {login_response.url} {login_response.status_code} {login_response.text}")
         return None
 
     resp = login_response.json()
@@ -61,8 +63,8 @@ def getToken() -> Optional[str]:
     user_id = resp.get('objectResult', {}).get('userId')
 
     if not token:
-        logging.error(
-            "Failed to retrieve token from login response. \n%s", login_response.json())
+        logger.error(
+            "[aquatemp] Failed to retrieve token from login response. \n%s", login_response.json())
         return None
     return token, user_id
 
@@ -74,11 +76,11 @@ def getDevices(token: str, user_id: str) -> List[dict]:
             'appId': '14',
         })
     if devices_response.status_code != 200:
-        logging.error(f"Failed to fetch device list: {devices_response.text}")
-        logging.error(f"Failed to fetch device list: {devices_response.text}")
+        logger.error(f"[aquatemp] Failed to fetch device list: {devices_response.text}")
+        logger.error(f"[aquatemp] Failed to fetch device list: {devices_response.text}")
         return []
     devices_response = devices_response.json().get('objectResult', [])
-    logging.info(f"Found {len(devices_response)} devices")
+    logger.info(f"[aquatemp] Found {len(devices_response)} devices")
 
     devices_response_share = requests.post(
         f"{cloudurl}/app/device/getMyAppectDeviceShareDataList?lang=en", headers=headers, json={
@@ -86,11 +88,11 @@ def getDevices(token: str, user_id: str) -> List[dict]:
             'toUser': user_id
         })
     if devices_response_share.status_code != 200:
-        logging.error(
-            f"Failed to fetch shared devices: {devices_response_share.text}")
+        logger.error(
+            f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
         return []
     devices_response_share = devices_response_share.json().get('objectResult', [])
-    logging.info(f"Found {len(devices_response_share)} shared devices")
+    logger.info(f"[aquatemp] Found {len(devices_response_share)} shared devices")
 
     out = devices_response + devices_response_share
     return out
@@ -105,8 +107,8 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
             'appId': '14',
         })
     if deviceData_response.status_code != 200:
-        logging.error(
-            f"Failed to fetch device data: {deviceData_response.text}")
+        logger.error(
+            f"[aquatemp] Failed to fetch device data: {deviceData_response.text}")
         return None
 
     return deviceData_response.json().get('objectResult', [])
@@ -115,19 +117,19 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
 def _aquatemp():
     token_data = getToken()
     if not token_data:
-        logging.error("Failed to get token for Aquatemp, aborting task.")
+        logger.error("[aquatemp] Failed to get token for Aquatemp, aborting task.")
         return
     token, user_id = token_data
     
-    logging.info("Fetching Aquatemp device list...")
+    logger.info("[aquatemp] Fetching Aquatemp device list...")
     devices = getDevices(token, user_id)
 
     points: List[Point] = []
     if not devices:
-        logging.error("No devices found or failed to fetch devices.")
+        logger.error("[aquatemp] No devices found or failed to fetch devices.")
         return
     
-    logging.info(f"Found {len(devices)} Aquatemp devices")
+    logger.info(f"[aquatemp] Found {len(devices)} Aquatemp devices")
     
     for device in devices:
         deviceCode = device.get('deviceCode')
@@ -147,11 +149,11 @@ def _aquatemp():
                 p = p.field(metricName, float(deviceDataObject['value']))
                 has_fields = True
             else:
-                logging.warning(f"Device {deviceCode} has no value for {metricName}, skipping.")
+                logger.warning(f"[aquatemp] Device {deviceCode} has no value for {metricName}, skipping.")
         
         if has_fields:
             points.append(p)
         else:
-            logging.warning(f"Device {deviceCode} has no valid data points, skipping influx write for this device.")
+            logger.warning(f"[aquatemp] Device {deviceCode} has no valid data points, skipping influx write for this device.")
 
     write_influx(points)
