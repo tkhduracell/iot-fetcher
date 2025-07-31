@@ -1,4 +1,4 @@
-import { EufySecurity, P2PConnectionType } from "eufy-security-client";
+import { CommandName, EufySecurity, P2PConnectionType } from "eufy-security-client";
 import {InfluxDB, Point } from '@influxdata/influxdb-client'
 import cron from 'node-cron';
 
@@ -14,11 +14,11 @@ const country = process.env.EUFY_COUNTRY || 'se'
 const task = cron.schedule('*/5 * * * *', eufy, {});
 
 // Immediately execute the task once at startup
-console.log('INFO', 'Run task immediately');
+console.log('INFO', '[eufy]', 'Run task immediately');
 task.execute()
 
 // Start the task to run according to the schedule
-console.log('INFO', 'Starting scheduler');
+console.log('INFO', '[eufy]', 'Starting scheduler');
 task.start()
 
 async function eufy() {
@@ -32,10 +32,11 @@ async function eufy() {
         eventDurationSeconds: 60,
     });
     
-    console.log('INFO', 'Looking for devices...');
-    await eufyClient.connect()
+    console.log('INFO', '[eufy]', 'Looking for eufy devices...');
+    await eufyClient.connect();
 
     const devices = await eufyClient.getDevices()
+    console.log('INFO', '[eufy]', `Found ${devices.length} devices.`);
     const points : Point[] = []
     for (const device of devices) {
         const {
@@ -83,12 +84,21 @@ async function eufy() {
                 .intField('powerWorkingMode', powerWorkingMode ?? -1)
                 .intField('batteryTemperature', batteryTemperature ?? -1)
         }
-        console.log(point.toLineProtocol())
+        console.log('INFO', '[eufy]', point.toLineProtocol())
         points.push(point)
+
+        /*
+        if (device.isCamera() && device.hasCommand(CommandName.DeviceStartLivestream)) {
+            await eufyClient.setCameraMaxLivestreamDuration(60);
+            await eufyClient.startStationLivestream(device.getSerial());
+            const station = await eufyClient.getStation(device.getStationSN());
+
+        }*/
     }
 
-    console.log('INFO', 'Writing points to InfluxDB...');
+    console.log('INFO', '[eufy]', 'Writing points to InfluxDB...');
     await writeApi.writePoints(points);
-    console.log('INFO', 'Points written successfully!');
+
+    console.log('INFO', '[eufy]', 'Points written successfully!');
     await eufyClient.close();
 }
