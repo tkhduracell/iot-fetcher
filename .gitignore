@@ -9,3 +9,6 @@ pinout.png
 
 nodejs/example.js
 nodejs/persistent.json
+
+/backup/
+*.tar
