@@ -1,10 +1,9 @@
-import base64
 import os
-from typing import List, Optional
 import requests
 import logging
 import hashlib
 
+from typing import Dict, List, Optional, Tuple
 from pprint import pformat
 from influx import write_influx, Point
 
@@ -35,7 +34,7 @@ cloudurl = os.environ['AQUATEMP_BASEURL']
 
 
 @memoize_for_hours(24)
-def getToken() -> Optional[str]:
+def getToken() -> Optional[Tuple[str, str]]:
     username = os.environ['AQUATEMP_USERNAME']
     password = os.environ['AQUATEMP_PASSWORD']
 
@@ -69,15 +68,17 @@ def getToken() -> Optional[str]:
     return token, user_id
 
 
-def getDevices(token: str, user_id: str) -> List[dict]:
+def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
     headers = {"x-token": token}
     devices_response = requests.post(
         f"{cloudurl}/app/device/deviceList?lang=en", headers=headers, json={
             'appId': '14',
         })
     if devices_response.status_code != 200:
-        logger.error(f"[aquatemp] Failed to fetch device list: {devices_response.text}")
-        logger.error(f"[aquatemp] Failed to fetch device list: {devices_response.text}")
+        logger.error(
+            f"[aquatemp] Failed to fetch device list: {devices_response.text}")
+        logger.error(
+            f"[aquatemp] Failed to fetch device list: {devices_response.text}")
         return []
     devices_response = devices_response.json().get('objectResult', [])
     logger.info(f"[aquatemp] Found {len(devices_response)} devices")
@@ -92,13 +93,14 @@ def getDevices(token: str, user_id: str) -> List[dict]:
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
         return []
     devices_response_share = devices_response_share.json().get('objectResult', [])
-    logger.info(f"[aquatemp] Found {len(devices_response_share)} shared devices")
+    logger.info(
+        f"[aquatemp] Found {len(devices_response_share)} shared devices")
 
     out = devices_response + devices_response_share
     return out
 
 
-def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
+def getDeviceData(token: str, deviceCode: str) -> Optional[list[Dict[str, str]]]:
     headers = {"x-token": token}
     deviceData_response = requests.post(
         f"{cloudurl}/app/device/getDataByCode?lang=en", headers=headers, json={
@@ -117,10 +119,11 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[dict]]:
 def _aquatemp():
     token_data = getToken()
     if not token_data:
-        logger.error("[aquatemp] Failed to get token for Aquatemp, aborting task.")
+        logger.error(
+            "[aquatemp] Failed to get token for Aquatemp, aborting task.")
         return
     token, user_id = token_data
-    
+
     logger.info("[aquatemp] Fetching Aquatemp device list...")
     devices = getDevices(token, user_id)
 
@@ -128,13 +131,23 @@ def _aquatemp():
     if not devices:
         logger.error("[aquatemp] No devices found or failed to fetch devices.")
         return
-    
+
     logger.info(f"[aquatemp] Found {len(devices)} Aquatemp devices")
-    
+
     for device in devices:
         deviceCode = device.get('deviceCode')
 
+        if not deviceCode:
+            logger.warning(
+                f"[aquatemp] Device {device.get('deviceNickName', 'Unknown')} has no deviceCode, skipping.")
+            continue
+
         deviceData = getDeviceData(token, deviceCode)
+
+        if deviceData is None:
+            logger.warning(
+                f"[aquatemp] Device {deviceCode} has no data, skipping.")
+            continue
 
         p = Point('aqua_temp')\
             .tag('device_name', device['deviceNickName'])\
@@ -149,11 +162,13 @@ def _aquatemp():
                 p = p.field(metricName, float(deviceDataObject['value']))
                 has_fields = True
             else:
-                logger.warning(f"[aquatemp] Device {deviceCode} has no value for {metricName}, skipping.")
-        
+                logger.warning(
+                    f"[aquatemp] Device {deviceCode} has no value for {metricName}, skipping.")
+
         if has_fields:
             points.append(p)
         else:
-            logger.warning(f"[aquatemp] Device {deviceCode} has no valid data points, skipping influx write for this device.")
+            logger.warning(
+                f"[aquatemp] Device {deviceCode} has no valid data points, skipping influx write for this device.")
 
     write_influx(points)

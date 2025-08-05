@@ -45,10 +45,11 @@ def _elpris():
             resp = requests.get(url)
 
             if (resp.status_code != 200):
-                logger.info("[elpris] Error when fetching energy prices: " + str(resp))
+                logger.info(
+                    "[elpris] Error when fetching energy prices: " + str(resp))
                 continue
 
-            json: List[dict] = resp.json()
+            json: List[EnergyData] = resp.json()
 
             values = [EnergyData(p) for p in json]
 

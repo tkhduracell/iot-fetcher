@@ -9,15 +9,20 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://airquality.googleapis.com/v1/currentConditions"
 
-GOOGLE_API_KEY = os.environ['GOOGLE_API_KEY']
-GOOGLE_LAT_LNG = os.environ['GOOGLE_LAT_LNG']
+GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
+GOOGLE_LAT_LNG = os.environ.get('GOOGLE_LAT_LNG', '')
 
 
 def airquality():
+    if not GOOGLE_API_KEY or not GOOGLE_LAT_LNG:
+        logger.error(
+            "[airquality] GOOGLE_API_KEY or GOOGLE_LAT_LNG environment variable not set, ignoring...")
+        return
     try:
         _airquality()
     except Exception as e:
-        logger.exception(f"[airquality] Failed to execute airquality module: {e}")
+        logger.exception(
+            f"[airquality] Failed to execute airquality module: {e}")
 
 
 def _airquality():
