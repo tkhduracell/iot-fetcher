@@ -7,6 +7,7 @@ import schedule
 from balboa import balboa
 from elpris import elpris
 from ngenic import ngenic
+from sigenergy import sigenergy
 from aqualink import aqualink
 from airquality import airquality
 from aquatemp import aquatemp
@@ -23,10 +24,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [balboa, elpris, ngenic, aqualink, aquatemp, airquality]:
+        for m in [balboa, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -35,6 +36,7 @@ def main():
     logging.info("Starting the scheduler...")
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
+    schedule.every(5).minutes.do(sigenergy)
     schedule.every(5).minutes.do(balboa)
     schedule.every(5).minutes.do(aquatemp)
 
