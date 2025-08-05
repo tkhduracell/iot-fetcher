@@ -23,7 +23,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
           </div>
         )}
       </div>
-      {error && <p className="text-red-500">Error: {String(error)}</p>}
+      {error && <p className="text-red-500">{String(error)}</p>}
     </div>
   );
 };

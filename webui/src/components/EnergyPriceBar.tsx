@@ -54,8 +54,8 @@ const EnergyPriceBar: React.FC = () => {
     return <Wrapper>Inga energipriser tillgängliga.</Wrapper>;
   }
 
-  const minValue = Math.min(...values);
-  const maxValue = Math.max(...values);
+  const minValue = Math.min(...values, 0);
+  const maxValue = Math.max(...values, 30);
   const range = maxValue - minValue;
   const bucketSize = range / 3;
 
