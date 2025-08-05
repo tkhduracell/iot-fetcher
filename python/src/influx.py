@@ -1,8 +1,11 @@
 import logging
 import os
 from typing import List
-from influxdb_client import InfluxDBClient, Point, WritePrecision
+
+from influxdb_client.client.influxdb_client import InfluxDBClient
+from influxdb_client.client.write.point import Point
 from influxdb_client.client.write_api import SYNCHRONOUS, ASYNCHRONOUS
+from influxdb_client.domain.write_precision import WritePrecision
 
 # InfluxDB configuration
 influx_host = os.environ['INFLUX_HOST'] or "192.168.67.52:6666"

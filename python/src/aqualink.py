@@ -3,10 +3,11 @@ import asyncio
 import json
 import logging
 import os
-from typing import List, Optional
 
+from typing import List, Optional
 from aiohttp import Payload
 import httpx
+
 from iaqualink.client import AqualinkClient, AQUALINK_HTTP_HEADERS
 from iaqualink.system import AqualinkSystem
 from iaqualink.device import AqualinkDevice
@@ -19,15 +20,20 @@ from influx import write_influx, Point
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
-aqualink_username = os.environ['AQUALINK_USERNAME'] or ''
-aqualink_password = os.environ['AQUALINK_PASSWORD'] or ''
+aqualink_username = os.environ.get('AQUALINK_USERNAME', '')
+aqualink_password = os.environ.get('AQUALINK_PASSWORD', '')
 
 
 def aqualink():
+    if not aqualink_username or not aqualink_password:
+        logger.error(
+            "[aqualink] AQUALINK_USERNAME or AQUALINK_PASSWORD environment variable not set, ignoring...")
+        return
     try:
         asyncio.run(_aqualink())
     except:
-        logger.warning("[aqualink] Failed to run aqualink module", exc_info=True)
+        logger.warning(
+            "[aqualink] Failed to run aqualink module", exc_info=True)
 
 
 async def _aqualink():
@@ -61,6 +67,7 @@ async def _aqualink():
         write_influx(points)
 
 IAQUA_DEVICE_URL = "https://r-api.iaqualink.net/v2/devices/"
+
 
 class I2DSystem(AqualinkSystem):
     NAME = "i2d"

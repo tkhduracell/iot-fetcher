@@ -1,8 +1,7 @@
 
-from enum import Enum
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 from ngenicpy import Ngenic
 from ngenicpy.models.node import NodeType, Node, NodeStatus
@@ -13,12 +12,16 @@ from influx import write_influx, Point
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
-ngenic_token = os.environ['NGENIC_TOKEN'] or ''
+ngenic_token = os.environ.get('NGENIC_TOKEN', '')
 
 logging.getLogger("httpx").setLevel(level=logging.WARNING)
 
 
 def ngenic():
+    if not ngenic_token:
+        logger.error(
+            "[ngenic] NGENIC_TOKEN environment variable not set, ignoring...")
+        return
     try:
         _ngenic()
     except:
@@ -69,7 +72,7 @@ def _ngenic():
             type: NodeType = node.get_type()
 
             if type in (NodeType.CONTROLLER, NodeType.SENSOR):
-                node_status: NodeStatus = node.status()
+                node_status: Optional[NodeStatus] = node.status()
 
                 if node_status:
                     battery = node_status.battery_percentage()
@@ -95,7 +98,7 @@ def _ngenic():
                         )
                 except:
                     if type == NodeType.CONTROLLER:
-                        measurement: Measurement = node.measurement(
+                        measurement: Optional[Measurement] = node.measurement(
                             MeasurementType.TEMPERATURE)
                         points.append(
                             Point(f"ngenic_node_sensor_measurement_value")

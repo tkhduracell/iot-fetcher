@@ -1,23 +1,24 @@
 import pybalboa
 import pybalboa.enums
 
-import datetime
 import os
 import asyncio
 import logging
 
-from influxdb_client import Point
-
-from influx import write_influx
+from influx import write_influx, Point
 
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
 # Balboa configuration
-spa_ip = os.environ['BALBOA_HOST'] or '192.168.68.53'
+spa_ip = os.environ.get('BALBOA_HOST', '')
 
 
 def balboa():
+    if not spa_ip:
+        logger.error(
+            "[balboa] BALBOA_HOST environment variable not set, ignoring...")
+        return
     try:
         asyncio.run(_balboa())
     except KeyboardInterrupt:
@@ -30,7 +31,7 @@ def balboa():
 
 async def _balboa():
     logger.info("[balboa] Connecting to Balboa Spa at IP address " +
-                 spa_ip)
+                spa_ip)
     async with pybalboa.SpaClient(spa_ip) as spa:
         await spa.connect()
 
