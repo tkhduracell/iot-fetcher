@@ -12,3 +12,4 @@ nodejs/persistent.json
 
 /backup/
 *.tar
+*.pyc

@@ -34,6 +34,7 @@ def _sigenergy():
         
         # Test the connection first with both unit IDs
         logger.debug("[sigenergy] Testing connection with unit ID 247...")
+        test_result_247 = None
         try:
             test_result_247 = client.client_247.read_holding_registers(30003, 1)
             if test_result_247 is None:
@@ -44,6 +45,7 @@ def _sigenergy():
             logger.warning("[sigenergy] Unit ID 247 connection failed: %s", e)
             
         logger.debug("[sigenergy] Testing connection with unit ID 1...")
+        test_result_1 = None
         try:
             test_result_1 = client.client_1.read_holding_registers(30500, 1)  # Model type register
             if test_result_1 is None:
@@ -90,21 +92,17 @@ def _sigenergy():
         try:
             power_to_grid = client.get_current_power_to_grid()
             power_from_grid = client.get_current_power_from_grid()
+            net_power = power_to_grid - power_from_grid  # Positive = export, Negative = import
             
             points.append(Point("sigenergy_grid_power")
                          .tag("host", sigenergy_host)
-                         .tag("direction", "to_grid")
-                         .field("power_kw", float(power_to_grid))
+                         .field("net_power_kw", float(net_power))
+                         .field("power_to_grid_kw", float(power_to_grid))    # Keep for debugging/transparency
+                         .field("power_from_grid_kw", float(power_from_grid)) # Keep for debugging/transparency
                          )
             
-            points.append(Point("sigenergy_grid_power")
-                         .tag("host", sigenergy_host)
-                         .tag("direction", "from_grid")
-                         .field("power_kw", float(power_from_grid))
-                         )
-            
-            logger.debug("[sigenergy] Grid power - To: %.2f kW, From: %.2f kW", 
-                        power_to_grid, power_from_grid)
+            logger.debug("[sigenergy] Grid power - Net: %.2f kW (To: %.2f kW, From: %.2f kW)", 
+                        net_power, power_to_grid, power_from_grid)
         except Exception as e:
             logger.warning("[sigenergy] Failed to get grid power data: %s", e)
         
@@ -167,4 +165,3 @@ def _sigenergy():
     except Exception as e:
         logger.error("[sigenergy] Failed to connect to SigenStore at %s:%d - %s", 
                     sigenergy_host, sigenergy_port, e)
-        raise
