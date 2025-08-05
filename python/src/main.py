@@ -32,11 +32,11 @@ def main():
                 logging.info(f"Executing {module_name} module...")
                 m()
         return
-    
+
     logging.info("Starting the scheduler...")
     schedule.every(5).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
-    schedule.every(5).minutes.do(sigenergy)
+    schedule.every(1).minutes.do(sigenergy)
     schedule.every(5).minutes.do(balboa)
     schedule.every(5).minutes.do(aquatemp)
 
