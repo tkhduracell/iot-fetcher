@@ -5,7 +5,7 @@ import type { Plugin } from 'vite';
 import { config } from 'dotenv'
 import tailwindcss from '@tailwindcss/vite'
 
-config({ path: '../.env' })
+config({ path: '.env' })
 
 function influxProxy(): Plugin {
   return {
