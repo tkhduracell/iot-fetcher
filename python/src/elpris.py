@@ -1,5 +1,5 @@
 import logging
-from typing import List, TypedDict
+from typing import Dict, List, TypedDict
 from datetime import datetime, timedelta
 import requests
 
@@ -12,9 +12,9 @@ areas = ["SE4"]
 
 
 class EnergyData(TypedDict):
-    SEK_per_kWh: float
-    EUR_per_kWh: float
-    EXR: float
+    SEK_per_kWh: str
+    EUR_per_kWh: str
+    EXR: str
     time_start: str
     time_end: str
 
@@ -49,14 +49,14 @@ def _elpris():
                     "[elpris] Error when fetching energy prices: " + str(resp))
                 continue
 
-            json: List[EnergyData] = resp.json()
+            json: List[Dict[str, str]] = resp.json()
 
-            values = [EnergyData(p) for p in json]
+            values = [EnergyData(**p) for p in json]
 
             points = [Point("energy_price")
                       .tag("area", area)
                       .field("SEK_per_kWh", float(p['SEK_per_kWh']))
-                      .field("100th_SEK_per_kWh", round(p['SEK_per_kWh'] * 100))
+                      .field("100th_SEK_per_kWh", round(float(p['SEK_per_kWh']) * 100))
                       .field("EUR_per_kWh", float(p['EUR_per_kWh']))
                       .time(p['time_start'], write_precision=WritePrecision.S)
                       for p in values]
