@@ -77,8 +77,6 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
     if devices_response.status_code != 200:
         logger.error(
             f"[aquatemp] Failed to fetch device list: {devices_response.text}")
-        logger.error(
-            f"[aquatemp] Failed to fetch device list: {devices_response.text}")
         return []
     devices_response = devices_response.json().get('objectResult', [])
     logger.info(f"[aquatemp] Found {len(devices_response)} devices")
