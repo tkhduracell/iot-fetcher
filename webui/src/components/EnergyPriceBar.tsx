@@ -11,17 +11,13 @@ type Point = {
 
 const Wrapper = (props: { children: React.ReactNode }) => {
   return (
-    <div className="px-2 py-2 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col gap-2 items-center justify-center">
+    <div className="px-1.5 py-1 rounded-md bg-blue-100 dark:bg-blue-900 shadow-sm ring-1 ring-blue-200 dark:ring-blue-800 flex flex-col gap-1 items-center justify-center">
       {props.children}
     </div>
   );
 }
 
 const EnergyPriceBar: React.FC = () => {
-  // Removed entry from values.ts:
-  // { measurement: 'energy_price', field: '100th_SEK_per_kWh', title: 'Timpris (kWh)', 
-  //   unit: 'Öre', decimals: 0, window: '5m', range: "-1h", filter: { area: 'SE4' } }
-
   const bucket = 'irisgatan';
   const measurement = 'energy_price';
   const field = '100th_SEK_per_kWh';
@@ -79,12 +75,12 @@ const EnergyPriceBar: React.FC = () => {
 
       return (
         <Wrapper>
-          <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
+          <div className="w-full flex flex-row justify-between text-sm md:text-base text-gray-600 dark:text-gray-300">
             <div>{startStr}</div>
             <div>{dateStr}</div>
             <div>{endStr}</div>
           </div>
-          <div className="w-full flex gap-2 flex-wrap">
+          <div className="w-full flex gap-1 flex-wrap">
             {result.map((point: Point) => {
               const colorClass = getBucketColorClass(point._value);
               const time = new Date(point._time);
@@ -93,9 +89,9 @@ const EnergyPriceBar: React.FC = () => {
               return (
                 <div className='flex flex-1 flex-col justify-end' key={[point._measurement, point._field, point._time].join('|')}>
                   <div className={
-                    `${colorClass} rounded p-0 text-xs flex
+                    `${colorClass} rounded p-0 text-[10px] flex
                     text-center text-gray-600 justify-center items-center
-                    dark:text-gray-300 ${isNow ? 'h-8' : 'h-3'}`}>
+                    dark:text-gray-300 ${isNow ? 'h-5' : 'h-1.5'}`}>
                       { isNow && `${point._value?.toFixed(0)}` }
                   </div>
                 </div>
@@ -103,15 +99,15 @@ const EnergyPriceBar: React.FC = () => {
             })}
           </div>
 
-          <div className="w-full flex flex-row justify-between text-xs text-gray-600 dark:text-gray-300">
-            <div className='bg-green-400 dark:bg-green-700 rounded px-2 py-0.5'>
+          <div className="w-full flex flex-row justify-between text-[10px] text-gray-600 dark:text-gray-300">
+            <div className='bg-green-400 dark:bg-green-700 rounded px-1 py-0.5'>
               Min {minValue.toFixed(0)} öre
             </div>
-            <div className='bg-yellow-400 dark:bg-yellow-700 rounded px-2 py-0.5'>
+            <div className='bg-yellow-400 dark:bg-yellow-700 rounded px-1 py-0.5'>
               &lt; {(minValue + 1 * bucketSize).toFixed(0)} öre 
               &lt; {(minValue + 2 * bucketSize).toFixed(0)} öre &lt; 
             </div>
-            <div className='bg-red-400 dark:bg-red-700 rounded px-2 py-0.5'>
+            <div className='bg-red-400 dark:bg-red-700 rounded px-1 py-0.5'>
               Max {(maxValue).toFixed(0)} öre
             </div>
           </div>
