@@ -17,20 +17,30 @@ services:
       - database:/var/lib/influxdb
       - database-config:/etc/influxdb2/influx-configs.txt
 
-  influx-3:
-    image: influxdb:3-core
-    container_name: influxdb-3
+  # influx-3:
+  #   image: influxdb:3-core
+  #   container_name: influxdb-3
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8181:8181"
+  #   volumes:
+  #     - influx:/home/influxdb3/.influxdb3
+  #   command: 
+  #     - influxdb3
+  #     - serve
+  #     - --node-id=rpi3
+  #     - --object-store=file
+  #     - --data-dir=/home/influxdb3/.influxdb3
+
+  # HTTPS reverse proxy for InfluxDB 2 (database)
+  influxdb-proxy:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
+    container_name: caddy-influxdb-proxy
     restart: unless-stopped
     ports:
-      - "8181:8181"
-    volumes:
-      - influx:/home/influxdb3/.influxdb3
-    command: 
-      - influxdb3
-      - serve
-      - --node-id=rpi3
-      - --object-store=file
-      - --data-dir=/home/influxdb3/.influxdb3
+      - "443:443"
+    depends_on:
+      - database
 
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
@@ -55,6 +65,5 @@ services:
     volumes:
       - garmin-tokens:/home/appuser/.garminconnect
     depends_on:
-      - influx-3
-      
-    
+      - database
+
