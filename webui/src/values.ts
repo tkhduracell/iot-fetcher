@@ -18,5 +18,10 @@ export const values: Config = [
         { measurement: 'tibber', field: 'accumulatedCost', title: 'Dygnskostnad', unit: 'Kr', decimals: 0 },
         { measurement: 'tibber', field: 'accumulatedConsumption', title: 'Dygnskonsumtion', unit: 'KWh', decimals: 0 },
         { measurement: 'tibber', field: 'power', title: 'Effekt', unit: 'W', decimals: 0, reload: 10000 }
-    ]
+    ],
+    [
+        { measurement: 'sigenergy_battery', field: 'soc_percent', title: 'Batteri SOC', unit: '%', decimals: 0, reload: 60000 },
+        { measurement: 'sigenergy_pv_power', field: 'power_kw', title: 'PV Effekt', unit: 'kW', decimals: 1, reload: 10000 },
+        { measurement: 'sigenergy_grid_power', field: 'net_power_kw', title: 'Nät Effekt', unit: 'kW', decimals: 2, reload: 10000 },
+    ],
 ];

@@ -10,9 +10,9 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
   const value: number = result.length > 0 ? result[0]._value : null;
 
   return (
-    <div className="p-4 rounded-lg bg-blue-100 dark:bg-blue-900 shadow flex flex-col items-center justify-center h-full">
-      <h2 className="text-lg md:text-xl font-semibold mb-2">{title || field}</h2>
-      <div className="text-5xl md:text-6xl font-bold">
+    <div className="p-3 rounded-md bg-blue-100 dark:bg-blue-900 shadow flex flex-col items-center justify-center h-full">
+      <h2 className="text-base md:text-lg font-semibold mb-1.5">{title || field}</h2>
+      <div className="text-3xl md:text-4xl font-bold">
         {(initialLoading || error) ? (
           <>...</>
         ) : (
@@ -23,7 +23,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
           </div>
         )}
       </div>
-      {error && <p className="text-red-500">{String(error)}</p>}
+      {error && <p className="text-red-500 text-xs">{String(error)}</p>}
     </div>
   );
 };
