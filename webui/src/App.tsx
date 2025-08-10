@@ -29,7 +29,7 @@ function useFullscreenParams(values: Config) {
 
 // Renders a single row of LatestValue cards
 const Row: React.FC<{row: ConfigRow; rowIdx: number; onOpen: (row: number, col: number) => void;}> = ({ row, rowIdx, onOpen }) => (
-  <div className="flex flex-row gap-2 min-h-[16vh]">
+  <div className="flex flex-row gap-1 min-h-[13.8vh]">
     {row.map((item, colIdx) => (
       <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}`} onClick={() => onOpen(rowIdx, colIdx)}>
         <LatestValue {...item} />
@@ -50,14 +50,16 @@ const AppContent: React.FC = () => {
     const { fullscreenProps, openFullscreen, closeFullscreen } = useFullscreenParams(values);
 
     return (
-        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-3">
+        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1">
             {/* Top right badges */}
-            <div className="absolute top-3 right-3 flex items-center z-10">
-                <RefreshBadge />
-                <HealthBadge />
+            <div className="flex items-center gap-2 mx-1 my-2">
+                <h1 className="text-2xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
+                <div className='flex flex-grow-1 gap-1 justify-end'>
+                  <RefreshBadge />
+                  <HealthBadge />
+                </div>
             </div>
-            <div className="container mx-auto py-0 flex flex-col gap-3">
-                <h1 className="text-2xl font-bold">Hello Irisgatan</h1>
+            <div className="w-full py-0 flex flex-col gap-1.5">
                 <Grid values={values} onOpen={openFullscreen} />
                 <EnergyPriceBar />
             </div>
