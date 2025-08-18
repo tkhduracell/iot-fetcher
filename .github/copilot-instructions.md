@@ -1,14 +1,17 @@
 # GitHub Copilot Repository Context
 
-This repository is configured for use with GitHub Copilot and related tools. Below is some general information to help Copilot and contributors understand the repository context:
+This repository is configured for use with GitHub Copilot and related tools. 
+Below is some general information to help Copilot and contributors understand the repository context:
 
 - **Repository Name:** iot-fetcher
 - **GitHub Username/Owner:** tkhduracell
 - **Primary Languages:** Python, TypeScript
 - **Main Components:**
-  - Python backend (Flask, InfluxDB, etc.)
+  - Python backend (Cron jobs, etc.)
+  - Node.js backend (Cron jobs, etc.)
   - Web UI (React, Vite, Tailwind, TypeScript)
-- **Typical Commit Message Style:** Conventional Commits (short and descriptive)
+  - Balena setup (docker-compose, Dockerfiles)
+- **Typical Commit Message Style:** Conventional Commits (short but descriptive, max 160 chars)
   - Examples:
     - `feat: add new feature`
     - `fix: resolve issue with component`
@@ -16,7 +19,7 @@ This repository is configured for use with GitHub Copilot and related tools. Bel
 - **Default Branch:** main
 - **Branching Strategy:** 
   - `main` branch is for production-ready code.
-  - Use `feature/<description>` or `fix/<descritpion>` branches for development.
+  - Use `feature/<description>` or `fix/<description>` branches for development.
   - Pull requests are required for merging into the main branch using squash. 
 
 ## Usage
