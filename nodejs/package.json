@@ -14,7 +14,7 @@
     "dev": "node --experimental-strip-types --env-file ../.env --watch index.mts",
     "build": "esbuild index.mts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.js --external:bufferutil --external:utf-8-validate && npm run copy:proto",
     "start": "node dist/index.js",
-    "copy:proto": "mkdir -p dist/proto && cp node_modules/eufy-security-client/build/mqtt/proto/* dist/proto/"
+    "copy:proto": "mkdir -p dist/proto && cp node_modules/eufy-security-client/build/mqtt/proto/* node_modules/eufy-security-client/build/push/proto/* dist/proto/"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "^1.35.0",
