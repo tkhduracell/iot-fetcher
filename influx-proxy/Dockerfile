@@ -33,7 +33,7 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 		header_up X-Forwarded-Proto {scheme}
 	}
 
-	reverse_proxy /upload/* {$API_TARGET} {
+	reverse_proxy /upload /upload/* {$API_TARGET} {
 		header_up Host {host}
 		header_up X-Forwarded-For {remote}
 		header_up X-Forwarded-Proto {scheme}
