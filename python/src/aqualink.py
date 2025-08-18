@@ -83,6 +83,10 @@ class I2DSystem(AqualinkSystem):
     async def update(self) -> None:
         resp = await self._send_device_request()
         data: dict = resp.json()
+        if not data or "alldata" not in data:
+            logger.error("[i2d] No alldata found in response")
+            return
+
         self.devices = {
             self.serial: AquaLinkIQPump(self, data["alldata"])
         }
@@ -111,6 +115,7 @@ class I2DSystem(AqualinkSystem):
 
 
 class AquaLinkIQPump(AqualinkDevice):
+    data: dict
 
     @property
     def label(self) -> str:
