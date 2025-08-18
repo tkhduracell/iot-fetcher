@@ -5,19 +5,19 @@ push: build
 	gcloud auth configure-docker europe-docker.pkg.dev
 	docker push europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
 
-# Build proxy image with build args from .env (PROXY_DOMAIN and LETSENCRYPT_EMAIL)
+# Requires ZeroSSL EAB vars at runtime: ZEROSSL_EAB_KID and ZEROSSL_EAB_HMAC in .env
 build-proxy:
-	$(eval DOMAIN := $(shell grep -E '^PROXY_DOMAIN=' .env | cut -d'=' -f2-))
-	$(eval EMAIL := $(shell grep -E '^LETSENCRYPT_EMAIL=' .env | cut -d'=' -f2-))
 	docker build \
-		--build-arg DOMAIN=$(DOMAIN) \
-		--build-arg EMAIL=$(EMAIL) \
 		-t europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest \
 		./influx-proxy
 
 push-proxy: build-proxy
 	gcloud auth configure-docker europe-docker.pkg.dev
 	docker push europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
+
+run-proxy: build-proxy
+	docker run --rm -p 443:443 -p 80:80 --env-file influx-proxy/.env \
+		europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
 
 deploy: push push-proxy
 	balena push iot-hub

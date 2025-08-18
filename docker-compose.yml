@@ -33,14 +33,16 @@ services:
   #     - --data-dir=/home/influxdb3/.influxdb3
 
   # HTTPS reverse proxy for InfluxDB 2 (database)
-  influxdb-proxy:
+  influx-proxy:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
     container_name: caddy-influxdb-proxy
     restart: unless-stopped
     ports:
       - "443:443"
+      - "80:80"
     depends_on:
       - database
+      - iot-fetcher
 
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
