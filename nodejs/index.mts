@@ -1,4 +1,4 @@
-import { CommandName, EufySecurity, P2PConnectionType } from "eufy-security-client";
+import { EufySecurity, LogLevel, P2PConnectionType, type Logger } from "eufy-security-client";
 import {InfluxDB, Point } from '@influxdata/influxdb-client'
 import cron from 'node-cron';
 
@@ -14,27 +14,71 @@ const country = process.env.EUFY_COUNTRY || 'se'
 const task = cron.schedule('*/5 * * * *', eufy, {});
 
 // Immediately execute the task once at startup
-console.log('INFO', '[eufy]', 'Run task immediately');
+console.log('INFO', '[node]', 'Run task immediately');
 task.execute()
 
 // Start the task to run according to the schedule
-console.log('INFO', '[eufy]', 'Starting scheduler');
+console.log('INFO', '[node]', 'Starting scheduler');
 task.start()
 
+let eufyClient: EufySecurity | null = null;
+
 async function eufy() {
-    const writeApi = new InfluxDB({url, token, timeout: 60_000 }).getWriteApi(org, bucket, 's')
-    const eufyClient = await EufySecurity.initialize({
+    try {
+        await _eufyInit();
+        await _eufy();
+    } catch (error) {
+        console.error('ERROR', '[eufy]', 'Failed to run eufy task:', error);
+    }
+}
+
+async function _eufyInit() {
+    if (eufyClient?.isConnected()) {
+        console.log('INFO', '[eufy]', 'Eufy client already initialized and connected.');
+        return;
+    }
+    eufyClient = await EufySecurity.initialize({
         username,
         password,
         country,
+        logging: { level: LogLevel.Warn },
         pollingIntervalMinutes: 5,
         p2pConnectionSetup: P2PConnectionType.ONLY_LOCAL,
         eventDurationSeconds: 60,
-    });
-    
-    console.log('INFO', '[eufy]', 'Looking for eufy devices...');
-    await eufyClient.connect();
+    }, {
+        error: (message, err) => console.error('ERROR', '[eufy]', message, err),
+        debug: (message) => console.debug('DEBUG', '[eufy]', message),
+        info: (message) => console.info('INFO', '[eufy]', message),
+        warn: (message) => console.warn('WARN', '[eufy]', message),
+        trace: (message) => console.trace('TRACE', '[eufy]', message),
+    } as Logger);
 
+    eufyClient.on('connect', () => {
+        console.log('INFO', '[eufy]', 'Connected to Eufy Security');
+    });
+    eufyClient.on('close', () => {
+        console.log('INFO', '[eufy]', 'Disconnected from Eufy Security');
+    });
+    eufyClient.on("captcha request", (captchaId: string, captcha: string) => { 
+        console.error('ERROR', '[eufy]', 'Captcha required:', captchaId, captcha);
+    });
+    eufyClient.on('station connect', (station) => {
+        console.log('INFO', '[eufy]', 'Connected to station:', station.getName(), station.getSerial());
+    });
+    eufyClient.on('station close', (station) => {
+        console.log('INFO', '[eufy]', 'Disconnected from station:', station.getName(), station.getSerial());
+    });
+    eufyClient.on('station connection error', (station, error) => {
+        console.error('ERROR', '[eufy]', 'Station connection error:', station.getName(), station.getSerial(), error);
+    });
+
+    console.log('INFO', '[eufy]', 'Connecting to Eufy station...');
+    await eufyClient.connect();
+}
+
+async function _eufy() {
+    const writeApi = new InfluxDB({url, token, timeout: 60_000 }).getWriteApi(org, bucket, 's')
+    
     const devices = await eufyClient.getDevices()
     console.log('INFO', '[eufy]', `Found ${devices.length} devices.`);
     const points : Point[] = []
@@ -98,7 +142,4 @@ async function eufy() {
 
     console.log('INFO', '[eufy]', 'Writing points to InfluxDB...');
     await writeApi.writePoints(points);
-
-    console.log('INFO', '[eufy]', 'Points written successfully!');
-    await eufyClient.close();
 }

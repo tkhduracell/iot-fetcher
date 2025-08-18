@@ -7,16 +7,22 @@
   "type": "commonjs",
   "main": "index.js",
   "module": "index.ts",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
-    "start": "tsx index.ts"
+    "dev": "node --experimental-strip-types --env-file ../.env --watch index.mts",
+    "build": "esbuild index.mts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.js --external:bufferutil --external:utf-8-validate && npm run copy:proto",
+    "start": "node dist/index.js",
+    "copy:proto": "mkdir -p dist/proto && cp node_modules/eufy-security-client/build/mqtt/proto/* dist/proto/"
   },
   "dependencies": {
     "@influxdata/influxdb-client": "^1.35.0",
-    "node-cron": "^4.1.0"
+    "node-cron": "^4.2.1",
+    "eufy-security-client": "^3.4.0"
   },
   "devDependencies": {
-    "@types/node": "^22.15.28",
-    "eufy-security-client": "^3.2.0",
-    "tsx": "^4.19.4"
+    "@types/node": "^24.3.0",
+    "esbuild": "^0.25.9"
   }
 }
