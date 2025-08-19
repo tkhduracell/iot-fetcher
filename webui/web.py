@@ -7,6 +7,7 @@ from flask import Flask, send_from_directory, request, Response, make_response
 import requests
 import logging
 import os
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -15,10 +16,30 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-logging.basicConfig(level=logging.INFO)
+class CleanLogs(logging.Filter):
+    pattern: re.Pattern = re.compile(r' - - \[.+?] "')
 
-# Disable requests logging
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.name = record.name.replace("werkzeug", "http")\
+            .replace("root", os.path.basename(__file__))\
+            .replace(".py", "")
+        record.msg = self.pattern.sub(' - "', record.msg)
+        return True
+
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(levelname)s [%(name)s] %(message)s'
+)
+
+# Requests logging
+wlog = logging.getLogger('werkzeug')
+wlog.setLevel(logging.INFO)
+wlog.addFilter(CleanLogs())
+
+rlog = logging.getLogger('root')
+rlog.setLevel(logging.INFO)
+rlog.addFilter(CleanLogs())
 
 dist_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist')
 
@@ -28,12 +49,12 @@ os.makedirs(upload_folder, exist_ok=True)
 app = Flask('webui')
 
 
-@app.route('/')
+@app.route('/', methods=['GET', 'HEAD'])
 def index():
     return send_from_directory(dist_folder, 'index.html')
 
 
-@app.route('/assets/<path:filename>')
+@app.route('/assets/<path:filename>', methods=['GET', 'HEAD'])
 def assets(filename):
     assets_folder = os.path.join(dist_folder, 'assets')
     return send_from_directory(assets_folder, filename)
@@ -60,14 +81,17 @@ def upload():
     )
 
 
-@app.route('/upload/<uuid>', methods=['GET'])
-def uploads(uuid):
+@app.route('/upload/<uuid>', methods=['GET', 'HEAD'])
+def uploads(uuid: str):
     return send_from_directory(upload_folder, uuid)
 
 
-@app.route('/metrics/garmin')
-def metrics_garmin():
+@app.route('/metrics/<device>', methods=['GET', 'HEAD'])
+def metrics_garmin(device: str):
+    if device not in ['garmin']:
+        return make_response('Device not supported', 400)
 
+    _bucket = "irisgatan"
     _defs = [
         {"title": "🔋 Batteri", "unit": "%", "decimals": 0, "key": "battery_soc",
             "flux": 'filter(fn: (r) => r._measurement == "sigenergy_battery" and r._field == "soc_percent") |> last()'},
@@ -80,7 +104,7 @@ def metrics_garmin():
     influx_host = os.environ.get('INFLUX_HOST')
 
     if not influx_host:
-        return Response('Missing INFLUX_HOST', status=500)
+        return make_response('Missing INFLUX_HOST', 500)
 
     headers = {
         'Authorization': request.headers.get('Authorization'),
@@ -89,7 +113,7 @@ def metrics_garmin():
     }
 
     # Combine the query into one.
-    query = 'data = from(bucket: "irisgatan") |> range(start: -1h)\n'
+    query = f'data = from(bucket: "{_bucket}") |> range(start: -1h)\n'
 
     for d in _defs:
         query += f'  data_{d["key"]} = data |> {d["flux"]} |> yield(name: "{d["key"]}")\n'
@@ -106,7 +130,7 @@ def metrics_garmin():
 
         if not resp.ok:
             logging.warning(
-                "Influx query failed: %s", resp.text[:200]
+                "Influx query failed: %s", resp.text
             )
 
         text = resp.text
@@ -115,8 +139,7 @@ def metrics_garmin():
         lines = [l for l in text.splitlines() if l and not l.startswith('#')]
         if len(lines) < 2:
             logging.warning(
-                "No data rows in query response")
-            return Response("No data available", status=204)
+                "No data rows in query response: %s", text)
 
         grouped = groupby(lines, key=lambda item: '_value' in item)
         grouped = [[next(group), list(next(grouped)[1])]
@@ -141,7 +164,7 @@ def metrics_garmin():
         logging.exception(
             "Error querying influx for %s:", e)
 
-    return Response(json.dumps(results, ensure_ascii=False), mimetype='application/json')
+    return make_response(results, 200)
 
 
 @app.route('/influx/api/v2/<route>', methods=['POST', 'GET'])
