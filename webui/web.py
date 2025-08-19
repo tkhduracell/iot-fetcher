@@ -120,8 +120,6 @@ def metrics_garmin(device: str):
     for d in _defs:
         query += f'  data_{d["key"]} = data |> {d["flux"]} |> aggregateWindow(every: 1m, fn: mean, createEmpty: false) |> last() |> yield(name: "{d["key"]}")\n'
 
-    print(query)
-
     try:
         resp = requests.post(
             f"http://{influx_host}/api/v2/query",
