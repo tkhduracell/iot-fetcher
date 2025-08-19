@@ -24,6 +24,9 @@ aqualink_username = os.environ.get('AQUALINK_USERNAME', '')
 aqualink_password = os.environ.get('AQUALINK_PASSWORD', '')
 
 
+timeout = httpx.Timeout(60.0, connect=60.0, read=60.0)
+
+
 def aqualink():
     if not aqualink_username or not aqualink_password:
         logger.error(
@@ -31,38 +34,43 @@ def aqualink():
         return
     try:
         asyncio.run(_aqualink())
+    except httpx.ReadTimeout:
+        logger.warning("[aqualink] Aqualink request timed out", exc_info=False)
+    except httpx.TimeoutException:
+        logger.warning("[aqualink] Aqualink request timed out", exc_info=False)
     except:
         logger.warning(
             "[aqualink] Failed to run aqualink module", exc_info=True)
 
 
 async def _aqualink():
-    logger.info("[aqualink] Fetching Aqualink data...")
+    points: List[Point] = []
 
-    async with AqualinkClient(aqualink_username, aqualink_password) as c:
-        points: List[Point] = []
-        s = await c.get_systems()
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with AqualinkClient(aqualink_username, aqualink_password, client) as c:
+            logger.info("[aqualink] Fetching Aqualink data...")
+            s = await c.get_systems()
 
-        for s in s.values():
-            devices = await s.get_devices()
-            for device in devices.values():
-                device: AquaLinkIQPump
-                motor = Point("pool_iqpump_motordata") \
-                    .tag("system", s.serial) \
-                    .tag("device", device.productId) \
-                    .tag("firmware", device.firmware) \
-                    .field("speed", device.motorSpeed) \
-                    .field("power", device.motorPower) \
-                    .field("temperature", device.motorTemperature)
-                points.append(motor)
+            for s in s.values():
+                devices = await s.get_devices()
+                for device in devices.values():
+                    device: AquaLinkIQPump
+                    motor = Point("pool_iqpump_motordata") \
+                        .tag("system", s.serial) \
+                        .tag("device", device.productId) \
+                        .tag("firmware", device.firmware) \
+                        .field("speed", device.motorSpeed) \
+                        .field("power", device.motorPower) \
+                        .field("temperature", device.motorTemperature)
+                    points.append(motor)
 
-                fp = Point("pool_iqpump_freezeprotect") \
-                    .tag("system", s.serial) \
-                    .tag("device", device.productId) \
-                    .tag("firmware", device.firmware) \
-                    .field("enabled", device.freezeProtectEnable) \
-                    .field("status", device.freezeProtectStatus)
-                points.append(fp)
+                    fp = Point("pool_iqpump_freezeprotect") \
+                        .tag("system", s.serial) \
+                        .tag("device", device.productId) \
+                        .tag("firmware", device.firmware) \
+                        .field("enabled", device.freezeProtectEnable) \
+                        .field("status", device.freezeProtectStatus)
+                    points.append(fp)
 
         write_influx(points)
 
