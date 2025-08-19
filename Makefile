@@ -16,8 +16,13 @@ push-proxy: build-proxy
 	docker push europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
 
 run-proxy: build-proxy
-	docker run --rm -p 443:443 -p 80:80 --env-file influx-proxy/.env \
+	@echo "\nStarting proxy on port 8443 and 8080...\n"
+	docker run --rm -p 8443:443 -p 8080:80 --env-file influx-proxy/.env \
 		europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
+
+run-webui:
+	@echo "\nStarting webui web on port 8080...\n"
+	(cd  webui && source venv/bin/activate && python web.py)
 
 deploy: push push-proxy
 	balena push iot-hub
