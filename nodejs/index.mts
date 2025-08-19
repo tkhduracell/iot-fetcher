@@ -64,7 +64,11 @@ async function _eufyInit() {
     eufyClient.on("captcha request", async (captchaId: string, captcha: string) => {
         const captchaFilePath = `/tmp/captcha_${captchaId}.txt`;
         console.error('ERROR', '[eufy]', 'Captcha', captchaId, 'on file', captchaFilePath);
-        await writeFile(captchaFilePath, captcha);
+        try {
+            await writeFile(captchaFilePath, captcha);
+        } catch (err) {
+            console.error('ERROR', '[eufy]', `Failed to write captcha file ${captchaFilePath}:`, err);
+        }
     });
     eufyClient.on('station connect', (station) => {
         console.log('INFO', '[eufy]', 'Connected to station:', station.getName(), station.getSerial());
