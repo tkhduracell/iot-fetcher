@@ -122,7 +122,6 @@ def metrics_garmin(device: str):
     for d in _defs:
         query += f'  data_{d["key"]} = data |> {d["flux"]} |> yield(name: "{d["key"]}")\n'
 
-    results = []
     try:
         resp = requests.post(
             f"http://{influx_host}/api/v2/query",
@@ -144,11 +143,13 @@ def metrics_garmin(device: str):
         if len(lines) < 2:
             logging.warning(
                 "No data rows in query response: %s", text)
+            return make_response(results, 500)
 
         grouped = groupby(lines, key=lambda item: '_value' in item)
         grouped = [[next(group), list(next(grouped)[1])]
                    for is_header, group in grouped if is_header]
 
+        results = []
         for header, data in grouped:
             header: str
             data: list[str]
@@ -164,12 +165,12 @@ def metrics_garmin(device: str):
                 logging.warning(
                     "_value column not found in response for header: %s", header)
 
+        return make_response(results, 200)
+
     except Exception as e:
         logging.exception(
             "Error querying influx for %s:", e)
-
-    return make_response(results, 200)
-
+        return make_response({"error": "Error when querying InfluxDB"}, 500)
 
 @app.route('/influx/api/v2/<route>', methods=['POST', 'GET'])
 def influx_proxy(route):
