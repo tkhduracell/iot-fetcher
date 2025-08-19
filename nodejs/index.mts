@@ -2,6 +2,8 @@ import { EufySecurity, LogLevel, P2PConnectionType, type Logger } from "eufy-sec
 import {InfluxDB, Point } from '@influxdata/influxdb-client'
 import cron from 'node-cron';
 
+import { writeFile } from 'node:fs/promises'
+
 const url = 'http://' + (process.env.INFLUX_HOST || 'localhost:8086')
 const token =  process.env.INFLUX_TOKEN!
 const org =  process.env.INFLUX_ORG!
@@ -59,8 +61,10 @@ async function _eufyInit() {
     eufyClient.on('close', () => {
         console.log('INFO', '[eufy]', 'Disconnected from Eufy Security');
     });
-    eufyClient.on("captcha request", (captchaId: string, captcha: string) => { 
-        console.error('ERROR', '[eufy]', 'Captcha required:', captchaId, captcha);
+    eufyClient.on("captcha request", async (captchaId: string, captcha: string) => {
+        const captchaFilePath = `/tmp/captcha_${captchaId}.txt`;
+        console.error('ERROR', '[eufy]', 'Captcha', captchaId, 'on file', captchaFilePath);
+        await writeFile(captchaFilePath, captcha);
     });
     eufyClient.on('station connect', (station) => {
         console.log('INFO', '[eufy]', 'Connected to station:', station.getName(), station.getSerial());
@@ -73,7 +77,12 @@ async function _eufyInit() {
     });
 
     console.log('INFO', '[eufy]', 'Connecting to Eufy station...');
-    await eufyClient.connect();
+    try {
+        await eufyClient.connect();
+    } catch (error) {
+        console.error('ERROR', '[eufy]', 'Failed to connect to Eufy:', error);
+    }
+    
 }
 
 async function _eufy() {
