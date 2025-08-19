@@ -22,7 +22,11 @@ class CleanLogs(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.name = record.name.replace("werkzeug", "http")\
             .replace("root", os.path.basename(__file__))\
-            .replace(".py", "")
+        record.name = (
+            record.name.replace("werkzeug", "http")
+                       .replace("root", os.path.basename(__file__))
+                       .replace(".py", "")
+        )
         record.msg = self.pattern.sub(' - "', record.msg)
         return True
 
