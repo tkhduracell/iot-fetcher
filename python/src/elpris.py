@@ -39,7 +39,7 @@ def _elpris():
     logger.info("[elpris] Fetching energy prices from Elpriset justnu...")
 
     for area in areas:
-        for i in range(-7, 1):
+        for i in range(-30, 1):
             url = get_elpris_price_url(area=area, day_offset=i)
             logger.info(f"[elpris] Fetching energy prices from {url}...")
             resp = requests.get(url)
