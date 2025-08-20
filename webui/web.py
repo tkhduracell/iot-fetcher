@@ -85,7 +85,12 @@ def upload():
 
 @app.route('/upload/<uuid>', methods=['GET', 'HEAD'])
 def uploads(uuid: str):
-    return send_from_directory(upload_folder, uuid)
+    # validate uuid
+    uuid4 = uuid.UUID(uuid)
+    if str(uuid4) != uuid:
+        return make_response('Invalid upload id', 400)
+
+    return send_file(os.path.join(upload_folder, uuid), as_attachment=True)
 
 
 @app.route('/metrics/<device>', methods=['GET', 'HEAD'])
