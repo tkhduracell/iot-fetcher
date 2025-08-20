@@ -20,6 +20,8 @@ class CleanLogs(logging.Filter):
     pattern: re.Pattern = re.compile(r' - - \[.+?] "')
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if "/influx/api/v2/query" in record.msg:
+            return False
         record.name = (
             record.name.replace("werkzeug", "http")
                        .replace("root", os.path.basename(__file__))
@@ -55,6 +57,9 @@ app = Flask('webui')
 def index():
     return send_from_directory(dist_folder, 'index.html')
 
+@app.route('/health', methods=['GET', 'HEAD'])
+def health():
+    return make_response('OK', 200)
 
 @app.route('/assets/<path:filename>', methods=['GET', 'HEAD'])
 def assets(filename):
