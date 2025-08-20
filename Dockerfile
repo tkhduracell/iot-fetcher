@@ -51,5 +51,9 @@ RUN pip install --no-cache-dir -r webui/requirements.txt
 
 # Copy start script
 COPY start.sh .
+COPY healthcheck.sh .
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD /app/healthcheck.sh
 
 ENTRYPOINT ["/bin/sh", "./start.sh"]
