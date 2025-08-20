@@ -14,6 +14,18 @@ while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$var" == \#* ]] || [ -z "$var" ]; then
             continue
         fi
+        echo "balena env set --fleet "$FLEET_NAME" --service iot-fetcher $var <...>"
+        balena env set --fleet "$FLEET_NAME" --service iot-fetcher $var ${value//[\`\'\"]/}
+    fi
+done < ".env"
+
+while IFS= read -r line || [ -n "$line" ]; do
+    if [ -n "$line" ]; then
+        IFS='=' read -r var value <<< "$line"
+        # if it starts with a comment or is empty, skip it
+        if [[ "$var" == \#* ]] || [ -z "$var" ]; then
+            continue
+        fi
         echo "balena env set --fleet "$FLEET_NAME" --service influx-proxy "$var" <...>"
         balena env set --fleet "$FLEET_NAME" --service influx-proxy "$var" "$value"
     fi
