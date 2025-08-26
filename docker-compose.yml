@@ -16,6 +16,12 @@ services:
     volumes:
       - database:/var/lib/influxdb
       - database-config:/etc/influxdb2/influx-configs.txt
+    healthcheck:
+      test: influx ping || exit 1
+      interval: 30s
+      retries: 5
+      start_period: 20s
+      timeout: 10s
 
   # influx-3:
   #   image: influxdb:3-core
