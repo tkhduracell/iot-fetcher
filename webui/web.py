@@ -20,6 +20,8 @@ class CleanLogs(logging.Filter):
     pattern: re.Pattern = re.compile(r' - - \[.+?] "')
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if "/influx/api/v2/query" in record.getMessage():
+            return False
         record.name = (
             record.name.replace("werkzeug", "http")
                        .replace("root", os.path.basename(__file__))
