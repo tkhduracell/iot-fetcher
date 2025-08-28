@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { queryReloadInterval, queryJitterInterval } from '../globals';
 
-type Task = {
+export type Task = {
   id: number;
   title: string;
   status: 'pending' | 'completed' | 'in_progress';

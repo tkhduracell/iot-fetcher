@@ -1,12 +1,6 @@
 import React from 'react';
-import useTasksQuery from '../hooks/useTasksQuery';
+import useTasksQuery, {Task} from '../hooks/useTasksQuery';
 
-type Task = {
-  id: number;
-  title: string;
-  status: 'pending' | 'completed' | 'in_progress';
-  priority: 'high' | 'medium' | 'low';
-};
 
 const Wrapper = (props: { children: React.ReactNode }) => {
   return (
@@ -57,7 +51,7 @@ const TaskItem: React.FC<{ task: Task }> = ({ task }) => (
 );
 
 const Tasks: React.FC = () => {
-  const { tasks, loading, initialLoading, error } = useTasksQuery();
+  const { tasks, initialLoading, error } = useTasksQuery();
 
   if (initialLoading) {
     return (
