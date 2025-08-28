@@ -24,7 +24,10 @@ run-webui:
 	@echo "\nStarting webui web on port 8080...\n"
 	(cd  webui && source venv/bin/activate && python web.py)
 
-deploy: push push-proxy
+login:
+	balena login -H --token "$$(sed -n 's/^BALENA_TOKEN=//p' .env)"
+
+deploy: push push-proxy login
 	balena push iot-hub
 
 run:
@@ -33,4 +36,4 @@ run:
 dev:
 	docker build . -t iot-fetcher:latest-dev --build-arg PYDEBUGGER=1 && docker run -e PYDEBUGGER=1 -p 5678:5678 --rm -p 8080:8080 --env-file .env iot-fetcher:latest-dev
 
-.PHONY: build push deploy run dev build-proxy push-proxy
+.PHONY: build push deploy run dev build-proxy push-proxy login run-proxy run-webui
