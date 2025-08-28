@@ -7,6 +7,7 @@ import useAutoReload from './hooks/useAutoReload';
 import LatestValueFullscreen from './components/LatestValueFullscreen';
 import { values } from './values';
 import EnergyPriceBar from './components/EnergyPriceBar';
+import Tasks from './components/Tasks';
 import { Config, ConfigRow } from './types';
 
 
@@ -50,7 +51,7 @@ const AppContent: React.FC = () => {
     const { fullscreenProps, openFullscreen, closeFullscreen } = useFullscreenParams(values);
 
     return (
-        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1">
+        <div className="h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1 flex flex-col">
             {/* Top right badges */}
             <div className="flex items-center gap-2 mx-1 my-2">
                 <h1 className="text-2xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
@@ -59,9 +60,10 @@ const AppContent: React.FC = () => {
                   <HealthBadge />
                 </div>
             </div>
-            <div className="w-full py-0 flex flex-col gap-1.5">
+            <div className="w-full py-0 flex flex-col gap-1.5 flex-1">
                 <Grid values={values} onOpen={openFullscreen} />
                 <EnergyPriceBar />
+                <Tasks />
             </div>
             { fullscreenProps && <LatestValueFullscreen 
                 open={!!fullscreenProps}

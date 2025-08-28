@@ -191,6 +191,18 @@ def metrics_garmin(device: str):
             "Error querying influx for %s:", e)
         return make_response({"error": "Error when querying InfluxDB"}, 500)
 
+@app.route('/home/tasks', methods=['GET'])
+def get_tasks():
+    tasks = [
+        {"id": 1, "title": "Check pool temperature", "status": "pending", "priority": "high"},
+        {"id": 2, "title": "Monitor solar panels", "status": "completed", "priority": "medium"},
+        {"id": 3, "title": "Update energy settings", "status": "in_progress", "priority": "low"},
+        {"id": 4, "title": "Backup influx data", "status": "pending", "priority": "high"},
+        {"id": 5, "title": "Review energy costs", "status": "completed", "priority": "medium"},
+        {"id": 6, "title": "Clean air quality sensors", "status": "pending", "priority": "low"}
+    ]
+    return make_response(tasks, 200)
+
 @app.route('/influx/api/v2/<route>', methods=['POST', 'GET'])
 def influx_proxy(route):
     if route not in ['query', 'health']:
