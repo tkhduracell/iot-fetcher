@@ -11,7 +11,7 @@ type Point = {
 
 const Wrapper = (props: { children: React.ReactNode }) => {
   return (
-    <div className="px-1.5 py-1 rounded-md bg-blue-100 dark:bg-blue-900 shadow-sm ring-1 ring-blue-200 dark:ring-blue-800 flex flex-col gap-1 items-center justify-center">
+    <div className="px-1.5 py-1 rounded-md bg-blue-100 dark:bg-blue-900 shadow-sm ring-1 ring-blue-200 dark:ring-blue-800 flex flex-col gap-1 items-center justify-center min-h-20">
       {props.children}
     </div>
   );
