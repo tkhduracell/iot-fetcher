@@ -7,33 +7,24 @@ import tailwindcss from '@tailwindcss/vite'
 
 config({ path: '.env' })
 
-function influxProxy(): Plugin {
+function flaskProxy(): Plugin {
   return {
-    name: 'influx-proxy',
+    name: 'flask-proxy',
     configureServer(server) {
       server.middlewares.use(
-        '/influx/api/v2/',
         createProxyMiddleware({
-          target: `http://${process.env.INFLUX_HOST}`,
+          target: 'http://localhost:8080',
           changeOrigin: true,
-          pathRewrite: { 
-            '^/query': '/api/v2/query',
+          pathFilter: (pathname) => {
+            // Exclude static assets and root path - let Vite handle these
+            return pathname.startsWith('/query') || 
+              pathname.startsWith('/health') ||
+              pathname.startsWith('/influx') ||
+              pathname.startsWith('/home/tasks');
           },
-          pathFilter: 
-          [
-            '/query', 
-            '/health'
-          ],
           logger: {
             error: console.error,
             info: console.info
-          },
-          on: {
-            proxyReq: (proxyReq) => {
-              if (process.env.INFLUX_TOKEN) {
-                proxyReq.setHeader('Authorization', `Token ${process.env.INFLUX_TOKEN}`);
-              }
-            }
           }
         })
       );
@@ -42,7 +33,7 @@ function influxProxy(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), react(), influxProxy()],
+  plugins: [tailwindcss(), react(), flaskProxy()],
   build: {
     outDir: 'dist',
     emptyOutDir: true,
