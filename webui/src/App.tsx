@@ -4,6 +4,7 @@ import LatestValue from './components/LatestValue';
 import HealthBadge from './components/HealthBadge';
 import RefreshBadge from './components/RefreshBadge';
 import useAutoReload from './hooks/useAutoReload';
+import useAutoScroll from './hooks/useAutoScroll';
 import LatestValueFullscreen from './components/LatestValueFullscreen';
 import { values } from './values';
 import EnergyPriceBar from './components/EnergyPriceBar';
@@ -32,7 +33,7 @@ function useFullscreenParams(values: Config) {
 const Row: React.FC<{row: ConfigRow; rowIdx: number; onOpen: (row: number, col: number) => void;}> = ({ row, rowIdx, onOpen }) => (
   <div className="flex flex-row gap-1 min-h-[13.8vh]">
     {row.map((item, colIdx) => (
-      <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}`} onClick={() => onOpen(rowIdx, colIdx)}>
+      <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}-${JSON.stringify(item.filter)}`} onClick={() => onOpen(rowIdx, colIdx)}>
         <LatestValue {...item} />
       </div>
     ))}
@@ -48,10 +49,14 @@ const Grid: React.FC<{values: Config; onOpen: (row: number, col: number) => void
 
 const AppContent: React.FC = () => {
     useAutoReload();
+    useAutoScroll({
+        scrollDuration: 15 * 60 * 1000, // 15 minutes per direction
+        minViewportHeight: 800 // Enable on screens smaller than 800px
+    });
     const { fullscreenProps, openFullscreen, closeFullscreen } = useFullscreenParams(values);
 
     return (
-        <div className="h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1 flex flex-col">
+        <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1 flex flex-col">
             {/* Top right badges */}
             <div className="flex items-center gap-2 mx-1 my-2">
                 <h1 className="text-2xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
