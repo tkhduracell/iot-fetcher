@@ -41,8 +41,11 @@ tar -xzf backup.tar.gz
 # Copy extracted backup into container
 docker cp ./backup_bucket_name iot-fetcher:/tmp/backup_bucket_name
 
-# Restore inside the container using influx CLI
-docker exec iot-fetcher influx restore /tmp/backup_bucket_name --org your-org --bucket target-bucket
+# Restore inside the container using influx CLI to new bucket
+docker exec iot-fetcher influx restore /tmp/backup_bucket_name -o your-org -b your-bucket-old
+
+# Migrate from new restored bucket into old one
+docker exec iot-fetcher influx query -o your-org -q 'from(bucket: "you-bucket-old") |> range(start: -5y, stop: now()) |> to(bucket: "your-bucket")'
 ```
 
 ## Make setup
