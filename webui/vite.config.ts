@@ -16,18 +16,9 @@ function influxProxy(): Plugin {
         createProxyMiddleware({
           target: `http://${process.env.INFLUX_HOST}`,
           changeOrigin: true,
-          pathRewrite: { 
-            '^/query': '/api/v2/query',
-          },
-          pathFilter: 
-          [
-            '/query', 
-            '/health'
-          ],
-          logger: {
-            error: console.error,
-            info: console.info
-          },
+          pathRewrite: { '^/query': '/api/v2/query' },
+          pathFilter: [ '/query', '/health' ],
+          logger: { error: console.error, info: console.info },
           on: {
             proxyReq: (proxyReq) => {
               if (process.env.INFLUX_TOKEN) {
@@ -37,7 +28,17 @@ function influxProxy(): Plugin {
           }
         })
       );
+      server.middlewares.use(
+        '/sonos/',
+        createProxyMiddleware({
+          target: `http://${process.env.SONOS_HOST}`,
+          changeOrigin: true,
+          pathRewrite: { '^/sonos': '/' },
+          logger: { error: console.error, info: console.info },
+        })
+      );
     },
+    
   };
 }
 

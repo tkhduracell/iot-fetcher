@@ -7,6 +7,7 @@ import useAutoReload from './hooks/useAutoReload';
 import LatestValueFullscreen from './components/LatestValueFullscreen';
 import { values } from './values';
 import EnergyPriceBar from './components/EnergyPriceBar';
+import SonosWidget from './components/SonosWidget';
 import { Config, ConfigRow } from './types';
 
 
@@ -31,7 +32,7 @@ function useFullscreenParams(values: Config) {
 const Row: React.FC<{row: ConfigRow; rowIdx: number; onOpen: (row: number, col: number) => void;}> = ({ row, rowIdx, onOpen }) => (
   <div className="flex flex-row gap-1 min-h-[13.8vh]">
     {row.map((item, colIdx) => (
-      <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}`} onClick={() => onOpen(rowIdx, colIdx)}>
+      <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}-${item.filter ? JSON.stringify(item.filter) : ''}`} onClick={() => onOpen(rowIdx, colIdx)}>
         <LatestValue {...item} />
       </div>
     ))}
@@ -61,7 +62,8 @@ const AppContent: React.FC = () => {
             </div>
             <div className="w-full py-0 flex flex-col gap-1.5">
                 <Grid values={values} onOpen={openFullscreen} />
-                <EnergyPriceBar />
+                {!fullscreenProps && <EnergyPriceBar />}
+                {!fullscreenProps && <SonosWidget />}
             </div>
             { fullscreenProps && <LatestValueFullscreen 
                 open={!!fullscreenProps}
