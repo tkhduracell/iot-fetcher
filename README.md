@@ -68,6 +68,28 @@ docker exec iot-fetcher influx restore /tmp/backup_bucket_name -o your-org -b yo
 docker exec iot-fetcher influx query -o your-org -q 'from(bucket: "you-bucket-old") |> range(start: -5y, stop: now()) |> to(bucket: "your-bucket")'
 ```
 
+## TP-Link Tapo Integration
+
+The Node.js service automatically discovers and monitors TP-Link Tapo smart plugs using the TP-Link cloud API.
+
+### Configuration
+Add your TP-Link credentials to your `.env` file:
+```bash
+TAPO_EMAIL=your-tp-link-email@example.com
+TAPO_PASSWORD=your-tp-link-password
+```
+
+### Data Collected
+- **Device Status**: Power on/off state, uptime
+- **Signal Quality**: WiFi signal level and RSSI
+- **Energy Usage**: Current power consumption, daily and monthly energy totals
+- **Device Information**: Device ID, MAC address, alias, model
+
+### Schedule
+- Runs every 10 minutes
+- Automatically discovers new devices
+- Stores data in InfluxDB under measurement `tapo_device`
+
 ## Make setup
 
   - `make build` Build the container an tag it
