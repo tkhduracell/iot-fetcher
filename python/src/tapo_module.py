@@ -37,7 +37,7 @@ async def _tapo():
     """Internal async function to handle tapo devices"""
     logger.info("[tapo] Fetching Tapo device data...")
     
-    client = tapo_api.ApiClient(tapo_email, tapo_password)
+    client = tapo_api.ApiClient(tapo_email, tapo_password, timeout_s=10)
     points: List[Point] = []
     device_count = 0
     
