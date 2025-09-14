@@ -3,13 +3,15 @@ import csv
 from itertools import groupby
 import json
 import uuid
-from flask import Flask, send_from_directory, request, Response, make_response
+from flask import Flask, send_from_directory, request, Response, make_response, jsonify
 import requests
 import logging
 import os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import asyncio
+from functools import wraps
 
 from dotenv import load_dotenv
 # Load environment variables from .env file
@@ -257,6 +259,131 @@ def sonos_proxy(path):
     except requests.exceptions.RequestException as e:
         logging.error("Error proxying Sonos request to %s: %s", url, e)
         return Response('Sonos API unavailable', status=502)
+
+
+def run_async(f):
+    """Decorator to run async functions in Flask routes"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(f(*args, **kwargs))
+        finally:
+            loop.close()
+    return wrapper
+
+
+async def get_roborock_client():
+    """Create and return authenticated roborock client and home data"""
+    try:
+        from roborock.web_api import RoborockApiClient
+        
+        username = os.environ.get('ROBOROCK_USERNAME')
+        password = os.environ.get('ROBOROCK_PASSWORD')
+        
+        if not username or not password:
+            raise ValueError("ROBOROCK_USERNAME and ROBOROCK_PASSWORD must be set")
+        
+        client = RoborockApiClient(username)
+        user_data = await client.pass_login(password)
+        home_data = await client.get_home_data(user_data)
+        
+        return client, home_data
+    except ImportError:
+        raise ImportError("python-roborock package is required. Run: pip install python-roborock")
+
+
+@app.route('/roborock/zones', methods=['GET'])
+@run_async
+async def get_roborock_zones():
+    """Get available cleaning zones from roborock device"""
+    try:
+        client, home_data = await get_roborock_client()
+        
+        if not home_data or not home_data.devices:
+            return make_response({"error": "No roborock devices found"}, 404)
+        
+        # Get the first device
+        device = home_data.devices[0]
+        
+        # Import required MQTT client for device communication
+        from roborock.cloud_api import RoborockMqttClient
+        device_api = RoborockMqttClient(home_data.user_data, device)
+        
+        try:
+            await device_api.async_connect()
+            
+            # Get room mapping and segments
+            room_mapping = await device_api.send_command("get_room_mapping")
+            
+            zones = []
+            if room_mapping and isinstance(room_mapping, dict):
+                # Parse room mapping data
+                segments = room_mapping.get('segments', {})
+                for segment_id, segment_data in segments.items():
+                    zones.append({
+                        'id': segment_id,
+                        'name': segment_data.get('name', f"Zone {segment_id}"),
+                        'segment_id': segment_id
+                    })
+            
+            return make_response(zones, 200)
+            
+        finally:
+            await device_api.async_disconnect()
+    
+    except Exception as e:
+        logging.exception("Error getting roborock zones: %s", e)
+        return make_response({"error": str(e)}, 500)
+
+
+@app.route('/roborock/clean', methods=['POST'])
+@run_async
+async def start_roborock_clean():
+    """Start cleaning on roborock device"""
+    try:
+        client, home_data = await get_roborock_client()
+        
+        if not home_data or not home_data.devices:
+            return make_response({"error": "No roborock devices found"}, 404)
+        
+        # Get the first device
+        device = home_data.devices[0]
+        
+        # Import required MQTT client for device communication
+        from roborock.cloud_api import RoborockMqttClient
+        device_api = RoborockMqttClient(home_data.user_data, device)
+        
+        try:
+            await device_api.async_connect()
+            
+            # Parse request data
+            data = request.get_json() if request.is_json else {}
+            zone_id = data.get('zone_id')
+            
+            if zone_id:
+                # Clean specific zone/segment
+                result = await device_api.send_command("app_segment_clean", [int(zone_id)])
+                action = f"segment cleaning for zone {zone_id}"
+            else:
+                # Start full clean
+                result = await device_api.send_command("app_start")
+                action = "full cleaning"
+            
+            return make_response({
+                "success": True,
+                "message": f"Started {action}",
+                "device_id": device.duid,
+                "result": result
+            }, 200)
+            
+        finally:
+            await device_api.async_disconnect()
+    
+    except Exception as e:
+        logging.exception("Error starting roborock clean: %s", e)
+        return make_response({"error": str(e)}, 500)
 
 
 if __name__ == '__main__':
