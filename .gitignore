@@ -7,6 +7,7 @@ pinout.png
 
 **/node_modules
 
+webui/dist/
 nodejs/dist/
 nodejs/example.js
 nodejs/persistent.json
