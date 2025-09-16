@@ -1,0 +1,29 @@
+---
+name: Deploy to Balena
+
+"on":
+  workflow_run:
+    workflows: ["Build Container"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy to Balena Cloud
+        uses: balena-io/deploy-to-balena-action@v2.0.131
+        id: build
+        with:
+          balena_token: ${{ secrets.BALENA_TOKEN }}
+          fleet: iot-hub
+
+      - name: Log release ID built
+        run: echo "Built release ID ${{ steps.build.outputs.release_id }}"
