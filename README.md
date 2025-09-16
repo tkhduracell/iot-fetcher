@@ -8,6 +8,7 @@ The `iot_fetcher` project is designed to collect and process data from various I
   - Balboa - Connects to SPA to fetch temperature and settings
   - Elpris - Fetches energy price in Sweden SE 1-4
   - Ngenic - Fetches temperature and settings from Ngenic
+  - TP-Link Tapo - Connects to TP-Link cloud to fetch smart plug status and energy usage
   - **InfluxDB Backup** - Automated backup system that exports all buckets to Google Cloud Storage every 12 hours
 
 ## InfluxDB Backup & Restore
@@ -47,6 +48,28 @@ docker exec iot-fetcher influx restore /tmp/backup_bucket_name -o your-org -b yo
 # Migrate from new restored bucket into old one
 docker exec iot-fetcher influx query -o your-org -q 'from(bucket: "you-bucket-old") |> range(start: -5y, stop: now()) |> to(bucket: "your-bucket")'
 ```
+
+## TP-Link Tapo Integration
+
+The Node.js service automatically discovers and monitors TP-Link Tapo smart plugs using the TP-Link cloud API.
+
+### Configuration
+Add your TP-Link credentials to your `.env` file:
+```bash
+TAPO_EMAIL=your-tp-link-email@example.com
+TAPO_PASSWORD=your-tp-link-password
+```
+
+### Data Collected
+- **Device Status**: Power on/off state, uptime
+- **Signal Quality**: WiFi signal level and RSSI
+- **Energy Usage**: Current power consumption, daily and monthly energy totals
+- **Device Information**: Device ID, MAC address, alias, model
+
+### Schedule
+- Runs every 10 minutes
+- Automatically discovers new devices
+- Stores data in InfluxDB under measurement `tapo_device`
 
 ## Make setup
 
