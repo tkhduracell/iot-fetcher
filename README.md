@@ -8,7 +8,27 @@ The `iot_fetcher` project is designed to collect and process data from various I
   - Balboa - Connects to SPA to fetch temperature and settings
   - Elpris - Fetches energy price in Sweden SE 1-4
   - Ngenic - Fetches temperature and settings from Ngenic
+  - Tapo - Connects to TP-Link Tapo smart devices to fetch power state, energy usage, and device metrics
   - **InfluxDB Backup** - Automated backup system that exports all buckets to Google Cloud Storage every 12 hours
+
+## Environment Variables
+
+### General Configuration
+- `INFLUX_HOST` - InfluxDB server hostname/IP
+- `INFLUX_TOKEN` - InfluxDB authentication token
+- `INFLUX_ORG` - InfluxDB organization name
+- `INFLUX_BUCKET` - InfluxDB bucket name for data storage
+
+### Module-Specific Configuration
+
+#### TAPO (TP-Link Smart Devices)
+- `TAPO_EMAIL` - Your TP-Link/Tapo account email address
+- `TAPO_PASSWORD` - Your TP-Link/Tapo account password
+
+Run TAPO module individually for testing:
+```bash
+docker run --rm --env-file .env iot-fetcher:latest -- tapo
+```
 
 ## InfluxDB Backup & Restore
 

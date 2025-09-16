@@ -11,6 +11,7 @@ from sigenergy import sigenergy
 from aqualink import aqualink
 from airquality import airquality
 from aquatemp import aquatemp
+from tapo import tapo
 from backup_influx import backup_influx
 
 logging.basicConfig(level=logging.INFO,
@@ -25,10 +26,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'backup_influx']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'backup_influx']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [balboa, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, backup_influx]:
+        for m in [balboa, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, backup_influx]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -40,6 +41,7 @@ def main():
     schedule.every(1).minutes.do(sigenergy)
     schedule.every(5).minutes.do(balboa)
     schedule.every(5).minutes.do(aquatemp)
+    schedule.every(5).minutes.do(tapo)
 
     schedule.every(6).hours.at(':05').do(elpris)
     schedule.every(1).hours.at(':05').do(airquality)
