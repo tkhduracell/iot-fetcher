@@ -11,4 +11,4 @@ SigenAPI==1.0.0
 pyModbusTCP==0.3.0
 
 iaqualink==0.5.0
-plugp100==5.3.7
+plugp100==5.1.5
