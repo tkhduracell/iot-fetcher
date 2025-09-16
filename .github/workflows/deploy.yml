@@ -25,8 +25,7 @@ jobs:
         id: build
         with:
           balena_token: ${{ secrets.BALENA_TOKEN }}
-          fleet: iot-hub
-          source: .
+          fleet: g_filip_lindqvist/iot-hub
 
       - name: Log release ID built
         run: echo "Built release ID ${{ steps.build.outputs.release_id }}"
