@@ -43,7 +43,7 @@ async def _tapo():
         async with aiohttp.ClientSession() as session:
             # Use cloud discovery to find devices
             cloud_client = CloudClient()
-            devices_result = cloud_client.get_devices(tapo_email, tapo_password, session)
+            devices_result = await cloud_client.get_devices(tapo_email, tapo_password, session)
             
             # Handle the Try[List[CloudDeviceInfo]] result
             if devices_result.is_success():
