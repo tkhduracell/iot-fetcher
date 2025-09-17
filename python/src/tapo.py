@@ -14,8 +14,13 @@ from influx import write_influx, Point
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
-tapo_email = os.environ.get('TAPO_EMAIL', '')
-tapo_password = os.environ.get('TAPO_PASSWORD', '')
+def strip_quote(s: str) -> str:
+    if s.startswith('"') and s.endswith('"'):
+        return s[1:-1]
+    return s
+
+tapo_email = strip_quote(os.environ.get('TAPO_EMAIL', ''))
+tapo_password = strip_quote(os.environ.get('TAPO_PASSWORD', ''))
 
 
 def tapo():
@@ -148,7 +153,7 @@ async def _tapo():
                                 except Exception as energy_error:
                                     logger.debug(f"[tapo] No energy usage data available for device {device_name}: {energy_error}")
                             else:
-                                logger.warning(f"[tapo] Failed to get device info for {device_name}: {device_info_result.error_message()}")
+                                logger.warning(f"[tapo] Failed to get device info for {device_name}: {device_info_result}")
                                 
                         else:
                             logger.warning(f"[tapo] No IP address found for device {device_name}, adding basic presence metric only")
@@ -195,7 +200,7 @@ async def _tapo():
                             basic_point = basic_point.tag("device_id", device_id)
                         points.append(basic_point)
             else:
-                logger.error(f"[tapo] Failed to get devices from cloud: {devices_result.error_message()}")
+                logger.error(f"[tapo] Failed to get devices from cloud: {devices_result}")
                 return
         
         if points:
