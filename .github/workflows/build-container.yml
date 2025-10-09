@@ -1,4 +1,4 @@
-name: Build Container
+name: Build and Deploy
 
 on:
   push:
@@ -59,3 +59,15 @@ jobs:
         platforms: linux/amd64,linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Deploy to Balena Cloud
+      uses: balena-io/deploy-to-balena-action@v2.0.131
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      id: deploy
+      with:
+        balena_token: ${{ secrets.BALENA_TOKEN }}
+        fleet: ${{ secrets.BALENA_FLEET }}
+
+    - name: Log release ID built
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      run: echo "Built release ID ${{ steps.deploy.outputs.release_id }}"
