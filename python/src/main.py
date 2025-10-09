@@ -43,7 +43,7 @@ def main():
     schedule.every(5).minutes.do(balboa)
     schedule.every(5).minutes.do(aquatemp)
     schedule.every(5).minutes.do(tapo)
-    schedule.every(30).seconds.do(sonos)
+    schedule.every(1).minutes.do(sonos)
 
     schedule.every(6).hours.at(':05').do(elpris)
     schedule.every(1).hours.at(':05').do(airquality)
