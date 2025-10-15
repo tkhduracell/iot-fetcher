@@ -21,10 +21,10 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
     ? `${currentTrack.artist} - ${currentTrack.title}`
     : currentTrack.title || 'No track info';
   
-  // Get all room names in the zone (coordinator + members)
-  const allRoomNames = [coordinator.roomName, ...members.map(m => m.roomName)];
-  const speakersText = allRoomNames.length > 1 
-    ? `${allRoomNames.length} speakers: ${allRoomNames.join(', ')}`
+  // Format room name with additional speakers if multiple in zone
+  const additionalSpeakers = members.map(m => m.roomName);
+  const displayRoomName = additionalSpeakers.length > 0
+    ? `${roomName} (+${additionalSpeakers.join(', ')})`
     : roomName;
 
   const handlePlayPause = () => {
@@ -61,13 +61,8 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
         )}
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm text-gray-900 dark:text-gray-100 mb-1">
-            {roomName}
+            {displayRoomName}
           </div>
-          {allRoomNames.length > 1 && (
-            <div className="text-xs text-gray-500 dark:text-gray-500 truncate mb-0.5">
-              {speakersText}
-            </div>
-          )}
           <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
             {trackInfo}
           </div>
