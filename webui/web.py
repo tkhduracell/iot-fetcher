@@ -17,6 +17,14 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Optional roborock imports
+try:
+    from roborock.web_api import RoborockApiClient
+    from roborock.cloud_api import RoborockMqttClient
+except ImportError:
+    RoborockApiClient = None
+    RoborockMqttClient = None
+
 
 class CleanLogs(logging.Filter):
     pattern: re.Pattern = re.compile(r' - - \[.+?] "')
@@ -276,22 +284,20 @@ def run_async(f):
 
 async def get_roborock_client():
     """Create and return authenticated roborock client and home data"""
-    try:
-        from roborock.web_api import RoborockApiClient
-        
-        username = os.environ.get('ROBOROCK_USERNAME')
-        password = os.environ.get('ROBOROCK_PASSWORD')
-        
-        if not username or not password:
-            raise ValueError("ROBOROCK_USERNAME and ROBOROCK_PASSWORD must be set")
-        
-        client = RoborockApiClient(username)
-        user_data = await client.pass_login(password)
-        home_data = await client.get_home_data(user_data)
-        
-        return client, home_data
-    except ImportError:
+    if RoborockApiClient is None:
         raise ImportError("python-roborock package is required. Run: pip install python-roborock")
+    
+    username = os.environ.get('ROBOROCK_USERNAME')
+    password = os.environ.get('ROBOROCK_PASSWORD')
+    
+    if not username or not password:
+        raise ValueError("ROBOROCK_USERNAME and ROBOROCK_PASSWORD must be set")
+    
+    client = RoborockApiClient(username)
+    user_data = await client.pass_login(password)
+    home_data = await client.get_home_data(user_data)
+    
+    return client, home_data
 
 
 @app.route('/roborock/zones', methods=['GET'])
@@ -302,13 +308,11 @@ async def get_roborock_zones():
         client, home_data = await get_roborock_client()
         
         if not home_data or not home_data.devices:
-            return make_response({"error": "No roborock devices found"}, 404)
+            return jsonify({"error": "No roborock devices found"}), 404
         
         # Get the first device
         device = home_data.devices[0]
         
-        # Import required MQTT client for device communication
-        from roborock.cloud_api import RoborockMqttClient
         device_api = RoborockMqttClient(home_data.user_data, device)
         
         try:
@@ -328,14 +332,14 @@ async def get_roborock_zones():
                         'segment_id': segment_id
                     })
             
-            return make_response(zones, 200)
+            return jsonify(zones), 200
             
         finally:
             await device_api.async_disconnect()
     
     except Exception as e:
         logging.exception("Error getting roborock zones: %s", e)
-        return make_response({"error": str(e)}, 500)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/roborock/clean', methods=['POST'])
@@ -346,13 +350,11 @@ async def start_roborock_clean():
         client, home_data = await get_roborock_client()
         
         if not home_data or not home_data.devices:
-            return make_response({"error": "No roborock devices found"}, 404)
+            return jsonify({"error": "No roborock devices found"}), 404
         
         # Get the first device
         device = home_data.devices[0]
         
-        # Import required MQTT client for device communication
-        from roborock.cloud_api import RoborockMqttClient
         device_api = RoborockMqttClient(home_data.user_data, device)
         
         try:
@@ -371,19 +373,19 @@ async def start_roborock_clean():
                 result = await device_api.send_command("app_start")
                 action = "full cleaning"
             
-            return make_response({
+            return jsonify({
                 "success": True,
                 "message": f"Started {action}",
                 "device_id": device.duid,
                 "result": result
-            }, 200)
+            }), 200
             
         finally:
             await device_api.async_disconnect()
     
     except Exception as e:
         logging.exception("Error starting roborock clean: %s", e)
-        return make_response({"error": str(e)}, 500)
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
