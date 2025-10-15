@@ -11,7 +11,7 @@ type SonosZoneCardProps = {
 };
 
 const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext, onMuteToggle, onVolumeChange }) => {
-  const { coordinator } = zone;
+  const { coordinator, members } = zone;
   const { roomName, state } = coordinator;
   const { currentTrack, playbackState } = state;
   
@@ -20,6 +20,12 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
   const trackInfo = currentTrack.artist && currentTrack.title 
     ? `${currentTrack.artist} - ${currentTrack.title}`
     : currentTrack.title || 'No track info';
+  
+  // Get all room names in the zone (coordinator + members)
+  const allRoomNames = [coordinator.roomName, ...members.map(m => m.roomName)];
+  const speakersText = allRoomNames.length > 1 
+    ? `${allRoomNames.length} speakers: ${allRoomNames.join(', ')}`
+    : roomName;
 
   const handlePlayPause = () => {
     const action = isPlaying ? 'pause' : 'play';
@@ -57,6 +63,11 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
           <div className="font-medium text-sm text-gray-900 dark:text-gray-100 mb-1">
             {roomName}
           </div>
+          {allRoomNames.length > 1 && (
+            <div className="text-xs text-gray-500 dark:text-gray-500 truncate mb-0.5">
+              {speakersText}
+            </div>
+          )}
           <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
             {trackInfo}
           </div>
