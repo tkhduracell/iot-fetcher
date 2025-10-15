@@ -6,7 +6,7 @@ tuya-connector-python==0.1.2
 schedule==1.2.2
 google-cloud-storage==3.4.0
 
-ngenicpy==0.4.0
+ngenicpy==0.5.2
 SigenAPI==1.0.0
 pyModbusTCP==0.3.0
 
