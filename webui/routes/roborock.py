@@ -53,7 +53,7 @@ async def get_roborock_client():
 @roborock_bp.route('/roborock/zones', methods=['GET'])
 @run_async
 async def get_roborock_zones():
-    """Get available cleaning zones from roborock device"""
+    """Get available cleaning zones from roborock device with room names"""
     try:
         client, user_data, home_data = await get_roborock_client()
 
@@ -61,73 +61,98 @@ async def get_roborock_zones():
             return make_response({"error": "No roborock devices found"}, 404)
 
         logging.info(f"Found {len(home_data.devices)} roborock devices in home {home_data.name}")
-        for d in home_data.devices:
-            logging.info(f"Found device: {d.name} ({d.duid}) online: {d.online}")
+
+        # Build room name mapping from home_data.rooms
+        # This contains the actual room names like "Kitchen", "Bedroom", etc.
+        room_name_map = {}
+        if home_data.rooms:
+            for room in home_data.rooms:
+                room_name_map[room.id] = room.name
+                logging.info(f"Room mapping: {room.id} -> {room.name}")
 
         # Get the first device
         device = home_data.devices[0]
         device_product_id = device.product_id
 
-        logging.info(f"dict: {device}")
-
-        scens = await client.get_scenes(user_data, device.duid)
-        logging.info(f"Device scenes: {scens}")
-
-        # Get product ids:
+        # Get product info
         product_info: dict[str, HomeDataProduct] = {
             product.id: product for product in home_data.products
         }
-        logging.info(f"Product info: {product_info}")
 
-        # Create the Mqtt(aka cloud required) Client
+        # Create MQTT client for device networking info
         device_data = DeviceData(device, device.product_id)
         mqtt_client = RoborockMqttClientV1(user_data, device_data)
 
-        networking = await mqtt_client.get_networking()
-        if not networking or not networking.ip:
-            return make_response({"error": "Device is not online or has no IP"}, 503)
-
-        logging.info(f"Device networking: {networking}")
-
-        rooms = await mqtt_client.get_room_mapping()
-        logging.info(f"Device rooms: {rooms}")
-
-        if not rooms:
-            return make_response({"error": "No rooms/zones found"}, 404)
-
-        ## Check https://github.com/Skitionek/github-action-home-automation/blob/8db6ee43b165eda038c34ff4e6e4be523451a38f/goto.py#L70
-        local_device_data = DeviceData(device, product_info[device_product_id].model, networking.ip)
-        local_client = RoborockLocalClientV1(local_device_data)
-
         try:
-            zones = []
+            networking = await mqtt_client.get_networking()
+            if not networking or not networking.ip:
+                return make_response({"error": "Device is not online or has no IP"}, 503)
 
-            await local_client.async_connect()
-            status = await local_client.get_status()
-            logging.info(f"Local connection status: {status}")
+            logging.info(f"Device networking: {networking}")
 
-            # Get room mapping and segments
-            room_mapping = await local_client.get_room_mapping()
+            # Create local connection to device
+            local_device_data = DeviceData(device, product_info[device_product_id].model, networking.ip)
+            local_client = RoborockLocalClientV1(local_device_data)
 
-            logging.info(f"Local room mapping: {room_mapping}")
+            try:
+                await local_client.async_connect()
 
-            if room_mapping and isinstance(room_mapping, dict):
-                # Parse room mapping data
-                segments = room_mapping.get('segments', {})
-                for segment_id, segment_data in segments.items():
-                    zones.append({
-                        'zone_id': segment_id,
-                        'zone_name': segment_data.get('name', f"Zone {segment_id}"),
-                        'zone_segment_id': segment_id,
-                        'device_id': device.duid,
-                        'device_name': device.name,
-                        'device_product_id': device.product_id,
-                    })
+                # Get all available maps
+                maps_list = await local_client.get_multi_maps_list()
 
-            return make_response(zones, 200)
+                if not maps_list or not maps_list.map_info:
+                    return make_response({"error": "No maps found"}, 404)
+
+                logging.info(f"Found {maps_list.multi_map_count} maps")
+
+                zones = []
+
+                # Iterate through each map and get its segments/rooms
+                for map_info in maps_list.map_info:
+                    map_name = map_info.name
+                    map_flag = map_info.map_flag
+
+                    logging.info(f"Loading map {map_flag}: {map_name}")
+
+                    # Load the map
+                    await local_client.load_multi_map(map_flag)
+                    await asyncio.sleep(1.0)  # Wait for map to load
+
+                    # Get room mapping (segments) for this map
+                    # Returns a list of RoomMapping objects with segment_id and iot_id
+                    room_mapping = await local_client.get_room_mapping()
+
+                    if room_mapping:
+                        logging.info(f"Map '{map_name}' has {len(room_mapping)} segments")
+
+                        if isinstance(room_mapping, list):
+                            for room in room_mapping:
+                                # Match segment's iot_id with room name from home_data.rooms
+                                room_name = room_name_map.get(room.iot_id, f"Room {room.segment_id}")
+
+                                zones.append({
+                                    'zone_id': str(room.segment_id),
+                                    'zone_name': room_name,
+                                    'zone_segment_id': room.segment_id,
+                                    'iot_id': room.iot_id,
+                                    'map_name': map_name,
+                                    'map_flag': map_flag,
+                                    'device_id': device.duid,
+                                    'device_name': device.name,
+                                    'device_product_id': device.product_id,
+                                })
+
+                                logging.info(f"Zone: {room_name} (segment_id={room.segment_id}, map={map_name})")
+
+                if not zones:
+                    return make_response({"error": "No zones found on any map"}, 404)
+
+                return make_response(zones, 200)
+
+            finally:
+                await local_client.async_disconnect()
 
         finally:
-            await local_client.async_disconnect()
             await mqtt_client.async_disconnect()
 
     except Exception as e:
@@ -135,45 +160,100 @@ async def get_roborock_zones():
         return make_response({"error": str(e)}, 500)
 
 
-@roborock_bp.route('/roborock/<device_id>/<zone_id>/clean', methods=['POST'])
+@roborock_bp.route('/roborock/<device_id>/<map_id>/<zone_id>/clean', methods=['POST'])
 @run_async
-async def start_roborock_clean(device_id: str, zone_id: str):
-    """Start cleaning on roborock device"""
+async def start_roborock_clean(device_id: str, map_id: str, zone_id: str):
+    """Start cleaning on roborock device for a specific zone/segment
+
+    Args:
+        device_id: Device DUID
+        map_id: Map flag (0=Floor 1, 1=Uterum, 2=Floor 2, etc.)
+        zone_id: Segment ID to clean, or "all" for full cleaning
+    """
     try:
         client, user_data, home_data = await get_roborock_client()
 
         if not home_data or not home_data.devices:
             return make_response({"error": "No roborock devices found"}, 404)
 
-        device = next(d for d in home_data.devices if d.duid == device_id)
+        # Find the device
+        device = next((d for d in home_data.devices if d.duid == device_id), None)
+        if not device:
+            return make_response({"error": f"Device {device_id} not found"}, 404)
 
+        # Get product info for local connection
+        product_info: dict[str, HomeDataProduct] = {
+            product.id: product for product in home_data.products
+        }
+        device_product_id = device.product_id
+
+        # Create MQTT client
         device_data = DeviceData(device, device.product_id)
         mqtt_client = RoborockMqttClientV1(user_data, device_data)
 
         try:
-            await mqtt_client.async_connect()
-            
-            action = None
-            result = None
-            if zone_id:
-                # Clean specific zone/segment
-                result = await mqtt_client.send_command("app_segment_clean", [int(zone_id)])
-                action = f"segment cleaning for zone {zone_id}"
-            elif zone_id == "all":
-                # Start full clean
-                result = await mqtt_client.send_command("app_start")
-                action = "full cleaning"
+            # Get device networking for local connection
+            networking = await mqtt_client.get_networking()
+            if not networking or not networking.ip:
+                return make_response({"error": "Device is not online or has no IP"}, 503)
 
-            return make_response({
-                "success": True,
-                "message": f"Started {action}",
-                "device_id": device.duid,
-                "result": result
-            }, 200)
+            # Create local client to load the correct map
+            local_device_data = DeviceData(device, product_info[device_product_id].model, networking.ip)
+            local_client = RoborockLocalClientV1(local_device_data)
+
+            try:
+                await local_client.async_connect()
+
+                # Load the specified map
+                map_flag = int(map_id)
+                logging.info(f"Loading map {map_flag} before cleaning")
+                await local_client.load_multi_map(map_flag)
+                await asyncio.sleep(1.5)  # Wait for map to load
+
+                # Get map name for logging
+                maps_list = await local_client.get_multi_maps_list()
+                
+                if not maps_list or not maps_list.map_info:
+                    return make_response({"error": "No maps found"}, 404)
+
+                map_names = {m.map_flag: m.name for m in maps_list.map_info}
+                map_name = map_names.get(map_flag, f"Map {map_flag}")
+                logging.info(f"Map loaded: {map_name}")
+
+                action = None
+                result = None
+
+                if zone_id == "all":
+                    # Start full clean
+                    result = await mqtt_client.send_command("app_start")
+                    action = f"full cleaning on {map_name}"
+                else:
+                    # Clean specific zone/segment (repeat=1)
+                    segment_id = int(zone_id)
+                    result = await mqtt_client.send_command("app_segment_clean", [segment_id])
+                    action = f"segment {segment_id} cleaning on {map_name}"
+
+                logging.info(f"Started {action}, result: {result}")
+
+                return make_response({
+                    "success": True,
+                    "message": f"Started {action}",
+                    "device_id": device.duid,
+                    "map_id": map_id,
+                    "map_name": map_name,
+                    "zone_id": zone_id,
+                    "result": result
+                }, 200)
+
+            finally:
+                await local_client.async_disconnect()
 
         finally:
             await mqtt_client.async_disconnect()
 
+    except ValueError as e:
+        logging.exception("Invalid parameter: %s", e)
+        return make_response({"error": f"Invalid parameter - map_id and zone_id must be numeric or 'all'"}, 400)
     except Exception as e:
         logging.exception("Error starting roborock clean: %s", e)
         return make_response({"error": str(e)}, 500)
