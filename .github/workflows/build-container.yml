@@ -61,7 +61,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Deploy to Balena Cloud
-      uses: balena-io/deploy-to-balena-action@v2.0.131
+      uses: balena-io/deploy-to-balena-action@v2.0.136
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       id: deploy
       with:
