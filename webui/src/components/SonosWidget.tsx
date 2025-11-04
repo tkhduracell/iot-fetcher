@@ -44,7 +44,7 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
   };
 
   return (
-    <div className="flex-1 min-w-[200px] bg-white dark:bg-gray-800 rounded-lg p-3 shadow-sm border border-gray-200 dark:border-gray-700">
+    <div className="flex-1 min-w-[200px] max-w-[calc(50%-0.25rem)] bg-white dark:bg-gray-800 rounded-lg p-3 shadow-sm border border-gray-200 dark:border-gray-700">
       <div className="flex items-center gap-3">
         {currentTrack.absoluteAlbumArtUri && (
           <img 
@@ -224,7 +224,7 @@ const SonosWidget: React.FC = () => {
 
   return (
     <div className="w-full flex justify-center">
-      <div className="max-w-[50vw] w-full">
+      <div className="w-full">
         <div className="flex gap-2 flex-wrap justify-center">
           {playingZones.map(zone => (
             <SonosZoneCard 
