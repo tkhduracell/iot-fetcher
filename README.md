@@ -75,4 +75,95 @@ docker exec iot-fetcher influx query -o your-org -q 'from(bucket: "you-bucket-ol
   - `make run MODULE=<module-name>` Start a specifc module only
   - `make push` Build and push the container
   - `make dev` Rebuild container with pydebugger installed and start application with debugger on port `5678`
+  - `make run-webui` Run the web UI locally using uvx
+  - `make run-webui-dev` Run the web UI in development mode with uv
+  - `make sync-deps` Sync dependencies from pyproject.toml to requirements.txt
+  - `make install-uv` Install uv package manager if not already installed
+
+## Dependency Management with uv
+
+This project uses [uv](https://github.com/astral-sh/uv) for fast and reliable Python package management. Dependencies are defined in `pyproject.toml` files.
+
+### Adding a New Dependency
+
+#### For the Main Backend (python/)
+
+1. **Add the dependency to `python/pyproject.toml`:**
+   ```toml
+   [project]
+   dependencies = [
+       "requests==2.32.5",
+       "your-new-package==1.2.3",  # Add your dependency here
+       # ... other dependencies
+   ]
+   ```
+
+2. **Rebuild the Docker image:**
+   ```bash
+   make build
+   ```
+
+3. **For local development with uv:**
+   ```bash
+   cd python
+   uv pip install -r pyproject.toml
+   ```
+
+#### For the Web UI (webui/)
+
+1. **Add the dependency to `webui/pyproject.toml`:**
+   ```toml
+   [project]
+   dependencies = [
+       "flask==3.1.2",
+       "your-new-package==1.2.3",  # Add your dependency here
+       # ... other dependencies
+   ]
+   ```
+
+2. **Rebuild the Docker image:**
+   ```bash
+   make build
+   ```
+
+3. **For local development:**
+   ```bash
+   cd webui
+   uv run python web.py
+   ```
+
+### Installing uv Locally
+
+If you need to install uv on your development machine:
+
+```bash
+# Using the Makefile
+make install-uv
+
+# Or install directly
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Optional Dependencies (Debug Mode)
+
+To add optional dependencies (like debugpy for debugging):
+
+```toml
+[project.optional-dependencies]
+debug = [
+    "debugpy",
+]
+```
+
+Then install with:
+```bash
+uv pip install -r pyproject.toml --extra debug
+```
+
+### Benefits of uv
+
+- **10-100x faster** than pip for dependency resolution and installation
+- **Better dependency resolution** with proper backtracking
+- **Drop-in replacement** for pip - compatible with existing workflows
+- **Modern Python tooling** with improved caching and performance
 
