@@ -4,7 +4,6 @@
 esp32-*/
 venv/
 .venv/
-uv.lock
 pinout.png
 
 **/node_modules

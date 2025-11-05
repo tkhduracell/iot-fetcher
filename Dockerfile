@@ -32,12 +32,12 @@ RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor 
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Python deps for main backend
-COPY python/pyproject.toml python/
-RUN cd python && uv pip install --system --no-cache -r pyproject.toml
+COPY python/pyproject.toml python/uv.lock python/
+RUN cd python && uv sync --frozen --no-cache
 
 ARG PYDEBUGGER=0
 RUN if [ "$PYDEBUGGER" = "1" ]; then \
-        uv pip install --system debugpy; \
+        cd python && uv pip install --system debugpy; \
     fi
 
 # Copy Python stack
@@ -49,8 +49,8 @@ RUN mkdir -p /app/nodejs/dist/proto
 
 # Copy built frontend from previous stage
 COPY --from=frontend-build /app/dist ./webui/dist
-COPY webui/web.py webui/pyproject.toml ./webui/
-RUN cd webui && uv pip install --system --no-cache -r pyproject.toml
+COPY webui/web.py webui/pyproject.toml webui/uv.lock ./webui/
+RUN cd webui && uv sync --frozen --no-cache
 
 # Copy start script
 COPY start.sh .

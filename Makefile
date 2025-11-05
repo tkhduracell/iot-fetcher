@@ -41,15 +41,15 @@ run:
 dev:
 	docker build . -t iot-fetcher:latest-dev --build-arg PYDEBUGGER=1 && docker run -e PYDEBUGGER=1 -p 5678:5678 --rm -p 8080:8080 --env-file .env iot-fetcher:latest-dev
 
-# Sync Python dependencies using uv
-sync-deps:
-	@echo "\nSyncing main backend dependencies...\n"
-	cd python && uv pip compile pyproject.toml -o requirements.txt
-	@echo "\nSyncing webui dependencies...\n"
-	cd webui && uv pip compile pyproject.toml -o requirements.txt
+# Update lock files after adding/updating dependencies
+lock:
+	@echo "\nUpdating main backend lock file...\n"
+	cd python && uv lock
+	@echo "\nUpdating webui lock file...\n"
+	cd webui && uv lock
 
 # Install uv (if not already installed)
 install-uv:
 	@command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
 
-.PHONY: build push deploy run dev build-proxy push-proxy login run-proxy run-webui run-webui-dev sync-deps install-uv
+.PHONY: build push deploy run dev build-proxy push-proxy login run-proxy run-webui run-webui-dev lock install-uv
