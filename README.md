@@ -88,7 +88,11 @@ This project uses [uv](https://github.com/astral-sh/uv) for fast and reliable Py
 
 This section documents the **complete command-line workflow** for adding a new dependency (e.g., `package-xyz`).
 
-#### For the Main Backend (python/)
+#### Method 1: Using `uv add` (Recommended ⭐)
+
+This is the **fastest and easiest** method. The `uv add` command handles everything automatically.
+
+##### For the Main Backend (python/)
 
 ```bash
 # 1. Navigate to the python directory
@@ -96,40 +100,186 @@ cd python
 
 # 2. Add the dependency using uv
 uv add package-xyz
-
-# This will:
-# - Add package-xyz to pyproject.toml dependencies
-# - Resolve all dependencies and update uv.lock
-# - Install the package in your local environment
-
-# 3. To add a specific version:
-uv add "package-xyz==1.2.3"
-
-# 4. To add a version constraint:
-uv add "package-xyz>=1.2.0,<2.0.0"
-
-# 5. Verify the changes
-git diff pyproject.toml uv.lock
-
-# Now you're ready to commit!
 ```
 
-#### For the Web UI (webui/)
+**What happens when you run `uv add package-xyz`:**
+1. ✅ Searches PyPI for the latest compatible version of `package-xyz`
+2. ✅ Adds `package-xyz` to the `dependencies` list in `pyproject.toml`
+3. ✅ Resolves all dependencies (including transitive dependencies)
+4. ✅ Updates `uv.lock` with exact versions of all dependencies
+5. ✅ Installs the package in your local environment (ready to use immediately)
+
+```bash
+# 3. Verify what changed
+git diff pyproject.toml uv.lock
+
+# You should see:
+# - pyproject.toml: your new dependency added to the list
+# - uv.lock: updated with exact versions of package-xyz and its dependencies
+
+# 4. Test your code with the new dependency
+uv run python src/main.py
+
+# 5. Commit when ready!
+git add pyproject.toml uv.lock
+git commit -m "feat: add package-xyz dependency"
+```
+
+##### Version Specifiers
+
+```bash
+# Add latest version (default)
+uv add package-xyz
+
+# Add specific version
+uv add "package-xyz==1.2.3"
+
+# Add with minimum version
+uv add "package-xyz>=1.2.0"
+
+# Add with version range (recommended for libraries)
+uv add "package-xyz>=1.2.0,<2.0.0"
+
+# Add with compatible version (~= allows patch updates)
+uv add "package-xyz~=1.2.0"  # Allows 1.2.x, not 1.3.0
+```
+
+##### For the Web UI (webui/)
 
 ```bash
 # 1. Navigate to the webui directory
 cd webui
 
-# 2. Add the dependency using uv
+# 2. Add the dependency
 uv add package-xyz
 
-# 3. Verify the changes
-git diff pyproject.toml uv.lock
+# Same automatic behavior:
+# - Updates pyproject.toml
+# - Updates uv.lock
+# - Installs locally
 
-# Now you're ready to commit!
+# 3. Test the webui
+uv run python web.py
+
+# 4. Verify and commit
+git diff pyproject.toml uv.lock
+git add pyproject.toml uv.lock
+git commit -m "feat: add package-xyz to webui"
 ```
 
-#### Alternative: Manual Edit Method
+##### Real-World Example: Adding redis client
+
+Let's say you want to add Redis support to the backend:
+
+```bash
+# Navigate to backend
+cd python
+
+# Add redis client
+uv add redis
+
+# Output you'll see:
+# Resolved 5 packages in 234ms
+# Downloaded 1 package in 89ms
+# Installed 1 package in 12ms
+#  + redis==5.0.1
+
+# Verify the change
+git diff pyproject.toml
+
+# You'll see something like:
+# dependencies = [
+#     "requests==2.32.5",
+#     "pybalboa==1.1.3",
+# +   "redis==5.0.1",
+#     ...
+# ]
+
+# The lock file will also update (many lines changed)
+git diff uv.lock --stat
+# uv.lock | 47 +++++++++++++++++++++++++++++++++++++++
+
+# Test it immediately
+uv run python -c "import redis; print('Redis imported successfully!')"
+
+# Commit
+git add pyproject.toml uv.lock
+git commit -m "feat: add Redis client for caching support"
+git push
+```
+
+##### Common `uv add` Options
+
+```bash
+# Add as a development dependency (not needed in production)
+uv add --dev pytest
+
+# Add as an optional dependency group
+uv add --optional debug debugpy
+
+# Add from a git repository
+uv add git+https://github.com/user/repo.git
+
+# Add from a local path (for development)
+uv add --editable ./local-package
+
+# Add multiple packages at once
+uv add redis celery
+
+# Upgrade an existing dependency to latest
+uv add --upgrade package-xyz
+```
+
+##### Complete Workflow Summary (Method 1)
+
+Here's the **complete end-to-end workflow** from adding a dependency to committing:
+
+```bash
+# Step 1: Navigate to the project directory
+cd python  # or cd webui
+
+# Step 2: Add the dependency (one command does everything!)
+uv add package-xyz
+
+# uv automatically:
+# - Updates pyproject.toml
+# - Updates uv.lock
+# - Installs the package locally
+
+# Step 3: Review what changed
+git status
+# You'll see:
+#   modified:   pyproject.toml
+#   modified:   uv.lock
+
+git diff pyproject.toml
+# Shows your new dependency added to the list
+
+git diff uv.lock --stat
+# Shows how many dependencies were affected in the lockfile
+
+# Step 4: Test your changes locally
+uv run python src/main.py  # or web.py for webui
+
+# Or test in an interactive shell
+uv run python
+>>> import package_xyz
+>>> # Test your new package
+>>> exit()
+
+# Step 5: Everything works? Commit!
+git add pyproject.toml uv.lock
+git commit -m "feat: add package-xyz dependency
+
+Added package-xyz for [reason/use case]"
+git push
+
+# That's it! The Docker build will use your updated uv.lock
+```
+
+**Timeline:** The entire process takes ~30 seconds from `uv add` to `git push` ⚡
+
+#### Method 2: Manual Edit (Alternative)
 
 If you prefer to edit `pyproject.toml` manually:
 
