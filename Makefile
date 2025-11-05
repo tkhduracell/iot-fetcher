@@ -22,7 +22,12 @@ run-proxy: build-proxy
 
 run-webui:
 	@echo "\nStarting webui web on port 8080...\n"
-	(cd  webui && source venv/bin/activate && python web.py)
+	(cd webui && uvx --from . web.py)
+
+# Alternative: use uv to run with dependencies installed
+run-webui-dev:
+	@echo "\nStarting webui in dev mode with uv...\n"
+	(cd webui && uv run python web.py)
 
 login:
 	balena login -H --token "$$(sed -n 's/^BALENA_TOKEN=//p' .env)"
@@ -36,4 +41,15 @@ run:
 dev:
 	docker build . -t iot-fetcher:latest-dev --build-arg PYDEBUGGER=1 && docker run -e PYDEBUGGER=1 -p 5678:5678 --rm -p 8080:8080 --env-file .env iot-fetcher:latest-dev
 
-.PHONY: build push deploy run dev build-proxy push-proxy login run-proxy run-webui
+# Sync Python dependencies using uv
+sync-deps:
+	@echo "\nSyncing main backend dependencies...\n"
+	cd python && uv pip compile pyproject.toml -o requirements.txt
+	@echo "\nSyncing webui dependencies...\n"
+	cd webui && uv pip compile pyproject.toml -o requirements.txt
+
+# Install uv (if not already installed)
+install-uv:
+	@command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
+
+.PHONY: build push deploy run dev build-proxy push-proxy login run-proxy run-webui run-webui-dev sync-deps install-uv

@@ -22,19 +22,22 @@ WORKDIR /app
 COPY --from=nodejs-build /usr/local/bin/node /usr/local/bin/node
 RUN node -v
 
+# Install uv for fast Python package management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Install InfluxDB CLI
 RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor > /etc/apt/trusted.gpg.d/influxdata.gpg && \
     echo 'deb https://repos.influxdata.com/debian stable main' > /etc/apt/sources.list.d/influxdata.list && \
     apt-get update && apt-get install -y influxdb2-client && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Python deps
-COPY python/requirements.txt python/
-RUN pip install --no-cache-dir -r python/requirements.txt
+# Python deps for main backend
+COPY python/pyproject.toml python/
+RUN cd python && uv pip install --system --no-cache -r pyproject.toml
 
 ARG PYDEBUGGER=0
 RUN if [ "$PYDEBUGGER" = "1" ]; then \
-        pip install debugpy; \
+        uv pip install --system debugpy; \
     fi
 
 # Copy Python stack
@@ -46,8 +49,8 @@ RUN mkdir -p /app/nodejs/dist/proto
 
 # Copy built frontend from previous stage
 COPY --from=frontend-build /app/dist ./webui/dist
-COPY webui/web.py webui/requirements.txt ./webui/
-RUN pip install --no-cache-dir -r webui/requirements.txt
+COPY webui/web.py webui/pyproject.toml ./webui/
+RUN cd webui && uv pip install --system --no-cache -r pyproject.toml
 
 # Copy start script
 COPY start.sh .
