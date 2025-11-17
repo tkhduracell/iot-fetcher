@@ -1,0 +1,14 @@
+[project]
+name = "iot-fetcher-webui"
+version = "0.1.0"
+description = "Flask-based web UI for IoT fetcher"
+requires-python = ">=3.13"
+dependencies = [
+    "flask==3.1.2",
+    "requests==2.32.5",
+    "python-dotenv==1.2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
