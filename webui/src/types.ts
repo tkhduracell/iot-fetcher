@@ -77,3 +77,16 @@ export type SonosTrack = {
   stationName?: string;
   absoluteAlbumArtUri?: string;
 };
+
+// Roborock types
+export type RoborockZone = {
+  zone_id: string;
+  zone_name: string;
+  segment_id: number;
+  iot_id: string;
+  map_name: string;
+  map_flag: number;
+  device_id: string;
+  device_name: string;
+  device_product_id: string;
+};

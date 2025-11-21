@@ -1,60 +1,136 @@
-# My React App
+# IoT Fetcher WebUI
 
-This is a Vite-based React application that serves as a template for building modern web applications using React and TypeScript.
+This is a Flask-based web application that provides a web interface and API endpoints for the IoT Fetcher system. It includes React frontend components and various API endpoints for device management.
 
 ## Project Structure
 
 ```
-my-react-app
+webui/
 ├── public
 │   └── index.html        # Main HTML structure of the application
-├── src
+├── src                   # React frontend source
 │   ├── App.tsx          # Main React component
 │   ├── main.tsx         # Entry point for the React application
-│   └── components
-│       └── ExampleComponent.tsx  # Example functional component
-├── package.json          # npm configuration file
-├── tsconfig.json         # TypeScript configuration file
-├── vite.config.ts        # Vite configuration file
-└── README.md             # Project documentation
+│   └── components       # React components
+├── web.py               # Flask backend application
+├── requirements.txt     # Python dependencies
+├── package.json         # npm configuration file
+├── tsconfig.json        # TypeScript configuration file
+└── vite.config.ts       # Vite configuration file
+```
+
+## API Endpoints
+
+### Health
+- `GET /health` - Check application health
+
+### InfluxDB Proxy
+- `POST /influx/api/v2/query` - Proxy to InfluxDB query API
+- `GET /influx/api/v2/health` - Proxy to InfluxDB health check
+
+### Metrics
+- `GET /metrics/garmin` - Get Garmin device metrics
+
+### Sonos
+- `GET /sonos/*` - Proxy to Sonos API
+
+### Roborock API
+- `GET /roborock/zones` - List available cleaning zones/rooms
+- `POST /roborock/clean` - Start cleaning (full clean or zone-specific)
+  - Body: `{}` for full clean
+  - Body: `{"zone_id": "1"}` for zone-specific clean
+
+### File Upload
+- `POST /upload` - Upload files
+- `GET /upload/<uuid>` - Retrieve uploaded files
+
+## Environment Variables
+
+The following environment variables need to be configured:
+
+```bash
+# Roborock Integration
+ROBOROCK_USERNAME=your_roborock_email
+ROBOROCK_PASSWORD=your_roborock_password
+
+# Other integrations
+INFLUX_HOST=influxdb_host
+INFLUX_TOKEN=influxdb_token
+SONOS_HOST=sonos_host
+WEB_UI_PORT=8080
 ```
 
 ## Getting Started
 
-To get started with this project, follow these steps:
-
-1. **Clone the repository:**
+1. **Install Python dependencies:**
    ```bash
-   git clone <repository-url>
-   cd my-react-app
+   pip install -r requirements.txt
    ```
 
-2. **Install dependencies:**
+2. **Install npm dependencies:**
    ```bash
    npm install
    ```
 
-3. **Run the development server:**
+3. **Set up environment variables:**
    ```bash
-   npm run dev
+   cp ../.env.template ../.env
+   # Edit .env with your configuration
    ```
 
-4. **Open your browser:**
-   Navigate to `http://localhost:3000` (or the port specified in your Vite configuration) to see your application in action.
+4. **Build frontend:**
+   ```bash
+   npm run build
+   ```
 
-## Building for Production
+5. **Run the Flask server:**
+   ```bash
+   python web.py
+   ```
 
-To build the application for production, run:
+6. **Open your browser:**
+   Navigate to `http://localhost:8080` to access the web interface.
 
+## Development
+
+For frontend development:
 ```bash
-npm run build
+npm run dev
 ```
 
-This will generate the production-ready files in the `dist` directory.
+For backend development with auto-reload:
+```bash
+export FLASK_ENV=development
+python web.py
+```
 
-## Usage
+## Roborock Integration
 
-You can start modifying the `src/App.tsx` file to customize your application. The `src/components/ExampleComponent.tsx` file serves as an example of how to create and use components within your application.
+The Roborock integration allows you to:
+- List available cleaning zones/rooms
+- Start full vacuum cleaning
+- Start zone-specific cleaning
+
+**Requirements:**
+- Valid Roborock account credentials
+- Device must be connected to Roborock cloud service
+
+**API Usage Examples:**
+
+```bash
+# Get available zones
+curl http://localhost:8080/roborock/zones
+
+# Start full clean
+curl -X POST http://localhost:8080/roborock/clean \
+     -H "Content-Type: application/json" \
+     -d '{}'
+
+# Clean specific zone
+curl -X POST http://localhost:8080/roborock/clean \
+     -H "Content-Type: application/json" \
+     -d '{"zone_id": "5"}'
+```
 
 ## License
 

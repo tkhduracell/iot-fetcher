@@ -1,58 +1,34 @@
-from io import StringIO
-import csv
-from itertools import groupby
-import json
-import uuid
-from flask import Flask, send_from_directory, request, Response, make_response
-import requests
+from flask import Flask, send_from_directory, make_response
 import logging
 import os
-import re
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+# Setup logging
+from logging_config import setup_logging
+setup_logging()
 
-class CleanLogs(logging.Filter):
-    pattern: re.Pattern = re.compile(r' - - \[.+?] "')
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if "/influx/api/v2/query" in record.msg:
-            return False
-        record.name = (
-            record.name.replace("werkzeug", "http")
-                       .replace("root", os.path.basename(__file__))
-                       .replace(".py", "")
-        )
-        record.msg = self.pattern.sub(' - "', record.msg)
-        return True
-
-
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(levelname)s [%(name)s] %(message)s'
-)
-
-# Requests logging
-wlog = logging.getLogger('werkzeug')
-wlog.setLevel(logging.INFO)
-wlog.addFilter(CleanLogs())
-
-rlog = logging.getLogger('root')
-rlog.setLevel(logging.INFO)
-rlog.addFilter(CleanLogs())
+# Import route blueprints
+from routes.sonos import sonos_bp
+from routes.upload import upload_bp
+from routes.roborock import roborock_bp
+from routes.metrics import metrics_bp
+from routes.influx import influx_bp
 
 dist_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist')
 if not os.path.exists(dist_folder):
     dist_folder = os.path.dirname(dist_folder)
 
-upload_folder = '/tmp/uploads'
-os.makedirs(upload_folder, exist_ok=True)
-
 app = Flask('webui')
+
+# Register blueprints
+app.register_blueprint(sonos_bp)
+app.register_blueprint(upload_bp)
+app.register_blueprint(roborock_bp)
+app.register_blueprint(metrics_bp)
+app.register_blueprint(influx_bp)
 
 
 @app.route('/', methods=['GET', 'HEAD'])
@@ -67,196 +43,6 @@ def health():
 def assets(filename):
     assets_folder = os.path.join(dist_folder, 'assets')
     return send_from_directory(assets_folder, filename)
-
-
-@app.route('/upload', methods=['POST'])
-def upload():
-    if 'file' not in request.files:
-        return 'No file part', 400
-    file = request.files['file']
-
-    hhmm = datetime.now().strftime("%H%M")
-    uuid_name = str(uuid.uuid4()) + "-" + hhmm
-
-    filepath = os.path.join(upload_folder, uuid_name)
-    file.save(filepath)
-
-    created_at = datetime.now(tz=ZoneInfo('Europe/Stockholm'))
-    size_mb = round(os.path.getsize(filepath) / (1024 * 1024), 2)
-    logging.info(f'File saved to {filepath} at {created_at} of {size_mb} MB')
-    return make_response(
-        {"name": uuid_name, "created_at": created_at.isoformat(),
-         "size_mb": size_mb}, 200
-    )
-
-
-@app.route('/upload/<uuid>', methods=['GET', 'HEAD'])
-def uploads(uuid: str):
-    return send_from_directory(upload_folder, uuid)
-
-
-@app.route('/metrics/<device>', methods=['GET', 'HEAD'])
-def metrics_garmin(device: str):
-    if device not in ['garmin']:
-        return make_response('Device not supported', 400)
-
-    _bucket = "irisgatan"
-    _defs = [
-        {"title": "🔋 Batteri", "unit": "%", "decimals": 0, "key": "battery_soc",
-            "flux": 'filter(fn: (r) => r._measurement == "sigenergy_battery" and r._field == "soc_percent")'},
-        {"title": "☀️ Solceller", "unit": "kW", "decimals": 1, "key": "solar_power",
-            "flux": 'filter(fn: (r) => r._measurement == "sigenergy_pv_power" and r._field == "power_kw" and r.string == "total")'},
-        {"title": "⚡️ Inköp", "unit": "kW", "decimals": 1, "key": "grid_power",
-            "flux": 'filter(fn: (r) => r._measurement == "sigenergy_grid_power" and r._field == "net_power_kw")'}
-    ]
-
-    influx_host = os.environ.get('INFLUX_HOST')
-
-    if not influx_host:
-        return make_response('Missing INFLUX_HOST', 500)
-
-    headers = {
-        'Authorization': request.headers.get('Authorization'),
-        'Content-Type': 'application/vnd.flux',
-        'Accept': 'application/json'
-    }
-
-    # Combine the query into one.
-    query = f'data = from(bucket: "{_bucket}") |> range(start: -5m)\n'
-
-    for d in _defs:
-        query += f'  data_{d["key"]} = data |> {d["flux"]} |> aggregateWindow(every: 1m, fn: mean, createEmpty: false) |> last() |> yield(name: "{d["key"]}")\n'
-
-    try:
-        resp = requests.post(
-            f"http://{influx_host}/api/v2/query",
-            params={'org': 'home'},
-            headers=headers,
-            data=query,
-            timeout=10,
-        )
-
-        if not resp.ok:
-            logging.warning(
-                "Influx query failed: %s", resp.text
-            )
-
-        text = resp.text
-
-        # Parse CSV response: skip comment lines starting with '#', first non-comment row is header
-        lines = [l for l in text.splitlines() if l and not l.startswith('#')]
-        if len(lines) < 2:
-            logging.warning(
-                "No data rows in query response: %s", text)
-            return make_response(results, 500)
-
-        # Group the lines by whether they are headers or data rows
-        grouped = groupby(lines, key=lambda item: '_value' in item)
-        grouped = [[next(group), list(next(grouped)[1])]
-                   for is_header, group in grouped if is_header]
-
-        # Parse results series
-        results_value = {}
-        for header, data in grouped:
-            header: str
-            data: list[str]
-            value_idx = header.split(',').index('_value')
-            result_name_idx = header.split(',').index('result')
-
-            if value_idx > -1:
-                
-                for r in data:
-                    row = r.split(",")
-                    result_name = row[result_name_idx]
-                    value = float(row[value_idx])
-
-                    if result_name not in results_value:
-                        results_value[result_name] = []
-
-                    results_value[result_name].append(value)
-
-        # Reconstruct results with data
-        results = []
-        for d in _defs:
-            if d["key"] in results_value:
-                meta = {**d}
-                del meta["flux"]
-                results.append({ **meta, 'data': sum(results_value[d["key"]]) })
-            else:
-                logging.warning(
-                    "_value column not found in response for header: %s", header)
-
-        return make_response(results, 200)
-
-    except Exception as e:
-        logging.exception(
-            "Error querying influx for %s:", e)
-        return make_response({"error": "Error when querying InfluxDB"}, 500)
-
-@app.route('/influx/api/v2/<route>', methods=['POST', 'GET'])
-def influx_proxy(route):
-    if route not in ['query', 'health']:
-        return Response('Not authorized', status=403)
-
-    influx_host = os.environ.get('INFLUX_HOST')
-    influx_token = os.environ.get('INFLUX_TOKEN')
-    if not influx_host or not influx_token:
-        return Response('Missing INFLUX_HOST or INFLUX_TOKEN', status=500)
-    if route == 'health':
-        url = f"http://{influx_host}/{route}"
-    else:
-        url = f"http://{influx_host}/api/v2/{route}"
-    headers = dict(request.headers)
-    headers['Authorization'] = f"Token {influx_token}"
-    resp = requests.request(
-        method=request.method,
-        url=url,
-        headers=headers,
-        data=request.get_data(),
-        params=request.args,
-        cookies=request.cookies,
-        allow_redirects=False,
-    )
-    excluded_headers = ['content-encoding',
-                        'content-length', 'transfer-encoding', 'connection']
-    response_headers = [(name, value) for (
-        name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
-    return Response(resp.content, resp.status_code, response_headers)
-
-
-@app.route('/sonos/<path:path>', methods=['GET'])
-def sonos_proxy(path):
-    sonos_host = os.environ.get('SONOS_HOST')
-    
-    if not sonos_host:
-        return Response('Missing SONOS_HOST', status=500)
-    
-    url = f"http://{sonos_host}/{path}"
-    
-    # Forward the request to the Sonos API server
-    try:
-        resp = requests.request(
-            method=request.method,
-            url=url,
-            headers=dict(request.headers),
-            data=request.get_data(),
-            params=request.args,
-            cookies=request.cookies,
-            allow_redirects=False,
-            timeout=5,
-        )
-        
-        # Filter out hop-by-hop headers
-        excluded_headers = ['content-encoding', 'content-length', 
-                           'transfer-encoding', 'connection']
-        response_headers = [(name, value) for (name, value) in resp.raw.headers.items() 
-                           if name.lower() not in excluded_headers]
-        
-        return Response(resp.content, resp.status_code, response_headers)
-        
-    except requests.exceptions.RequestException as e:
-        logging.error("Error proxying Sonos request to %s: %s", url, e)
-        return Response('Sonos API unavailable', status=502)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@ import { HashRouter, Routes, Route, useParams, useNavigate } from 'react-router'
 import LatestValue from './components/LatestValue';
 import HealthBadge from './components/HealthBadge';
 import RefreshBadge from './components/RefreshBadge';
+import RoborockCleanButton from './components/RoborockCleanButton';
 import useAutoReload from './hooks/useAutoReload';
 import LatestValueFullscreen from './components/LatestValueFullscreen';
 import { values } from './values';
@@ -56,6 +57,7 @@ const AppContent: React.FC = () => {
             <div className="flex items-center gap-2 mx-1 my-2">
                 <h1 className="text-2xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
                 <div className='flex flex-grow-1 gap-1 justify-end'>
+                  <RoborockCleanButton />
                   <RefreshBadge />
                   <HealthBadge />
                 </div>
