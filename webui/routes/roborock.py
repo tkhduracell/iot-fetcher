@@ -68,7 +68,7 @@ async def get_roborock_zones():
         if home_data.rooms:
             for room in home_data.rooms:
                 room_name_map[room.id] = room.name
-                logging.info(f"Room mapping: {room.id} -> {room.name}")
+                logging.info(f"Room mapping: {room.id} ({type(room.id)}) -> {room.name}")
 
         # Get the first device
         device = home_data.devices[0]
@@ -116,10 +116,11 @@ async def get_roborock_zones():
 
                     # Load the map
                     await local_client.load_multi_map(map_flag)
-                    await asyncio.sleep(1.0)  # Wait for map to load
+                    await asyncio.sleep(3.0)  # Wait for map to load
 
                     # Get room mapping (segments) for this map
                     # Returns a list of RoomMapping objects with segment_id and iot_id
+                    logging.info(f"Getting room mapping for map {map_name}")
                     room_mapping = await local_client.get_room_mapping()
 
                     if room_mapping:
@@ -127,8 +128,11 @@ async def get_roborock_zones():
 
                         if isinstance(room_mapping, list):
                             for room in room_mapping:
+                                
                                 # Match segment's iot_id with room name from home_data.rooms
                                 room_name = room_name_map.get(room.iot_id, f"Room {room.segment_id}")
+
+                                print(f"room_name: {room_name}, name: {room_name_map.get(room.iot_id)}, iot_id: {room.iot_id} {type(room.iot_id)}")
 
                                 zones.append({
                                     'zone_id': str(room.segment_id),
@@ -143,6 +147,8 @@ async def get_roborock_zones():
                                 })
 
                                 logging.info(f"Zone: {room_name} (segment_id={room.segment_id}, map={map_name})")
+                    else:
+                        logging.info(f"No room mapping found for map {map_name}")
 
                 if not zones:
                     return make_response({"error": "No zones found on any map"}, 404)
