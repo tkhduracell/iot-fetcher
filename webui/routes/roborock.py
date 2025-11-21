@@ -9,7 +9,7 @@ from roborock.version_1_apis.roborock_mqtt_client_v1 import RoborockMqttClientV1
 from roborock.version_1_apis.roborock_local_client_v1 import RoborockLocalClientV1
 from roborock.web_api import RoborockApiClient
 
-from decorators import memoize_with_ttl
+from lib.decorators import memoize_with_ttl
 
 roborock_bp = Blueprint('roborock', __name__)
 
