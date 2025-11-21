@@ -31,17 +31,16 @@ RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor 
     apt-get update && apt-get install -y influxdb2-client && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# Copy Python stack (needed before uv sync for editable installs)
+COPY python/ ./python
+
 # Python deps for main backend
-COPY python/pyproject.toml python/uv.lock python/
 RUN cd python && uv sync --frozen --no-cache
 
 ARG PYDEBUGGER=0
 RUN if [ "$PYDEBUGGER" = "1" ]; then \
-        cd python && uv pip install --system debugpy; \
+        cd python && uv pip install debugpy; \
     fi
-
-# Copy Python stack
-COPY python/ ./python
 
 # Copy built Node.js artifact only
 COPY --from=nodejs-build /app/nodejs/dist ./nodejs/dist
@@ -49,7 +48,8 @@ RUN mkdir -p /app/nodejs/dist/proto
 
 # Copy built frontend from previous stage
 COPY --from=frontend-build /app/dist ./webui/dist
-COPY webui/web.py webui/pyproject.toml webui/uv.lock ./webui/
+# Copy webui Python files (needed before uv sync for editable installs)
+COPY webui/ ./webui/
 RUN cd webui && uv sync --frozen --no-cache
 
 # Copy start script

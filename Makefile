@@ -22,7 +22,7 @@ run-proxy: build-proxy
 
 run-webui:
 	@echo "\nStarting webui web on port 8080...\n"
-	(cd webui && uvx --from . web.py)
+	(cd webui && uv run python web.py)
 
 # Alternative: use uv to run with dependencies installed
 run-webui-dev:
