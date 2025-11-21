@@ -28,3 +28,7 @@ README.md
 
 /backup/
 *.tar
+
+# Exclude built artifacts (built in Docker stages)
+webui/dist/
+nodejs/dist/
