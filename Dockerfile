@@ -44,10 +44,16 @@ COPY python/ ./python
 COPY --from=nodejs-build /app/nodejs/dist ./nodejs/dist
 RUN mkdir -p /app/nodejs/dist/proto
 
+COPY webui/requirements.txt ./webui/
+RUN pip install --no-cache-dir -r webui/requirements.txt
+
 # Copy built frontend from previous stage
 COPY --from=frontend-build /app/dist ./webui/dist
-COPY webui/web.py webui/requirements.txt ./webui/
-RUN pip install --no-cache-dir -r webui/requirements.txt
+
+# Copy webui source files
+COPY webui/lib ./webui/lib
+COPY webui/routes ./webui/routes
+COPY webui/web.py ./webui/
 
 # Copy start script
 COPY start.sh .
