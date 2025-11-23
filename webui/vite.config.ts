@@ -18,7 +18,7 @@ function influxProxy(): Plugin {
           changeOrigin: true,
           pathRewrite: { '^/query': '/api/v2/query' },
           pathFilter: [ '/query', '/health' ],
-          // logger: { error: console.error, info: console.info },
+          logger: { error: console.error, info: console.info },
           on: {
             proxyReq: (proxyReq) => {
               if (process.env.INFLUX_TOKEN) {

@@ -27,7 +27,7 @@ def setup_logging():
 
     # Requests logging
     wlog = logging.getLogger('werkzeug')
-    wlog.setLevel(logging.INFO)
+    wlog.setLevel(logging.WARNING)
     wlog.addFilter(CleanLogs())
 
     rlog = logging.getLogger('root')
