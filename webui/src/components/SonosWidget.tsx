@@ -22,7 +22,10 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
     : currentTrack.title || 'No track info';
   
   // Format room name with additional speakers if multiple in zone
-  const additionalSpeakers = members.map(m => m.roomName);
+  // Filter out the coordinator to avoid showing the room name twice
+  const additionalSpeakers = members
+    .filter(m => m.uuid !== coordinator.uuid)
+    .map(m => m.roomName);
   const displayRoomName = additionalSpeakers.length > 0
     ? `${roomName} (+${additionalSpeakers.join(', ')})`
     : roomName;
