@@ -1,9 +1,15 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { usePomodoroTimer, formatTime } from '../hooks/usePomodoroTimer';
 
+const LONG_PRESS_DURATION = 800; // milliseconds
+
 const PomodoroButton: React.FC = () => {
-  const [{ phase, state, timeRemaining, showNotification }, { start, pause, reset, dismissNotification }] = usePomodoroTimer();
+  const [{ phase, state, timeRemaining, showNotification }, { start, pause, reset, dismissNotification, skipToNextPhase }] = usePomodoroTimer();
   const notificationRef = useRef<HTMLDivElement>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const [longPressProgress, setLongPressProgress] = useState(0);
+  const longPressStartRef = useRef<number | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   // Focus notification when it appears for accessibility
   useEffect(() => {
@@ -11,6 +17,61 @@ const PomodoroButton: React.FC = () => {
       notificationRef.current.focus();
     }
   }, [showNotification]);
+
+  // Cleanup animation frame and timer on unmount
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
+
+  const updateProgress = () => {
+    if (longPressStartRef.current === null) return;
+    
+    const elapsed = Date.now() - longPressStartRef.current;
+    const progress = Math.min(elapsed / LONG_PRESS_DURATION, 1);
+    setLongPressProgress(progress);
+    
+    if (progress < 1) {
+      animationFrameRef.current = requestAnimationFrame(updateProgress);
+    }
+  };
+
+  const handlePressStart = () => {
+    // Only enable long press when timer is active (not idle)
+    if (state === 'idle') return;
+    
+    longPressStartRef.current = Date.now();
+    setLongPressProgress(0);
+    animationFrameRef.current = requestAnimationFrame(updateProgress);
+    
+    longPressTimerRef.current = window.setTimeout(() => {
+      skipToNextPhase();
+      cancelLongPress();
+    }, LONG_PRESS_DURATION);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    longPressStartRef.current = null;
+    setLongPressProgress(0);
+  };
+
+  const handlePressEnd = () => {
+    cancelLongPress();
+  };
 
   const handleClick = () => {
     if (state === 'idle') {
@@ -82,16 +143,35 @@ const PomodoroButton: React.FC = () => {
     return 'Great work! Take a break. ☕';
   };
 
+  const getTitle = () => {
+    if (state === 'idle') return 'Start Pomodoro';
+    if (state === 'running') return 'Pause (hold to skip)';
+    return 'Resume (hold to skip)';
+  };
+
   return (
     <div className="relative">
       <div className="flex items-center gap-1">
         <button
           onClick={handleClick}
-          title={state === 'idle' ? 'Start Pomodoro' : state === 'running' ? 'Pause' : 'Resume'}
-          className={getButtonStyle()}
+          onMouseDown={handlePressStart}
+          onMouseUp={handlePressEnd}
+          onMouseLeave={handlePressEnd}
+          onTouchStart={handlePressStart}
+          onTouchEnd={handlePressEnd}
+          onTouchCancel={handlePressEnd}
+          title={getTitle()}
+          className={`${getButtonStyle()} relative overflow-hidden`}
           aria-label={getAriaLabel()}
         >
-          {getButtonText()}
+          {/* Long press progress indicator */}
+          {longPressProgress > 0 && (
+            <span 
+              className="absolute inset-0 bg-white/30 origin-left"
+              style={{ transform: `scaleX(${longPressProgress})` }}
+            />
+          )}
+          <span className="relative">{getButtonText()}</span>
         </button>
         {state !== 'idle' && (
           <button

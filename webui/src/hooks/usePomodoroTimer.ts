@@ -28,6 +28,7 @@ export interface PomodoroTimerActions {
   pause: () => void;
   reset: () => void;
   dismissNotification: () => void;
+  skipToNextPhase: () => void;
 }
 
 function playSound(audio: HTMLAudioElement) {
@@ -68,6 +69,33 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
       notificationTimeoutRef.current = null;
     }
   }, []);
+
+  const skipToNextPhase = useCallback(() => {
+    if (state === 'idle') return;
+    
+    const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
+    const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+    
+    // Play sound based on completed phase
+    playSound(phase === 'work' ? workCompleteAudio : breakCompleteAudio);
+    
+    // Show notification
+    setShowNotification(true);
+    
+    // Auto-dismiss notification after delay
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+    notificationTimeoutRef.current = window.setTimeout(() => {
+      setShowNotification(false);
+      notificationTimeoutRef.current = null;
+    }, NOTIFICATION_DISMISS_DELAY);
+    
+    // Transition to next phase and reset timer
+    setPhase(nextPhase);
+    setTimeRemaining(nextDuration);
+    setState('running');
+  }, [state, phase]);
 
   // Timer effect - only decrements time
   useEffect(() => {
@@ -119,7 +147,7 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
 
   return [
     { phase, state, timeRemaining, showNotification },
-    { start, pause, reset, dismissNotification }
+    { start, pause, reset, dismissNotification, skipToNextPhase }
   ];
 }
 
