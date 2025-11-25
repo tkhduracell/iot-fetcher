@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react';
+import {useState, useEffect, useRef} from 'react';
 import { InfluxDB } from '@influxdata/influxdb-client-browser';
 import { queryReloadInterval, queryJitterInterval } from '../globals';
 
@@ -20,10 +20,13 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
   const [error, setError] = useState<Error | null>(null);
   const [result, setResult] = useState<any[]>([]);
   const [unavailable, setUnavailable] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    // Skip effect if already marked as unavailable
+    if (unavailable) return;
+
     let cancelled = false;
-    let intervalId: NodeJS.Timeout | null = null;
     let timerId: NodeJS.Timeout | null = null;
 
     const client = new InfluxDB({ url, token });
@@ -47,7 +50,10 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
             // If this is a configuration error, mark as unavailable and stop polling
             if (isConfigurationError(err)) {
               setUnavailable(true);
-              if (intervalId) clearInterval(intervalId);
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
             }
           }
         },
@@ -65,15 +71,18 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
     timerId = setTimeout(() => {
       if (cancelled) return;
       runQuery();
-      intervalId = setInterval(runQuery, reloadInterval);
+      intervalRef.current = setInterval(runQuery, reloadInterval);
     }, jitter);
 
     return () => {
       cancelled = true;
-      if (intervalId) clearInterval(intervalId);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
       if (timerId) clearTimeout(timerId);
     };
-  }, [fluxQuery, reloadInterval]);
+  }, [fluxQuery, reloadInterval, unavailable]);
 
   return { initialLoading, loading, error, result, unavailable };
 }
