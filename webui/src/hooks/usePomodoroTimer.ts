@@ -115,14 +115,23 @@ export interface PomodoroTimerActions {
 function playSound(audio: HTMLAudioElement) {
   // Ensure audio is loaded before playing
   if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
-    // Audio not ready, try to load and play
+    // Audio not ready, wait for it to load then play
+    const playWhenReady = () => {
+      audio.currentTime = 0;
+      audio.play().catch(err => {
+        console.error('Failed to play sound:', err.name, err.message);
+      });
+      audio.removeEventListener('canplaythrough', playWhenReady);
+    };
+    audio.addEventListener('canplaythrough', playWhenReady);
     audio.load();
+  } else {
+    // Audio is ready, play immediately
+    audio.currentTime = 0;
+    audio.play().catch(err => {
+      console.error('Failed to play sound:', err.name, err.message);
+    });
   }
-  audio.currentTime = 0;
-  audio.play().catch(err => {
-    // Provide more context for debugging
-    console.error('Failed to play sound:', err.name, err.message);
-  });
 }
 
 export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
