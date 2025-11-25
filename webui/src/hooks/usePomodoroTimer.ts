@@ -16,6 +16,22 @@ const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatouserc
 const workCompleteAudio = new Audio(WORK_COMPLETE_SOUND);
 const breakCompleteAudio = new Audio(BREAK_COMPLETE_SOUND);
 
+// Sonos TTS configuration
+const SONOS_SPEAKER = 'Kontor';
+const SONOS_VOLUME = 40;
+
+function speakOnSonos(message: string) {
+  const encodedMessage = encodeURIComponent(message);
+  const encodedSpeaker = encodeURIComponent(SONOS_SPEAKER);
+  fetch(`/sonos/${encodedSpeaker}/say/${encodedMessage}/${SONOS_VOLUME}`)
+    .then(response => {
+      if (!response.ok) {
+        console.error(`Failed to speak "${message}" on Sonos speaker "${SONOS_SPEAKER}": ${response.status}`);
+      }
+    })
+    .catch(err => console.error(`Failed to speak "${message}" on Sonos speaker "${SONOS_SPEAKER}":`, err));
+}
+
 export interface PomodoroTimerState {
   phase: PomodoroPhase;
   state: PomodoroState;
@@ -45,10 +61,12 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
 
   const start = useCallback(() => {
     setState('running');
+    speakOnSonos("let's go");
   }, []);
 
   const pause = useCallback(() => {
     setState('paused');
+    speakOnSonos("let's pause");
   }, []);
 
   const reset = useCallback(() => {
