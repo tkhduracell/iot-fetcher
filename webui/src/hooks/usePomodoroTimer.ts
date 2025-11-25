@@ -7,6 +7,68 @@ export type PomodoroState = 'idle' | 'running' | 'paused';
 const WORK_DURATION = 25 * 60; // 25 minutes
 const BREAK_DURATION = 5 * 60; // 5 minutes
 const NOTIFICATION_DISMISS_DELAY = 5000; // 5 seconds
+const SESSION_STORAGE_KEY = 'pomodoro-timer-state';
+
+// Session storage persistence interface
+interface PersistedPomodoroState {
+  phase: PomodoroPhase;
+  state: PomodoroState;
+  timeRemaining: number;
+  savedAt: number; // timestamp in ms
+}
+
+function saveState(phase: PomodoroPhase, state: PomodoroState, timeRemaining: number): void {
+  const persistedState: PersistedPomodoroState = {
+    phase,
+    state,
+    timeRemaining,
+    savedAt: Date.now(),
+  };
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(persistedState));
+  } catch (err) {
+    console.error('Failed to save Pomodoro state to session storage:', err);
+  }
+}
+
+function clearPersistedState(): void {
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch (err) {
+    console.error('Failed to clear Pomodoro state from session storage:', err);
+  }
+}
+
+function loadState(): { phase: PomodoroPhase; state: PomodoroState; timeRemaining: number } | null {
+  try {
+    const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stored) return null;
+
+    const persistedState: PersistedPomodoroState = JSON.parse(stored);
+    const elapsedSeconds = Math.floor((Date.now() - persistedState.savedAt) / 1000);
+
+    // If timer was running, subtract elapsed time
+    let adjustedTimeRemaining = persistedState.timeRemaining;
+    if (persistedState.state === 'running') {
+      adjustedTimeRemaining = Math.max(0, persistedState.timeRemaining - elapsedSeconds);
+      // If timer has completely elapsed, return null to start fresh
+      // The user would need to manually start the next phase anyway
+      if (adjustedTimeRemaining === 0) {
+        clearPersistedState();
+        return null;
+      }
+    }
+
+    return {
+      phase: persistedState.phase,
+      state: persistedState.state,
+      timeRemaining: adjustedTimeRemaining,
+    };
+  } catch (err) {
+    console.error('Failed to load Pomodoro state from session storage:', err);
+    return null;
+  }
+}
 
 // Sound URLs (external assets - could be moved to local /public directory for better reliability)
 const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/99591aa7-ec53-40fc-b6c4-f768f1a73881/d0794f38-b1c8-43f9-9ca3-432ad18a7710/preview.m4a';
@@ -53,9 +115,11 @@ function playSound(audio: HTMLAudioElement) {
 }
 
 export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
-  const [phase, setPhase] = useState<PomodoroPhase>('work');
-  const [state, setState] = useState<PomodoroState>('idle');
-  const [timeRemaining, setTimeRemaining] = useState(WORK_DURATION);
+  // Initialize state from session storage if available
+  const initialState = useMemo(() => loadState(), []);
+  const [phase, setPhase] = useState<PomodoroPhase>(() => initialState?.phase ?? 'work');
+  const [state, setState] = useState<PomodoroState>(() => initialState?.state ?? 'idle');
+  const [timeRemaining, setTimeRemaining] = useState(() => initialState?.timeRemaining ?? WORK_DURATION);
   const [showNotification, setShowNotification] = useState(false);
   const notificationTimeoutRef = useRef<number | null>(null);
 
@@ -74,6 +138,7 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
     setPhase('work');
     setTimeRemaining(WORK_DURATION);
     setShowNotification(false);
+    clearPersistedState();
     if (notificationTimeoutRef.current) {
       clearTimeout(notificationTimeoutRef.current);
       notificationTimeoutRef.current = null;
@@ -137,6 +202,14 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
       transitionToNextPhase();
     }
   }, [timeRemaining, state, transitionToNextPhase]);
+
+  // Persist state to session storage when state changes
+  useEffect(() => {
+    // Only persist non-idle states
+    if (state !== 'idle') {
+      saveState(phase, state, timeRemaining);
+    }
+  }, [phase, state, timeRemaining]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
