@@ -24,7 +24,12 @@ function speakOnSonos(message: string) {
   const encodedMessage = encodeURIComponent(message);
   const encodedSpeaker = encodeURIComponent(SONOS_SPEAKER);
   fetch(`/sonos/${encodedSpeaker}/say/${encodedMessage}/${SONOS_VOLUME}`)
-    .catch(err => console.error('Failed to speak on Sonos:', err));
+    .then(response => {
+      if (!response.ok) {
+        console.error(`Failed to speak "${message}" on Sonos speaker "${SONOS_SPEAKER}": ${response.status}`);
+      }
+    })
+    .catch(err => console.error(`Failed to speak "${message}" on Sonos speaker "${SONOS_SPEAKER}":`, err));
 }
 
 export interface PomodoroTimerState {
