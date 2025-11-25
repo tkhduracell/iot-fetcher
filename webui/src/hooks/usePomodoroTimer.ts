@@ -28,6 +28,7 @@ export interface PomodoroTimerActions {
   pause: () => void;
   reset: () => void;
   dismissNotification: () => void;
+  skipToNextPhase: () => void;
 }
 
 function playSound(audio: HTMLAudioElement) {
@@ -69,6 +70,37 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
     }
   }, []);
 
+  // Helper function to transition to the next phase
+  const transitionToNextPhase = useCallback(() => {
+    const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
+    const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+    
+    // Play sound based on completed phase
+    playSound(phase === 'work' ? workCompleteAudio : breakCompleteAudio);
+    
+    // Show notification
+    setShowNotification(true);
+    
+    // Auto-dismiss notification after delay
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+    notificationTimeoutRef.current = window.setTimeout(() => {
+      setShowNotification(false);
+      notificationTimeoutRef.current = null;
+    }, NOTIFICATION_DISMISS_DELAY);
+    
+    // Transition to next phase and reset timer
+    setPhase(nextPhase);
+    setTimeRemaining(nextDuration);
+  }, [phase]);
+
+  const skipToNextPhase = useCallback(() => {
+    if (state === 'idle') return;
+    transitionToNextPhase();
+    setState('running');
+  }, [state, transitionToNextPhase]);
+
   // Timer effect - only decrements time
   useEffect(() => {
     if (state !== 'running') return;
@@ -84,29 +116,9 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
   useEffect(() => {
     if (state !== 'running') return;
     if (timeRemaining === 0) {
-      const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
-      const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
-      
-      // Play sound based on completed phase
-      playSound(phase === 'work' ? workCompleteAudio : breakCompleteAudio);
-      
-      // Show notification
-      setShowNotification(true);
-      
-      // Auto-dismiss notification after delay
-      if (notificationTimeoutRef.current) {
-        clearTimeout(notificationTimeoutRef.current);
-      }
-      notificationTimeoutRef.current = window.setTimeout(() => {
-        setShowNotification(false);
-        notificationTimeoutRef.current = null;
-      }, NOTIFICATION_DISMISS_DELAY);
-      
-      // Transition to next phase and reset timer
-      setPhase(nextPhase);
-      setTimeRemaining(nextDuration);
+      transitionToNextPhase();
     }
-  }, [timeRemaining, state, phase]);
+  }, [timeRemaining, state, transitionToNextPhase]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -119,7 +131,7 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
 
   return [
     { phase, state, timeRemaining, showNotification },
-    { start, pause, reset, dismissNotification }
+    { start, pause, reset, dismissNotification, skipToNextPhase }
   ];
 }
 
