@@ -18,7 +18,7 @@ const breakCompleteAudio = new Audio(BREAK_COMPLETE_SOUND);
 
 // Sonos TTS configuration
 const SONOS_SPEAKER = 'Kontor';
-const SONOS_VOLUME = 90;
+const SONOS_VOLUME = 40;
 
 function speakOnSonos(message: string) {
   const encodedMessage = encodeURIComponent(message);
