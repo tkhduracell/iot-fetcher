@@ -116,10 +116,10 @@ function playSound(audio: HTMLAudioElement) {
 
 export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
   // Initialize state from session storage if available
-  const initialState = loadState();
-  const [phase, setPhase] = useState<PomodoroPhase>(initialState?.phase ?? 'work');
-  const [state, setState] = useState<PomodoroState>(initialState?.state ?? 'idle');
-  const [timeRemaining, setTimeRemaining] = useState(initialState?.timeRemaining ?? WORK_DURATION);
+  const initialState = useMemo(() => loadState(), []);
+  const [phase, setPhase] = useState<PomodoroPhase>(() => initialState?.phase ?? 'work');
+  const [state, setState] = useState<PomodoroState>(() => initialState?.state ?? 'idle');
+  const [timeRemaining, setTimeRemaining] = useState(() => initialState?.timeRemaining ?? WORK_DURATION);
   const [showNotification, setShowNotification] = useState(false);
   const notificationTimeoutRef = useRef<number | null>(null);
 
