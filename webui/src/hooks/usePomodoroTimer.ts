@@ -70,13 +70,16 @@ function loadState(): { phase: PomodoroPhase; state: PomodoroState; timeRemainin
   }
 }
 
-// Sound URLs (external assets - could be moved to local /public directory for better reliability)
+// Sound URLs (external assets)
 const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/99591aa7-ec53-40fc-b6c4-f768f1a73881/d0794f38-b1c8-43f9-9ca3-432ad18a7710/preview.m4a';
 const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/dc07756a-54e3-4851-acc4-9fce465ee255/54252202-2ca1-45b3-963c-a3747597aac5/preview.m4a';
 
-// Pre-loaded audio instances for better performance and memory efficiency
+// Pre-loaded audio instances for better performance
 const workCompleteAudio = new Audio(WORK_COMPLETE_SOUND);
+workCompleteAudio.preload = 'auto';
+
 const breakCompleteAudio = new Audio(BREAK_COMPLETE_SOUND);
+breakCompleteAudio.preload = 'auto';
 
 // Sonos TTS configuration
 const SONOS_SPEAKER = 'Kontor';
@@ -110,8 +113,16 @@ export interface PomodoroTimerActions {
 }
 
 function playSound(audio: HTMLAudioElement) {
+  // Ensure audio is loaded before playing
+  if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    // Audio not ready, try to load and play
+    audio.load();
+  }
   audio.currentTime = 0;
-  audio.play().catch(err => console.error('Failed to play sound:', err));
+  audio.play().catch(err => {
+    // Provide more context for debugging
+    console.error('Failed to play sound:', err.name, err.message);
+  });
 }
 
 export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
