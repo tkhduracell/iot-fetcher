@@ -31,6 +31,14 @@ function saveState(phase: PomodoroPhase, state: PomodoroState, timeRemaining: nu
   }
 }
 
+function clearPersistedState(): void {
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch (err) {
+    console.error('Failed to clear Pomodoro state from session storage:', err);
+  }
+}
+
 function loadState(): { phase: PomodoroPhase; state: PomodoroState; timeRemaining: number } | null {
   try {
     const stored = sessionStorage.getItem(SESSION_STORAGE_KEY);
@@ -43,6 +51,12 @@ function loadState(): { phase: PomodoroPhase; state: PomodoroState; timeRemainin
     let adjustedTimeRemaining = persistedState.timeRemaining;
     if (persistedState.state === 'running') {
       adjustedTimeRemaining = Math.max(0, persistedState.timeRemaining - elapsedSeconds);
+      // If timer has completely elapsed, return null to start fresh
+      // The user would need to manually start the next phase anyway
+      if (adjustedTimeRemaining === 0) {
+        clearPersistedState();
+        return null;
+      }
     }
 
     return {
@@ -53,14 +67,6 @@ function loadState(): { phase: PomodoroPhase; state: PomodoroState; timeRemainin
   } catch (err) {
     console.error('Failed to load Pomodoro state from session storage:', err);
     return null;
-  }
-}
-
-function clearPersistedState(): void {
-  try {
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
-  } catch (err) {
-    console.error('Failed to clear Pomodoro state from session storage:', err);
   }
 }
 
