@@ -1,0 +1,125 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+export type PomodoroPhase = 'work' | 'break';
+export type PomodoroState = 'idle' | 'running' | 'paused';
+
+// Durations in seconds
+const WORK_DURATION = 25 * 60; // 25 minutes
+const BREAK_DURATION = 5 * 60; // 5 minutes
+
+// Sound URLs
+const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/99591aa7-ec53-40fc-b6c4-f768f1a73881/d0794f38-b1c8-43f9-9ca3-432ad18a7710/preview.m4a';
+const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/dc07756a-54e3-4851-acc4-9fce465ee255/54252202-2ca1-45b3-963c-a3747597aac5/preview.m4a';
+
+export interface PomodoroTimerState {
+  phase: PomodoroPhase;
+  state: PomodoroState;
+  timeRemaining: number;
+  showNotification: boolean;
+}
+
+export interface PomodoroTimerActions {
+  start: () => void;
+  pause: () => void;
+  reset: () => void;
+  dismissNotification: () => void;
+}
+
+function playSound(url: string) {
+  const audio = new Audio(url);
+  audio.play().catch(() => {
+    // Audio play may fail if user hasn't interacted with page
+  });
+}
+
+export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
+  const [phase, setPhase] = useState<PomodoroPhase>('work');
+  const [state, setState] = useState<PomodoroState>('idle');
+  const [timeRemaining, setTimeRemaining] = useState(WORK_DURATION);
+  const [showNotification, setShowNotification] = useState(false);
+  const notificationTimeoutRef = useRef<number | null>(null);
+
+  const start = useCallback(() => {
+    setState('running');
+  }, []);
+
+  const pause = useCallback(() => {
+    setState('paused');
+  }, []);
+
+  const reset = useCallback(() => {
+    setState('idle');
+    setPhase('work');
+    setTimeRemaining(WORK_DURATION);
+    setShowNotification(false);
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+      notificationTimeoutRef.current = null;
+    }
+  }, []);
+
+  const dismissNotification = useCallback(() => {
+    setShowNotification(false);
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+      notificationTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Timer effect
+  useEffect(() => {
+    if (state !== 'running') return;
+
+    const interval = setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          // Time is up - switch phases
+          const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
+          const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+          
+          // Play sound based on completed phase
+          playSound(phase === 'work' ? WORK_COMPLETE_SOUND : BREAK_COMPLETE_SOUND);
+          
+          // Show notification
+          setShowNotification(true);
+          
+          // Auto-dismiss notification after 5 seconds
+          if (notificationTimeoutRef.current) {
+            clearTimeout(notificationTimeoutRef.current);
+          }
+          notificationTimeoutRef.current = window.setTimeout(() => {
+            setShowNotification(false);
+            notificationTimeoutRef.current = null;
+          }, 5000);
+          
+          // Transition to next phase
+          setPhase(nextPhase);
+          return nextDuration;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [state, phase]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  return [
+    { phase, state, timeRemaining, showNotification },
+    { start, pause, reset, dismissNotification }
+  ];
+}
+
+export function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
