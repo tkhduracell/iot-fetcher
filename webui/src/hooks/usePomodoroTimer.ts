@@ -70,9 +70,8 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
     }
   }, []);
 
-  const skipToNextPhase = useCallback(() => {
-    if (state === 'idle') return;
-    
+  // Helper function to transition to the next phase
+  const transitionToNextPhase = useCallback(() => {
     const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
     const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
     
@@ -94,8 +93,13 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
     // Transition to next phase and reset timer
     setPhase(nextPhase);
     setTimeRemaining(nextDuration);
+  }, [phase]);
+
+  const skipToNextPhase = useCallback(() => {
+    if (state === 'idle') return;
+    transitionToNextPhase();
     setState('running');
-  }, [state, phase]);
+  }, [state, transitionToNextPhase]);
 
   // Timer effect - only decrements time
   useEffect(() => {
@@ -112,29 +116,9 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
   useEffect(() => {
     if (state !== 'running') return;
     if (timeRemaining === 0) {
-      const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
-      const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
-      
-      // Play sound based on completed phase
-      playSound(phase === 'work' ? workCompleteAudio : breakCompleteAudio);
-      
-      // Show notification
-      setShowNotification(true);
-      
-      // Auto-dismiss notification after delay
-      if (notificationTimeoutRef.current) {
-        clearTimeout(notificationTimeoutRef.current);
-      }
-      notificationTimeoutRef.current = window.setTimeout(() => {
-        setShowNotification(false);
-        notificationTimeoutRef.current = null;
-      }, NOTIFICATION_DISMISS_DELAY);
-      
-      // Transition to next phase and reset timer
-      setPhase(nextPhase);
-      setTimeRemaining(nextDuration);
+      transitionToNextPhase();
     }
-  }, [timeRemaining, state, phase]);
+  }, [timeRemaining, state, transitionToNextPhase]);
 
   // Cleanup timeout on unmount
   useEffect(() => {

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { usePomodoroTimer, formatTime } from '../hooks/usePomodoroTimer';
 
 const LONG_PRESS_DURATION = 800; // milliseconds
@@ -30,7 +30,7 @@ const PomodoroButton: React.FC = () => {
     };
   }, []);
 
-  const updateProgress = () => {
+  const updateProgress = useCallback(() => {
     if (longPressStartRef.current === null) return;
     
     const elapsed = Date.now() - longPressStartRef.current;
@@ -40,9 +40,22 @@ const PomodoroButton: React.FC = () => {
     if (progress < 1) {
       animationFrameRef.current = requestAnimationFrame(updateProgress);
     }
-  };
+  }, []);
 
-  const handlePressStart = () => {
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    longPressStartRef.current = null;
+    setLongPressProgress(0);
+  }, []);
+
+  const handlePressStart = useCallback(() => {
     // Only enable long press when timer is active (not idle)
     if (state === 'idle') return;
     
@@ -54,24 +67,11 @@ const PomodoroButton: React.FC = () => {
       skipToNextPhase();
       cancelLongPress();
     }, LONG_PRESS_DURATION);
-  };
+  }, [state, skipToNextPhase, cancelLongPress, updateProgress]);
 
-  const cancelLongPress = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-    longPressStartRef.current = null;
-    setLongPressProgress(0);
-  };
-
-  const handlePressEnd = () => {
+  const handlePressEnd = useCallback(() => {
     cancelLongPress();
-  };
+  }, [cancelLongPress]);
 
   const handleClick = () => {
     if (state === 'idle') {
