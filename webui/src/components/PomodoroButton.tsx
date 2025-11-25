@@ -1,8 +1,16 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { usePomodoroTimer, formatTime } from '../hooks/usePomodoroTimer';
 
 const PomodoroButton: React.FC = () => {
   const [{ phase, state, timeRemaining, showNotification }, { start, pause, reset, dismissNotification }] = usePomodoroTimer();
+  const notificationRef = useRef<HTMLDivElement>(null);
+
+  // Focus notification when it appears for accessibility
+  useEffect(() => {
+    if (showNotification && notificationRef.current) {
+      notificationRef.current.focus();
+    }
+  }, [showNotification]);
 
   const handleClick = () => {
     if (state === 'idle') {
@@ -17,6 +25,22 @@ const PomodoroButton: React.FC = () => {
   const handleReset = (e: React.MouseEvent) => {
     e.stopPropagation();
     reset();
+  };
+
+  const handleNotificationKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+      dismissNotification();
+    }
+  };
+
+  const getAriaLabel = () => {
+    if (state === 'idle') {
+      return 'Start Pomodoro timer';
+    }
+    const phaseLabel = phase === 'work' ? 'work phase' : 'break phase';
+    const timeLabel = formatTime(timeRemaining);
+    const stateLabel = state === 'paused' ? 'paused' : 'running';
+    return `Pomodoro timer, ${phaseLabel}, ${timeLabel} remaining, ${stateLabel}`;
   };
 
   // Button styling based on state and phase
@@ -65,6 +89,7 @@ const PomodoroButton: React.FC = () => {
           onClick={handleClick}
           title={state === 'idle' ? 'Start Pomodoro' : state === 'running' ? 'Pause' : 'Resume'}
           className={getButtonStyle()}
+          aria-label={getAriaLabel()}
         >
           {getButtonText()}
         </button>
@@ -73,6 +98,7 @@ const PomodoroButton: React.FC = () => {
             onClick={handleReset}
             title="Reset timer"
             className="bg-gray-500 hover:bg-gray-600 text-white px-2 py-1 rounded-full shadow text-sm font-semibold cursor-pointer"
+            aria-label="Reset Pomodoro timer"
           >
             ✕
           </button>
@@ -82,12 +108,16 @@ const PomodoroButton: React.FC = () => {
       {/* Notification popup */}
       {showNotification && (
         <div 
-          className="absolute top-full right-0 mt-2 z-50 animate-fade-in"
+          ref={notificationRef}
+          role="alert"
+          tabIndex={0}
+          className="absolute top-full right-0 mt-2 z-50 animate-fade-in outline-none"
           onClick={dismissNotification}
+          onKeyDown={handleNotificationKeyDown}
         >
           <div className="bg-gray-800 text-white px-4 py-3 rounded-lg shadow-lg min-w-[200px] text-center cursor-pointer hover:bg-gray-700">
             <p className="text-lg font-semibold">{getNotificationMessage()}</p>
-            <p className="text-xs text-gray-400 mt-1">Click to dismiss</p>
+            <p className="text-xs text-gray-400 mt-1">Click or press Escape to dismiss</p>
           </div>
         </div>
       )}

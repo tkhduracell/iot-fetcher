@@ -12,6 +12,10 @@ const NOTIFICATION_DISMISS_DELAY = 5000; // 5 seconds
 const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/99591aa7-ec53-40fc-b6c4-f768f1a73881/d0794f38-b1c8-43f9-9ca3-432ad18a7710/preview.m4a';
 const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/dc07756a-54e3-4851-acc4-9fce465ee255/54252202-2ca1-45b3-963c-a3747597aac5/preview.m4a';
 
+// Pre-loaded audio instances for better performance and memory efficiency
+const workCompleteAudio = new Audio(WORK_COMPLETE_SOUND);
+const breakCompleteAudio = new Audio(BREAK_COMPLETE_SOUND);
+
 export interface PomodoroTimerState {
   phase: PomodoroPhase;
   state: PomodoroState;
@@ -26,11 +30,9 @@ export interface PomodoroTimerActions {
   dismissNotification: () => void;
 }
 
-function playSound(url: string) {
-  const audio = new Audio(url);
-  audio.play().catch(() => {
-    // Audio play may fail if user hasn't interacted with page
-  });
+function playSound(audio: HTMLAudioElement) {
+  audio.currentTime = 0;
+  audio.play().catch(err => console.error('Failed to play sound:', err));
 }
 
 export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
@@ -67,42 +69,44 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
     }
   }, []);
 
-  // Timer effect
+  // Timer effect - only decrements time
   useEffect(() => {
     if (state !== 'running') return;
 
     const interval = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          // Time is up - switch phases
-          const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
-          const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
-          
-          // Play sound based on completed phase
-          playSound(phase === 'work' ? WORK_COMPLETE_SOUND : BREAK_COMPLETE_SOUND);
-          
-          // Show notification
-          setShowNotification(true);
-          
-          // Auto-dismiss notification after 5 seconds
-          if (notificationTimeoutRef.current) {
-            clearTimeout(notificationTimeoutRef.current);
-          }
-          notificationTimeoutRef.current = window.setTimeout(() => {
-            setShowNotification(false);
-            notificationTimeoutRef.current = null;
-          }, NOTIFICATION_DISMISS_DELAY);
-          
-          // Transition to next phase
-          setPhase(nextPhase);
-          return nextDuration;
-        }
-        return prev - 1;
-      });
+      setTimeRemaining((prev) => (prev > 0 ? prev - 1 : prev));
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [state, phase]);
+  }, [state]);
+
+  // Phase transition effect - handles transitions when timer reaches zero
+  useEffect(() => {
+    if (state !== 'running') return;
+    if (timeRemaining === 0) {
+      const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
+      const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+      
+      // Play sound based on completed phase
+      playSound(phase === 'work' ? workCompleteAudio : breakCompleteAudio);
+      
+      // Show notification
+      setShowNotification(true);
+      
+      // Auto-dismiss notification after delay
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+      notificationTimeoutRef.current = window.setTimeout(() => {
+        setShowNotification(false);
+        notificationTimeoutRef.current = null;
+      }, NOTIFICATION_DISMISS_DELAY);
+      
+      // Transition to next phase and reset timer
+      setPhase(nextPhase);
+      setTimeRemaining(nextDuration);
+    }
+  }, [timeRemaining, state, phase]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
