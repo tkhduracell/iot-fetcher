@@ -143,8 +143,20 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
   );
 };
 
+// Helper to detect if error is due to missing configuration
+function isConfigurationError(error: Error | null): boolean {
+  if (!error) return false;
+  const message = error.message || String(error);
+  return message.includes('Missing SONOS_HOST') || 
+         message.includes('status: 500') ||
+         message.includes('status: 502');
+}
+
 const SonosWidget: React.FC = () => {
   const { initialLoading, error, result, updateZoneMute, unavailable } = useSonosQuery();
+
+  // Hide widget if unavailable OR if there's a configuration error
+  const shouldHide = unavailable || isConfigurationError(error);
 
   const handlePlayPause = async (roomName: string, action: 'play' | 'pause') => {
     try {
@@ -199,7 +211,7 @@ const SonosWidget: React.FC = () => {
     }
   };
 
-  if (unavailable) {
+  if (shouldHide) {
     return null; // Hide the widget entirely when Sonos is not configured
   }
 
