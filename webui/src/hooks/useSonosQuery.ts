@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react';
-import { queryReloadInterval, queryJitterInterval } from '../globals';
+import { queryJitterInterval } from '../globals';
 import { SonosZone } from '../types';
+
+// Helper to detect if error is due to missing configuration
+function isConfigurationError(error: Error | null): boolean {
+  if (!error) return false;
+  const message = error.message || String(error);
+  return message.includes('Missing SONOS_HOST') || 
+         message.includes('status: 500') ||
+         message.includes('status: 502');
+}
 
 type UseSonosQueryResult = {
   initialLoading: boolean;
   loading: boolean;
   error: Error | null;
   result: SonosZone[];
+  unavailable: boolean;
 };
 
 const useSonosQuery = (): UseSonosQueryResult & { 
@@ -16,6 +26,7 @@ const useSonosQuery = (): UseSonosQueryResult & {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [result, setResult] = useState<SonosZone[]>([]);
+  const [unavailable, setUnavailable] = useState(false);
 
   const updateZoneMute = (zoneUuid: string, muted: boolean) => {
     setResult(prevResult => 
@@ -48,6 +59,9 @@ const useSonosQuery = (): UseSonosQueryResult & {
   };
 
   const fetchSonosZones = async () => {
+    // Don't fetch if already marked as unavailable
+    if (unavailable) return;
+    
     try {
       setLoading(true);
       const response = await fetch('/sonos/zones');
@@ -60,7 +74,11 @@ const useSonosQuery = (): UseSonosQueryResult & {
       setResult(data);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('Unknown error'));
+      const error = err instanceof Error ? err : new Error('Unknown error');
+      setError(error);
+      if (isConfigurationError(error)) {
+        setUnavailable(true);
+      }
     } finally {
       setLoading(false);
       setInitialLoading(false);
@@ -76,13 +94,14 @@ const useSonosQuery = (): UseSonosQueryResult & {
     }, 5000 + jitter);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [unavailable]);
 
   return {
     initialLoading,
     loading,
     error,
     result,
+    unavailable,
     updateZoneMute,
   };
 };

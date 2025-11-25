@@ -39,7 +39,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
     |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
     |> yield(name: "last")`;
 
-  const { initialLoading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
+  const { initialLoading, error, result, unavailable } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
@@ -52,8 +52,9 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
           &times;
         </button>
 
-        { initialLoading && !error && <div className="text-2xl">Loading...</div> }
-        { error && <div className="text-2xl">Error: {error.message}</div> }
+        { unavailable && <div className="text-2xl text-gray-500 dark:text-gray-400">Data unavailable (∞)</div> }
+        { !unavailable && initialLoading && !error && <div className="text-2xl">Loading...</div> }
+        { !unavailable && error && <div className="text-2xl">Error: {error.message}</div> }
 
         <div className="flex flex-col gap-4 items-center h-full align-items-center text-gray-600 dark:text-gray-300">
           <div className="text-6xl">{ title }</div>
@@ -63,7 +64,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
             { field }
             </div>
           <div className="text-6xl">
-            { result.map((item) => <div>{item._value}</div>) }
+            { unavailable ? <span className="text-gray-400 dark:text-gray-500">∞</span> : result.map((item) => <div>{item._value}</div>) }
           </div>
         </div>
       </div>

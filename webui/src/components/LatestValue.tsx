@@ -5,7 +5,7 @@ import { ConfigValue } from '../types';
 type LatestValueProps = ConfigValue & LatestValueQueryParams
 
 const LatestValue: React.FC<LatestValueProps> = (props) => {
-  const { initialLoading, loading, error, result } = useLatestValueQuery(props);
+  const { initialLoading, loading, error, result, unavailable } = useLatestValueQuery(props);
   const { decimals = 1, title, field, unit } = props;
   const value: number = result.length > 0 ? result[0]._value : null;
 
@@ -15,7 +15,9 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
         {title || field}
       </h2>
       <div className="flex items-baseline gap-0.5 leading-none">
-        {(initialLoading || error) ? (
+        {unavailable ? (
+          <span className="text-5xl md:text-6xl text-gray-400 dark:text-gray-500">∞</span>
+        ) : (initialLoading || error) ? (
           <span className="text-4xl">...</span>
         ) : (
           <>
@@ -30,7 +32,6 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
           </>
         )}
       </div>
-      {error && <p className="text-red-500 text-[10px] mt-0.5">{String(error)}</p>}
     </div>
   );
 };

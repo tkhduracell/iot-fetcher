@@ -144,7 +144,7 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
 };
 
 const SonosWidget: React.FC = () => {
-  const { initialLoading, error, result, updateZoneMute } = useSonosQuery();
+  const { initialLoading, error, result, updateZoneMute, unavailable } = useSonosQuery();
 
   const handlePlayPause = async (roomName: string, action: 'play' | 'pause') => {
     try {
@@ -198,6 +198,10 @@ const SonosWidget: React.FC = () => {
       console.error(`Error changing volume by ${change} for ${roomName}:`, err);
     }
   };
+
+  if (unavailable) {
+    return null; // Hide the widget entirely when Sonos is not configured
+  }
 
   if (initialLoading && !error) {
     return (

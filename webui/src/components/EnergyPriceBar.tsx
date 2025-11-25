@@ -40,8 +40,9 @@ const EnergyPriceBar: React.FC = () => {
     `;
   }, [bucket, measurement, field, filter, start, end]);
 
-  const { initialLoading, error, result } = useFluxQuery({ fluxQuery });
+  const { initialLoading, error, result, unavailable } = useFluxQuery({ fluxQuery });
 
+  if (unavailable) return <Wrapper><span className="text-gray-500 dark:text-gray-400">Energipriser ej tillgängliga (∞)</span></Wrapper>;
   if (initialLoading && !error) return <Wrapper>Hämtar energipriser...</Wrapper>;
   if (error) return <Wrapper>Fel uppstod vid laddning: {error.message}</Wrapper>;
 

@@ -2,6 +2,14 @@ import {useState, useEffect} from 'react';
 import { InfluxDB } from '@influxdata/influxdb-client-browser';
 import { queryReloadInterval, queryJitterInterval } from '../globals';
 
+// Helper to detect if error is due to missing InfluxDB configuration
+function isConfigurationError(error: Error | null): boolean {
+  if (!error) return false;
+  const message = error.message || String(error);
+  return message.includes('Missing INFLUX_HOST or INFLUX_TOKEN') || 
+         message.includes('500 INTERNAL SERVER ERROR');
+}
+
 function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { fluxQuery: string, reloadInterval?: number }) {
   const url = '/influx';
   const token = 'hardcoded-token'; // Replace with your actual token
@@ -11,6 +19,7 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const [result, setResult] = useState<any[]>([]);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,9 +39,16 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
         },
         error(e) {
           if (!cancelled) {
-            setError(e instanceof Error ? e : new Error(String(e)));
+            const err = e instanceof Error ? e : new Error(String(e));
+            setError(err);
             setLoading(false);
+            setInitialLoading(false);
             setResult([]);
+            // If this is a configuration error, mark as unavailable and stop polling
+            if (isConfigurationError(err)) {
+              setUnavailable(true);
+              if (intervalId) clearInterval(intervalId);
+            }
           }
         },
         complete() {
@@ -59,7 +75,7 @@ function useFluxQuery({ fluxQuery, reloadInterval = queryReloadInterval }: { flu
     };
   }, [fluxQuery, reloadInterval]);
 
-  return { initialLoading, loading, error, result };
+  return { initialLoading, loading, error, result, unavailable };
 }
 
 export default useFluxQuery;

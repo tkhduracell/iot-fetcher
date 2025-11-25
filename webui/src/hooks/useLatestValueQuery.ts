@@ -28,7 +28,9 @@ function useLatestValueQuery({ bucket = "irisgatan", measurement, field, filter 
     |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
     |> yield(name: "last")`, [bucket, range, filterQuery, window]);
 
-  return useFluxQuery({ fluxQuery: fluxQuery.toString(), reloadInterval: reload });
+  const { initialLoading, loading, error, result, unavailable } = useFluxQuery({ fluxQuery: fluxQuery.toString(), reloadInterval: reload });
+
+  return { initialLoading, loading, error, result, unavailable };
 }
 
 export default useLatestValueQuery;
