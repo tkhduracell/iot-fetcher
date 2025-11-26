@@ -23,12 +23,16 @@ function loadPersistedState(): PersistedState | null {
     const stored = sessionStorage.getItem(STORAGE_KEY);
     if (!stored) return null;
     const parsed = JSON.parse(stored) as PersistedState;
-    // Validate the parsed object has required fields
+    // Validate the parsed object has required fields and valid enum values
+    const validPhases: PomodoroPhase[] = ['work', 'break'];
+    const validStates: PomodoroState[] = ['idle', 'running', 'paused'];
     if (
-      typeof parsed.phase === 'string' &&
-      typeof parsed.state === 'string' &&
+      validPhases.includes(parsed.phase) &&
+      validStates.includes(parsed.state) &&
       typeof parsed.timeRemaining === 'number' &&
-      typeof parsed.lastUpdated === 'number'
+      parsed.timeRemaining >= 0 &&
+      typeof parsed.lastUpdated === 'number' &&
+      parsed.lastUpdated > 0
     ) {
       return parsed;
     }
