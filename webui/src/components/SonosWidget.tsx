@@ -17,9 +17,15 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
   
   const isPlaying = playbackState === 'PLAYING';
   const isMuted = state.mute;
-  const trackInfo = currentTrack.artist && currentTrack.title 
-    ? `${currentTrack.artist} - ${currentTrack.title}`
-    : currentTrack.title || 'No track info';
+
+  // Detect HDMI/TV input by checking uri pattern or type
+  const isHdmiInput = currentTrack.uri?.startsWith('x-sonos-htastream:') || currentTrack.type === 'line_in';
+
+  const trackInfo = isHdmiInput
+    ? 'TV Audio'
+    : currentTrack.artist && currentTrack.title
+      ? `${currentTrack.artist} - ${currentTrack.title}`
+      : currentTrack.title || 'No track info';
   
   // Format room name with additional speakers if multiple in zone
   // Filter out the coordinator to avoid showing the room name twice
@@ -55,13 +61,19 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
   return (
     <div className="flex-1 min-w-[200px] max-w-[calc(50%-0.25rem)] bg-white dark:bg-gray-800 rounded-lg p-3 shadow-sm border border-gray-200 dark:border-gray-700">
       <div className="flex items-center gap-3">
-        {currentTrack.absoluteAlbumArtUri && (
-          <img 
-            src={currentTrack.absoluteAlbumArtUri} 
+        {isHdmiInput ? (
+          <div className="w-12 h-12 rounded bg-gray-200 dark:bg-gray-700 flex items-center justify-center flex-shrink-0">
+            <svg className="w-6 h-6 text-gray-600 dark:text-gray-300" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M3 5a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2h-2.22l.123.489.804.804A1 1 0 0113 18H7a1 1 0 01-.707-1.707l.804-.804L7.22 15H5a2 2 0 01-2-2V5zm5.771 7H5V5h10v7H8.771z" clipRule="evenodd"/>
+            </svg>
+          </div>
+        ) : currentTrack.absoluteAlbumArtUri ? (
+          <img
+            src={currentTrack.absoluteAlbumArtUri}
             alt={currentTrack.album}
             className="w-12 h-12 rounded object-cover flex-shrink-0"
           />
-        )}
+        ) : null}
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm text-gray-900 dark:text-gray-100 mb-1">
             {displayRoomName}
@@ -71,32 +83,36 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
           </div>
         </div>
         <div className="flex gap-1 items-center">
-          <button
-            onClick={handlePlayPause}
-            className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white flex items-center justify-center transition-colors"
-            title={isPlaying ? 'Pause' : 'Play'}
-          >
-            {isPlaying ? (
+          {!isHdmiInput && (
+            <button
+              onClick={handlePlayPause}
+              className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white flex items-center justify-center transition-colors"
+              title={isPlaying ? 'Pause' : 'Play'}
+            >
+              {isPlaying ? (
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M6 4h2v12H6V4zm6 0h2v12h-2V4z"/>
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M6.5 5.5v9l7-4.5-7-4.5z"/>
+                </svg>
+              )}
+            </button>
+          )}
+
+          {!isHdmiInput && (
+            <button
+              onClick={handleNext}
+              className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-700 text-white flex items-center justify-center transition-colors"
+              title="Next track"
+            >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M6 4h2v12H6V4zm6 0h2v12h-2V4z"/>
+                <path d="M4.555 5.168A1 1 0 003 6v8a1 1 0 001.555.832L10 11.202V14a1 1 0 001.555.832l6-4a1 1 0 000-1.664l-6-4A1 1 0 0010 6v2.798L4.555 5.168z"/>
               </svg>
-            ) : (
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M6.5 5.5v9l7-4.5-7-4.5z"/>
-              </svg>
-            )}
-          </button>
-          
-          <button
-            onClick={handleNext}
-            className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-700 text-white flex items-center justify-center transition-colors"
-            title="Next track"
-          >
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M4.555 5.168A1 1 0 003 6v8a1 1 0 001.555.832L10 11.202V14a1 1 0 001.555.832l6-4a1 1 0 000-1.664l-6-4A1 1 0 0010 6v2.798L4.555 5.168z"/>
-            </svg>
-          </button>
-          
+            </button>
+          )}
+
           <button
             onClick={handleVolumeDown}
             className="flex-shrink-0 w-8 h-8 rounded-full bg-green-500 hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-700 text-white flex items-center justify-center transition-colors"
