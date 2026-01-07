@@ -51,17 +51,15 @@ const EnergyPriceBar: React.FC = () => {
   }
 
   const minValue = Math.min(...values, 0);
-  const maxValue = Math.max(...values, 30);
-  const range = maxValue - minValue;
-  const bucketSize = range / 3;
+  const maxValue = Math.max(...values, 150);
 
   const getBucketColorClass = (value: number | null): string => {
     if (value === undefined || value === null) {
       return 'bg-gray-200 dark:bg-gray-700';
     }
-    if (value <= minValue + bucketSize) {
+    if (value < 100) {
       return 'bg-green-400 dark:bg-green-700';
-    } else if (value <= minValue + 2 * bucketSize) {
+    } else if (value <= 150) {
       return 'bg-yellow-400 dark:bg-yellow-700';
     } else {
       return 'bg-red-400 dark:bg-red-700';
@@ -101,14 +99,13 @@ const EnergyPriceBar: React.FC = () => {
 
           <div className="w-full flex flex-row justify-between text-[10px] text-gray-600 dark:text-gray-300">
             <div className='bg-green-400 dark:bg-green-700 rounded px-1 py-0.5'>
-              Min {minValue.toFixed(0)} öre
+              &lt; 100 öre
             </div>
             <div className='bg-yellow-400 dark:bg-yellow-700 rounded px-1 py-0.5'>
-              &lt; {(minValue + 1 * bucketSize).toFixed(0)} öre 
-              &lt; {(minValue + 2 * bucketSize).toFixed(0)} öre &lt; 
+              100–150 öre
             </div>
             <div className='bg-red-400 dark:bg-red-700 rounded px-1 py-0.5'>
-              Max {(maxValue).toFixed(0)} öre
+              &gt; 150 öre
             </div>
           </div>
         </Wrapper>
