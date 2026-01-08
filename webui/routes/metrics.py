@@ -2,7 +2,6 @@ from flask import Blueprint, request, make_response
 import requests
 import logging
 import os
-from itertools import groupby
 
 metrics_bp = Blueprint('metrics', __name__)
 
@@ -12,95 +11,108 @@ def metrics_garmin(device: str):
     if device not in ['garmin']:
         return make_response('Device not supported', 400)
 
-    _bucket = "irisgatan"
+    _database = "irisgatan"
     _defs = [
-        {"title": "🔋 Batteri", "unit": "%", "decimals": 0, "key": "battery_soc",
-            "flux": 'filter(fn: (r) => r._measurement == "sigenergy_battery" and r._field == "soc_percent")'},
-        {"title": "☀️ Solceller", "unit": "kW", "decimals": 1, "key": "solar_power",
-            "flux": 'filter(fn: (r) => r._measurement == "sigenergy_pv_power" and r._field == "power_kw" and r.string == "total")'},
-        {"title": "⚡️ Inköp", "unit": "kW", "decimals": 1, "key": "grid_power",
-            "flux": 'filter(fn: (r) => r._measurement == "sigenergy_grid_power" and r._field == "net_power_kw")'}
+        {
+            "title": "🔋 Batteri",
+            "unit": "%",
+            "decimals": 0,
+            "key": "battery_soc",
+            "measurement": "sigenergy_battery",
+            "field": "soc_percent",
+            "where": ""
+        },
+        {
+            "title": "☀️ Solceller",
+            "unit": "kW",
+            "decimals": 1,
+            "key": "solar_power",
+            "measurement": "sigenergy_pv_power",
+            "field": "power_kw",
+            "where": "string = 'total'"
+        },
+        {
+            "title": "⚡️ Inköp",
+            "unit": "kW",
+            "decimals": 1,
+            "key": "grid_power",
+            "measurement": "sigenergy_grid_power",
+            "field": "net_power_kw",
+            "where": ""
+        }
     ]
 
     influx_host = os.environ.get('INFLUX_HOST')
+    influx_token = os.environ.get('INFLUX_TOKEN')
 
     if not influx_host:
         return make_response('Missing INFLUX_HOST', 500)
+    if not influx_token:
+        return make_response('Missing INFLUX_TOKEN', 500)
 
     headers = {
-        'Authorization': request.headers.get('Authorization'),
-        'Content-Type': 'application/vnd.flux',
+        'Authorization': f'Token {influx_token}',
         'Accept': 'application/json'
     }
 
-    # Combine the query into one.
-    query = f'data = from(bucket: "{_bucket}") |> range(start: -5m)\n'
+    results = []
 
+    # Execute separate InfluxQL query for each metric
     for d in _defs:
-        query += f'  data_{d["key"]} = data |> {d["flux"]} |> aggregateWindow(every: 1m, fn: mean, createEmpty: false) |> last() |> yield(name: "{d["key"]}")\n'
+        where_clause = f"time > now() - 5m"
+        if d["where"]:
+            where_clause += f" AND {d['where']}"
 
-    try:
-        resp = requests.post(
-            f"http://{influx_host}/api/v2/query",
-            params={'org': 'home'},
-            headers=headers,
-            data=query,
-            timeout=10,
-        )
+        # Build InfluxQL query: get mean over 1m windows, then take the last value
+        query = f'''SELECT MEAN("{d["field"]}") AS value
+                    FROM "{d["measurement"]}"
+                    WHERE {where_clause}
+                    GROUP BY time(1m)
+                    ORDER BY time DESC
+                    LIMIT 1'''
 
-        if not resp.ok:
-            logging.warning(
-                "Influx query failed: %s", resp.text
+        try:
+            resp = requests.get(
+                f"{influx_host}/query",
+                params={'db': _database, 'q': query},
+                headers=headers,
+                timeout=10,
             )
 
-        text = resp.text
-
-        # Parse CSV response: skip comment lines starting with '#', first non-comment row is header
-        lines = [l for l in text.splitlines() if l and not l.startswith('#')]
-        if len(lines) < 2:
-            logging.warning(
-                "No data rows in query response: %s", text)
-            return make_response(results, 500)
-
-        # Group the lines by whether they are headers or data rows
-        grouped = groupby(lines, key=lambda item: '_value' in item)
-        grouped = [[next(group), list(next(grouped)[1])]
-                   for is_header, group in grouped if is_header]
-
-        # Parse results series
-        results_value = {}
-        for header, data in grouped:
-            header: str
-            data: list[str]
-            value_idx = header.split(',').index('_value')
-            result_name_idx = header.split(',').index('result')
-
-            if value_idx > -1:
-
-                for r in data:
-                    row = r.split(",")
-                    result_name = row[result_name_idx]
-                    value = float(row[value_idx])
-
-                    if result_name not in results_value:
-                        results_value[result_name] = []
-
-                    results_value[result_name].append(value)
-
-        # Reconstruct results with data
-        results = []
-        for d in _defs:
-            if d["key"] in results_value:
-                meta = {**d}
-                del meta["flux"]
-                results.append({ **meta, 'data': sum(results_value[d["key"]]) })
-            else:
+            if not resp.ok:
                 logging.warning(
-                    "_value column not found in response for header: %s", header)
+                    "InfluxQL query failed for %s: %s", d["key"], resp.text
+                )
+                continue
 
-        return make_response(results, 200)
+            data = resp.json()
 
-    except Exception as e:
-        logging.exception(
-            "Error querying influx for %s:", e)
-        return make_response({"error": "Error when querying InfluxDB"}, 500)
+            # Parse InfluxQL JSON response
+            # Expected format: {"results": [{"series": [{"values": [[time, value]]}]}]}
+            if 'results' in data and len(data['results']) > 0:
+                result = data['results'][0]
+                if 'series' in result and len(result['series']) > 0:
+                    series = result['series'][0]
+                    if 'values' in series and len(series['values']) > 0:
+                        value = series['values'][0][1]  # First row, second column (value)
+                        if value is not None:
+                            meta = {k: v for k, v in d.items() if k not in ['measurement', 'field', 'where']}
+                            results.append({**meta, 'data': value})
+                        else:
+                            logging.warning("Null value returned for %s", d["key"])
+                    else:
+                        logging.warning("No values in series for %s", d["key"])
+                else:
+                    logging.warning("No series in result for %s", d["key"])
+            else:
+                logging.warning("No results returned for %s", d["key"])
+
+        except Exception as e:
+            logging.exception(
+                "Error querying influx for %s:", d["key"])
+            continue
+
+    if not results:
+        return make_response({"error": "No data available"}, 500)
+
+    return make_response(results, 200)
