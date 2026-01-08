@@ -49,11 +49,6 @@ async def _tapo():
 
         logger.info(f"[tapo] Found {len(discovered_devices)} TAPO devices via local discovery")
 
-        # Add device count metric
-        device_count_point = Point("tapo_device_count") \
-            .field("count", len(discovered_devices))
-        points.append(device_count_point)
-
         for discovered_device in discovered_devices:
             device_ip = discovered_device.ip
             device_mac = discovered_device.mac
