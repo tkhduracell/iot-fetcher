@@ -168,13 +168,23 @@ async function _eufy() {
     await writeApi.writePoints(points);
 }
 
+/**
+ * Attempts to decode a base64-encoded string.
+ * TP-Link Tapo cloud API sometimes returns device names and aliases as base64-encoded strings.
+ * This function heuristically detects and decodes them, falling back to the original string if decoding fails.
+ */
 function decodeIfBase64(s: string): string {
-    if (!s || s.length % 4 !== 0) return s;
+    if (!s) return s;
 
+    // Check if string matches base64 pattern (alphanumeric + +/ and optional padding)
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return s;
 
     try {
         const decoded = Buffer.from(s, 'base64').toString('utf-8');
+
+        // Verify decoded string contains printable characters (avoid false positives from binary data)
+        if (!/^[\x20-\x7E\s]+$/.test(decoded)) return s;
+
         return decoded;
     } catch {
         return s;

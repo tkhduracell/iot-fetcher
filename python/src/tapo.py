@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import binascii
 import logging
 import os
 import re
@@ -16,24 +17,40 @@ from influx import write_influx, Point
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
+# Regex pattern for detecting base64-encoded strings
+BASE64_PATTERN = re.compile(r'^[A-Za-z0-9+/]*={0,2}$')
+
+# Regex pattern for verifying decoded string contains only printable ASCII characters
+PRINTABLE_PATTERN = re.compile(r'^[\x20-\x7E\s]+$')
+
 def strip_quote(s: str) -> str:
     if s.startswith('"') and s.endswith('"'):
         return s[1:-1]
     return s
 
 def decode_if_base64(s: str) -> str:
-    """Decode base64 string if valid, otherwise return original."""
-    if not s or len(s) % 4 != 0:
+    """
+    Attempts to decode a base64-encoded string.
+    TP-Link Tapo cloud API sometimes returns device names and aliases as base64-encoded strings.
+    This function heuristically detects and decodes them, falling back to the original string if decoding fails.
+    """
+    if not s:
         return s
 
-    if not re.compile(r'^[A-Za-z0-9+/]*={0,2}$').match(s):
+    # Check if string matches base64 pattern (alphanumeric + +/ and optional padding)
+    if not BASE64_PATTERN.match(s):
         return s
 
     try:
         decoded = base64.b64decode(s)
         decoded_str = decoded.decode('utf-8')
+
+        # Verify decoded string contains printable characters (avoid false positives from binary data)
+        if not PRINTABLE_PATTERN.match(decoded_str):
+            return s
+
         return decoded_str
-    except:
+    except (binascii.Error, UnicodeDecodeError):
         return s
 
 tapo_email = strip_quote(os.environ.get('TAPO_EMAIL', ''))
