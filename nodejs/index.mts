@@ -168,6 +168,19 @@ async function _eufy() {
     await writeApi.writePoints(points);
 }
 
+function decodeIfBase64(s: string): string {
+    if (!s || s.length % 4 !== 0) return s;
+
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return s;
+
+    try {
+        const decoded = Buffer.from(s, 'base64').toString('utf-8');
+        return decoded;
+    } catch {
+        return s;
+    }
+}
+
 async function tapo() {
     try {
         console.log('INFO', '[tapo]', 'Starting TP-Link Tapo devices discovery...');
@@ -194,21 +207,22 @@ async function _tapo() {
         
         for (const deviceInfo of devices) {
             try {
-                console.log('INFO', '[tapo]', `Connecting to device: ${deviceInfo.alias} (${deviceInfo.deviceMac})`);
-                
+                const decodedAlias = decodeIfBase64(deviceInfo.alias);
+                console.log('INFO', '[tapo]', `Connecting to device: ${decodedAlias} (${deviceInfo.deviceMac})`);
+
                 // Login to the individual device
                 const device = await loginDevice(tapoEmail, tapoPassword, deviceInfo);
-                
+
                 // Get device info and status
                 const deviceInfoResponse = await device.getDeviceInfo();
                 const deviceUsage = await device.getEnergyUsage().catch(() => null); // Some devices may not support energy usage
-                
-                console.log('INFO', '[tapo]', `Device ${deviceInfo.alias} - Power: ${deviceInfoResponse.device_on ? 'ON' : 'OFF'}`);
-                
+
+                console.log('INFO', '[tapo]', `Device ${decodedAlias} - Power: ${deviceInfoResponse.device_on ? 'ON' : 'OFF'}`);
+
                 const point = new Point('tapo_device')
                     .tag('device_id', deviceInfo.deviceId)
                     .tag('device_mac', deviceInfo.deviceMac)
-                    .tag('device_alias', deviceInfo.alias || deviceInfo.deviceMac)
+                    .tag('device_alias', decodedAlias || deviceInfo.deviceMac)
                     .tag('device_model', deviceInfo.deviceModel)
                     .tag('device_type', deviceInfo.deviceType)
                     .booleanField('device_on', deviceInfoResponse.device_on)
@@ -233,7 +247,8 @@ async function _tapo() {
                 points.push(point);
                 
             } catch (deviceError) {
-                console.error('ERROR', '[tapo]', `Failed to get data from device ${deviceInfo.alias}:`, deviceError);
+                const decodedAlias = decodeIfBase64(deviceInfo.alias);
+                console.error('ERROR', '[tapo]', `Failed to get data from device ${decodedAlias}:`, deviceError);
             }
         }
         

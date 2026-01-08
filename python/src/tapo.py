@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import logging
 import os
+import re
 import aiohttp
 from typing import List, Dict, Any
 
@@ -18,6 +20,21 @@ def strip_quote(s: str) -> str:
     if s.startswith('"') and s.endswith('"'):
         return s[1:-1]
     return s
+
+def decode_if_base64(s: str) -> str:
+    """Decode base64 string if valid, otherwise return original."""
+    if not s or len(s) % 4 != 0:
+        return s
+
+    if not re.compile(r'^[A-Za-z0-9+/]*={0,2}$').match(s):
+        return s
+
+    try:
+        decoded = base64.b64decode(s)
+        decoded_str = decoded.decode('utf-8')
+        return decoded_str
+    except:
+        return s
 
 tapo_email = strip_quote(os.environ.get('TAPO_EMAIL', ''))
 tapo_password = strip_quote(os.environ.get('TAPO_PASSWORD', ''))
@@ -66,8 +83,8 @@ async def _tapo():
                     device_type = cloud_device.deviceType
                     device_model = cloud_device.deviceModel
                     device_id = cloud_device.deviceId
-                    device_name = cloud_device.deviceName
-                    device_alias = cloud_device.alias
+                    device_name = decode_if_base64(cloud_device.deviceName)
+                    device_alias = decode_if_base64(cloud_device.alias)
                     
                     logger.debug(f"[tapo] Processing device: {device_name} ({device_model}) at {device_ip}")
                     
