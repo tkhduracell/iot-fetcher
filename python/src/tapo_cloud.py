@@ -55,11 +55,6 @@ async def _tapo():
                 discovered_devices = devices_result.get()
                 logger.info(f"[tapo_cloud] Found {len(discovered_devices)} TAPO devices via cloud")
 
-                # Add device count metric
-                device_count_point = Point("tapo_cloud_device_count") \
-                    .field("count", len(discovered_devices))
-                points.append(device_count_point)
-                
                 for cloud_device in discovered_devices:
                     device_ip = cloud_device.ipAddress
                     device_mac = cloud_device.deviceMac
