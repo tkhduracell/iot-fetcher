@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import useFluxQuery from './useFluxQuery';
+import useInfluxQLQuery from './useInfluxQLQuery';
 
 export interface LatestValueQueryParams {
   bucket?: string;
@@ -12,23 +12,47 @@ export interface LatestValueQueryParams {
 }
 
 function useLatestValueQuery({ bucket = "irisgatan", measurement, field, filter = {}, window = "5m", range = "-15m", reload }: LatestValueQueryParams) {
-  const fullFilter = useMemo(() => ({
-    '_measurement': measurement,
-    '_field': field,
-    ...filter
-  }), [measurement, field, filter]);
 
-  const filterQuery = useMemo(() => Object.entries(fullFilter)
-    .map(([k,v]) => `|> filter(fn: (r) => r["${k}"] == "${v}") `)
-    .join('\n    '), [fullFilter]);
+  const influxQLQuery = useMemo(() => {
+    // Build WHERE clause
+    const whereClauses = [`time > now() ${range}`];
 
-  const fluxQuery = useMemo(() => `from(bucket: "${bucket}")
-    |> range(start: ${range})
-    ${filterQuery}
-    |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
-    |> yield(name: "last")`, [bucket, range, filterQuery, window]);
+    Object.entries(filter).forEach(([key, value]) => {
+      whereClauses.push(`"${key}" = '${value}'`);
+    });
 
-  return useFluxQuery({ fluxQuery: fluxQuery.toString(), reloadInterval: reload });
+    const whereClause = whereClauses.join(' AND ');
+
+    // Convert window format (5m -> 5m, 1h -> 1h, etc.)
+    // InfluxQL uses same format as Flux for time durations
+
+    // Build InfluxQL query: get last value within time windows
+    return `SELECT LAST("${field}") AS value, "${field}" AS _value
+            FROM "${measurement}"
+            WHERE ${whereClause}
+            GROUP BY time(${window})
+            ORDER BY time DESC
+            LIMIT 1`;
+  }, [measurement, field, filter, window, range]);
+
+  const { initialLoading, loading, error, result } = useInfluxQLQuery({
+    query: influxQLQuery,
+    database: bucket,
+    reloadInterval: reload
+  });
+
+  // Transform result to match Flux format for backward compatibility
+  const transformedResult = useMemo(() => {
+    return result.map(row => ({
+      _measurement: measurement,
+      _field: field,
+      _time: row._time,
+      _value: row._value ?? row.value,
+      ...filter
+    }));
+  }, [result, measurement, field, filter]);
+
+  return { initialLoading, loading, error, result: transformedResult };
 }
 
 export default useLatestValueQuery;

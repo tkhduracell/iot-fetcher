@@ -2,7 +2,7 @@ import logging
 import requests
 import os
 
-from influx import write_influx, Point, WritePrecision
+from influx import write_influx, Point
 
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
@@ -64,8 +64,7 @@ def _airquality():
                       .field("aqi", index['aqi'])
                       .field("dominant_pollutant",
                              index['dominantPollutant'])
-                      .time(json_data['dateTime'],
-                            write_precision=WritePrecision.S))
+                      .time(json_data['dateTime']))
 
     # Extract pollutant concentration data
     for pollutant in json_data.get('pollutants', []):
@@ -74,7 +73,6 @@ def _airquality():
                       .tag("name", pollutant['fullName'])
                       .field("concentration", pollutant['concentration']['value'])
                       .field("units", pollutant['concentration']['units'])
-                      .time(json_data['dateTime'],
-                            write_precision=WritePrecision.S))
+                      .time(json_data['dateTime']))
 
     write_influx(points)

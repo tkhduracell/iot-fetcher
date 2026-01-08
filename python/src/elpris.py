@@ -3,7 +3,7 @@ from typing import Dict, List, TypedDict
 from datetime import datetime, timedelta
 import requests
 
-from influx import write_influx, Point, WritePrecision
+from influx import write_influx, Point
 
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
@@ -58,6 +58,6 @@ def _elpris():
                       .field("SEK_per_kWh", float(p['SEK_per_kWh']))
                       .field("100th_SEK_per_kWh", round(float(p['SEK_per_kWh']) * 100))
                       .field("EUR_per_kWh", float(p['EUR_per_kWh']))
-                      .time(p['time_start'], write_precision=WritePrecision.S)
+                      .time(p['time_start'])
                       for p in values]
             write_influx(points)

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import useFluxQuery from '../hooks/useFluxQuery';
+import useInfluxQLQuery from '../hooks/useInfluxQLQuery';
 import { startOfDay, endOfDay, differenceInMinutes } from 'date-fns';
 
 type Point = {
@@ -7,6 +7,7 @@ type Point = {
   _field: string;
   _time: string;
   _value: number | null;
+  value?: number;
 }
 
 const Wrapper = (props: { children: React.ReactNode }) => {
@@ -21,31 +22,32 @@ const EnergyPriceBar: React.FC = () => {
   const bucket = 'irisgatan';
   const measurement = 'energy_price';
   const field = '100th_SEK_per_kWh';
-  const filter = { area: 'SE4' };
+  const filterTag = 'SE4';
 
   const start = startOfDay(new Date());
   const end = endOfDay(new Date());
 
-  const fluxQuery = useMemo(() => {
-    const filterQuery = Object.entries(filter)
-      .map(([k, v]) => `|> filter(fn: (r) => r["${k}"] == "${v}")`)
-      .join('\n    ');
+  const influxQLQuery = useMemo(() => {
+    // InfluxQL query to get hourly mean values for today
+    const startStr = start.toISOString();
+    const endStr = end.toISOString();
 
-    return `from(bucket: "${bucket}")
-      |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
-      |> filter(fn: (r) => r["_measurement"] == "${measurement}" and r["_field"] == "${field}")
-      ${filterQuery}
-      |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
-      |> yield(name: "mean")
-    `;
-  }, [bucket, measurement, field, filter, start, end]);
+    return `SELECT MEAN("${field}") AS value
+            FROM "${measurement}"
+            WHERE time >= '${startStr}' AND time < '${endStr}' AND "area" = '${filterTag}'
+            GROUP BY time(1h)
+            ORDER BY time ASC`;
+  }, [measurement, field, filterTag, start, end]);
 
-  const { initialLoading, error, result } = useFluxQuery({ fluxQuery });
+  const { initialLoading, error, result } = useInfluxQLQuery({
+    query: influxQLQuery,
+    database: bucket
+  });
 
   if (initialLoading && !error) return <Wrapper>Hämtar energipriser...</Wrapper>;
   if (error) return <Wrapper>Fel uppstod vid laddning: {error.message}</Wrapper>;
 
-  const values = result.map(p => p._value).filter(v => v !== undefined && v !== null) as number[];
+  const values = result.map(p => p.value).filter(v => v !== undefined && v !== null) as number[];
   if (values.length === 0) {
     return <Wrapper>Inga energipriser tillgängliga.</Wrapper>;
   }
@@ -62,10 +64,10 @@ const EnergyPriceBar: React.FC = () => {
       return 'bg-red-400 dark:bg-red-700';
     }
   };
-  
+
   const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-    
+
   const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
 
       return (
@@ -77,17 +79,18 @@ const EnergyPriceBar: React.FC = () => {
           </div>
           <div className="w-full flex gap-1 flex-wrap">
             {result.map((point: Point) => {
-              const colorClass = getBucketColorClass(point._value);
+              const value = point.value ?? point._value;
+              const colorClass = getBucketColorClass(value);
               const time = new Date(point._time);
               const diff = differenceInMinutes(time, Date.now());
               const isNow = ( diff < 59 &&  diff > 0 );
               return (
-                <div className='flex flex-1 flex-col justify-end' key={[point._measurement, point._field, point._time].join('|')}>
+                <div className='flex flex-1 flex-col justify-end' key={[measurement, field, point._time].join('|')}>
                   <div className={
                     `${colorClass} rounded p-0 text-[10px] flex
                     text-center text-gray-600 justify-center items-center
                     dark:text-gray-300 ${isNow ? 'h-5' : 'h-1.5'}`}>
-                      { isNow && `${point._value?.toFixed(0)}` }
+                      { isNow && `${value?.toFixed(0)}` }
                   </div>
                 </div>
               );

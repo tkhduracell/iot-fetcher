@@ -2,24 +2,26 @@ import logging
 import os
 from typing import List
 
-from influxdb_client.client.influxdb_client import InfluxDBClient
-from influxdb_client.client.write.point import Point
-from influxdb_client.client.write_api import SYNCHRONOUS, ASYNCHRONOUS
-from influxdb_client.domain.write_precision import WritePrecision
+from influxdb_client_3 import InfluxDBClient3, Point
 
-# InfluxDB configuration
-influx_host = os.environ['INFLUX_HOST'] or "192.168.67.52:6666"
-influx_token = os.environ['INFLUX_TOKEN'] or ''
-influx_org = os.environ['INFLUX_ORG'] or 'home'
-influx_bucket = os.environ['INFLUX_BUCKET'] or 'irisgatan'
+# InfluxDB v3 Cloud configuration
+influx_host = os.environ.get('INFLUX_HOST', '')
+influx_token = os.environ.get('INFLUX_TOKEN', '')
+influx_database = os.environ.get('INFLUX_DATABASE', 'irisgatan')
 
 
 def write_influx(points: List[Point]):
-    logging.debug("Connecting to InfluxDB...")
-    influx_client = InfluxDBClient(
-        url=f"http://{influx_host}", token=influx_token, debug=False)
+    if not influx_host or not influx_token:
+        logging.error("INFLUX_HOST and INFLUX_TOKEN must be configured for v3 Cloud")
+        return
 
-    write_api = influx_client.write_api(write_options=ASYNCHRONOUS)
+    logging.debug("Connecting to InfluxDB v3 Cloud...")
+
+    client = InfluxDBClient3(
+        host=influx_host,
+        token=influx_token,
+        database=influx_database
+    )
 
     if len(points) > 4:
         logging.info("Writing points to InfluxDB... %s (and %d more)",
@@ -29,10 +31,7 @@ def write_influx(points: List[Point]):
                      ', '.join(map(lambda x: f"{x._name} ({len(x._fields)} fields, {len(x._tags)} tags)", points)))
 
     try:
-        write_api.write(bucket=influx_bucket,
-                        org=influx_org,
-                        record=points,
-                        write_precision=WritePrecision.S)
+        client.write(record=points, write_precision='s')
     except Exception as e:
         logging.warning("Unable to write the values: %s %s",
                         ', '.join(map(lambda x: str(x), points)), e)

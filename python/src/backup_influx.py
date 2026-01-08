@@ -9,11 +9,12 @@ from google.cloud import storage
 from typing import List
 
 # Configuration from environment variables
-INFLUX_HOST = os.environ['INFLUX_HOST']
-INFLUX_TOKEN = os.environ['INFLUX_TOKEN']
-INFLUX_ORG = os.environ['INFLUX_ORG']
-GOOGLE_BACKUP_URI = os.environ['GOOGLE_BACKUP_URI']
-GOOGLE_SERVICE_ACCOUNT = os.environ['GOOGLE_SERVICE_ACCOUNT'].strip('\'')
+# NOTE: This backup script is for v2 only and will be rewritten for v3 Cloud in Phase 7
+INFLUX_HOST = os.environ.get('INFLUX_HOST', '')
+INFLUX_TOKEN = os.environ.get('INFLUX_TOKEN', '')
+INFLUX_ORG = os.environ.get('INFLUX_ORG', '')  # v2 only - not needed for v3
+GOOGLE_BACKUP_URI = os.environ.get('GOOGLE_BACKUP_URI', '')
+GOOGLE_SERVICE_ACCOUNT = os.environ.get('GOOGLE_SERVICE_ACCOUNT', '').strip('\'')
 
 
 def setup_gcs_client():
@@ -118,8 +119,13 @@ def upload_to_gcs(local_file: Path, gcs_client: storage.Client):
 
 def backup_influx():
     """Main backup function to backup all InfluxDB buckets to GCS."""
+    # Skip backup if v2-specific env vars are missing (v3 Cloud migration in progress)
+    if not INFLUX_ORG or not GOOGLE_BACKUP_URI:
+        logging.warning("Backup skipped: v2 backup requires INFLUX_ORG and GOOGLE_BACKUP_URI (will be rewritten for v3 Cloud)")
+        return
+
     logging.info("Starting InfluxDB backup process...")
-    
+
     try:
         # Setup GCS client
         gcs_client = setup_gcs_client()

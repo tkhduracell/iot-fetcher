@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 
 import { ConfigValue } from '../types';
-import useFluxQuery from '../hooks/useFluxQuery';
+import useInfluxQLQuery from '../hooks/useInfluxQLQuery';
 import { endOfYesterday, startOfYesterday } from 'date-fns';
 
 interface LatestValueFullscreenProps extends ConfigValue {
@@ -10,10 +10,10 @@ interface LatestValueFullscreenProps extends ConfigValue {
   bucket?: string;
 }
 
-const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({ 
-  open, onClose, 
+const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
+  open, onClose,
   bucket = "irisgatan",
-  filter,
+  filter = {},
   measurement,
   title,
   field,
@@ -21,25 +21,34 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
 }) => {
   if (!open) return null;
 
-  filter = {
-      '_measurement': measurement,
-      '_field': field,
-      ...filter
-  }
+  const influxQLQuery = useMemo(() => {
+    const start = startOfYesterday();
+    const end = endOfYesterday();
 
-  const filterQuery = Object.entries(filter)
-    .map(([k,v]) => `|> filter(fn: (r) => r["${k}"] == "${v}") `)
-    .join('\n    ')
-  
-  const start = startOfYesterday();
-  const end = endOfYesterday();
-  const fluxQuery = `from(bucket: "${bucket}")
-    |> range(start: ${start.toISOString()}, stop: ${end.toISOString()})
-    ${ filterQuery }
-    |> aggregateWindow(every: ${window}, fn: last, createEmpty: false)
-    |> yield(name: "last")`;
+    // Build WHERE clause
+    const whereClauses = [
+      `time >= '${start.toISOString()}'`,
+      `time < '${end.toISOString()}'`
+    ];
 
-  const { initialLoading, error, result } = useFluxQuery({ fluxQuery: fluxQuery.toString() });
+    Object.entries(filter).forEach(([key, value]) => {
+      whereClauses.push(`"${key}" = '${value}'`);
+    });
+
+    const whereClause = whereClauses.join(' AND ');
+
+    return `SELECT LAST("${field}") AS value
+            FROM "${measurement}"
+            WHERE ${whereClause}
+            GROUP BY time(${window})
+            ORDER BY time DESC
+            LIMIT 10`;
+  }, [measurement, field, filter, window]);
+
+  const { initialLoading, error, result } = useInfluxQLQuery({
+    query: influxQLQuery,
+    database: bucket
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
@@ -63,7 +72,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
             { field }
             </div>
           <div className="text-6xl">
-            { result.map((item) => <div>{item._value}</div>) }
+            { result.map((item, idx) => <div key={idx}>{item.value}</div>) }
           </div>
         </div>
       </div>
