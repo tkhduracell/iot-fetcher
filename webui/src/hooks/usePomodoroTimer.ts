@@ -1,7 +1,25 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 
 export type PomodoroPhase = 'work' | 'break';
 export type PomodoroState = 'idle' | 'running' | 'paused';
+
+// Internal timer state for useReducer
+interface TimerState {
+  phase: PomodoroPhase;
+  state: PomodoroState;
+  timeRemaining: number;
+  wasTransitioned: boolean;
+}
+
+// Actions for timer reducer
+type TimerAction =
+  | { type: 'START' }
+  | { type: 'PAUSE' }
+  | { type: 'RESET' }
+  | { type: 'TICK' }
+  | { type: 'TRANSITION_PHASE' }
+  | { type: 'SKIP_TO_NEXT_PHASE' }
+  | { type: 'CLEAR_TRANSITION_FLAG' };
 
 // Durations in seconds
 const WORK_DURATION = 25 * 60; // 25 minutes
@@ -32,7 +50,8 @@ function loadPersistedState(): PersistedState | null {
       typeof parsed.timeRemaining === 'number' &&
       parsed.timeRemaining >= 0 &&
       typeof parsed.lastUpdated === 'number' &&
-      parsed.lastUpdated > 0
+      parsed.lastUpdated > 0 &&
+      parsed.lastUpdated <= Date.now() // Prevent future timestamps
     ) {
       return parsed;
     }
@@ -108,10 +127,64 @@ function playSound(audio: HTMLAudioElement) {
   audio.play().catch(err => console.error('Failed to play sound:', err));
 }
 
-function getInitialState(): { phase: PomodoroPhase; state: PomodoroState; timeRemaining: number } {
+// Reducer for timer state management
+function timerReducer(state: TimerState, action: TimerAction): TimerState {
+  switch (action.type) {
+    case 'START':
+      return { ...state, state: 'running' };
+
+    case 'PAUSE':
+      return { ...state, state: 'paused' };
+
+    case 'RESET':
+      return {
+        phase: 'work',
+        state: 'idle',
+        timeRemaining: WORK_DURATION,
+        wasTransitioned: false
+      };
+
+    case 'TICK':
+      return {
+        ...state,
+        timeRemaining: Math.max(0, state.timeRemaining - 1)
+      };
+
+    case 'TRANSITION_PHASE': {
+      const nextPhase: PomodoroPhase = state.phase === 'work' ? 'break' : 'work';
+      const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+      return {
+        phase: nextPhase,
+        state: 'running',
+        timeRemaining: nextDuration,
+        wasTransitioned: false
+      };
+    }
+
+    case 'SKIP_TO_NEXT_PHASE': {
+      if (state.state === 'idle') return state;
+      const nextPhase: PomodoroPhase = state.phase === 'work' ? 'break' : 'work';
+      const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+      return {
+        phase: nextPhase,
+        state: 'running',
+        timeRemaining: nextDuration,
+        wasTransitioned: false
+      };
+    }
+
+    case 'CLEAR_TRANSITION_FLAG':
+      return { ...state, wasTransitioned: false };
+
+    default:
+      return state;
+  }
+}
+
+function getInitialState(): TimerState {
   const persisted = loadPersistedState();
   if (!persisted) {
-    return { phase: 'work', state: 'idle', timeRemaining: WORK_DURATION };
+    return { phase: 'work', state: 'idle', timeRemaining: WORK_DURATION, wasTransitioned: false };
   }
 
   // Calculate elapsed time since last update
@@ -121,10 +194,24 @@ function getInitialState(): { phase: PomodoroPhase; state: PomodoroState; timeRe
   // If the timer was running, subtract elapsed time
   if (persisted.state === 'running') {
     const newTimeRemaining = Math.max(0, persisted.timeRemaining - elapsedSeconds);
+
+    // Timer expired during reload - calculate post-transition state
+    if (newTimeRemaining === 0) {
+      const nextPhase: PomodoroPhase = persisted.phase === 'work' ? 'break' : 'work';
+      const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
+      return {
+        phase: nextPhase,
+        state: 'running',
+        timeRemaining: nextDuration,
+        wasTransitioned: true  // Flag to skip notification/sound
+      };
+    }
+
     return {
       phase: persisted.phase,
       state: persisted.state,
-      timeRemaining: newTimeRemaining
+      timeRemaining: newTimeRemaining,
+      wasTransitioned: false
     };
   }
 
@@ -132,43 +219,38 @@ function getInitialState(): { phase: PomodoroPhase; state: PomodoroState; timeRe
   return {
     phase: persisted.phase,
     state: persisted.state,
-    timeRemaining: persisted.timeRemaining
+    timeRemaining: persisted.timeRemaining,
+    wasTransitioned: false
   };
 }
 
 export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
-  const initialState = getInitialState();
-  const [phase, setPhase] = useState<PomodoroPhase>(initialState.phase);
-  const [state, setState] = useState<PomodoroState>(initialState.state);
-  const [timeRemaining, setTimeRemaining] = useState(initialState.timeRemaining);
+  const [timerState, dispatch] = useReducer(timerReducer, null, getInitialState);
   const [showNotification, setShowNotification] = useState(false);
   const notificationTimeoutRef = useRef<number | null>(null);
 
   // Persist state to sessionStorage whenever it changes
   useEffect(() => {
-    if (state === 'idle') {
+    if (timerState.state === 'idle') {
       clearPersistedState();
-    } else {
-      savePersistedState(phase, state, timeRemaining);
+    } else if (!timerState.wasTransitioned) {
+      savePersistedState(timerState.phase, timerState.state, timerState.timeRemaining);
     }
-  }, [phase, state, timeRemaining]);
+  }, [timerState]);
 
   const start = useCallback(() => {
-    setState('running');
+    dispatch({ type: 'START' });
     speakOnSonos("let's go");
   }, []);
 
   const pause = useCallback(() => {
-    setState('paused');
+    dispatch({ type: 'PAUSE' });
     speakOnSonos("let's pause");
   }, []);
 
   const reset = useCallback(() => {
-    setState('idle');
-    setPhase('work');
-    setTimeRemaining(WORK_DURATION);
+    dispatch({ type: 'RESET' });
     setShowNotification(false);
-    clearPersistedState();
     if (notificationTimeoutRef.current) {
       clearTimeout(notificationTimeoutRef.current);
       notificationTimeoutRef.current = null;
@@ -183,55 +265,50 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
     }
   }, []);
 
-  // Helper function to transition to the next phase
-  const transitionToNextPhase = useCallback(() => {
-    const nextPhase: PomodoroPhase = phase === 'work' ? 'break' : 'work';
-    const nextDuration = nextPhase === 'work' ? WORK_DURATION : BREAK_DURATION;
-    
-    // Play sound based on completed phase
-    playSound(phase === 'work' ? workCompleteAudio : breakCompleteAudio);
-    
-    // Show notification
-    setShowNotification(true);
-    
-    // Auto-dismiss notification after delay
-    if (notificationTimeoutRef.current) {
-      clearTimeout(notificationTimeoutRef.current);
-    }
-    notificationTimeoutRef.current = window.setTimeout(() => {
-      setShowNotification(false);
-      notificationTimeoutRef.current = null;
-    }, NOTIFICATION_DISMISS_DELAY);
-    
-    // Transition to next phase and reset timer
-    setPhase(nextPhase);
-    setTimeRemaining(nextDuration);
-  }, [phase]);
-
   const skipToNextPhase = useCallback(() => {
-    if (state === 'idle') return;
-    transitionToNextPhase();
-    setState('running');
-  }, [state, transitionToNextPhase]);
+    dispatch({ type: 'SKIP_TO_NEXT_PHASE' });
+  }, []);
 
   // Timer effect - only decrements time
   useEffect(() => {
-    if (state !== 'running') return;
+    if (timerState.state !== 'running') return;
 
     const interval = setInterval(() => {
-      setTimeRemaining((prev) => (prev > 0 ? prev - 1 : prev));
+      dispatch({ type: 'TICK' });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [state]);
+  }, [timerState.state]);
 
   // Phase transition effect - handles transitions when timer reaches zero
   useEffect(() => {
-    if (state !== 'running') return;
-    if (timeRemaining === 0) {
-      transitionToNextPhase();
+    if (timerState.state !== 'running') return;
+    if (timerState.timeRemaining !== 0) return;
+
+    // Only play sound and show notification if NOT a restored transition
+    if (!timerState.wasTransitioned) {
+      // Play sound based on completed phase
+      playSound(timerState.phase === 'work' ? workCompleteAudio : breakCompleteAudio);
+
+      // Show notification
+      setShowNotification(true);
+
+      // Auto-dismiss notification after delay
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+      notificationTimeoutRef.current = window.setTimeout(() => {
+        setShowNotification(false);
+        notificationTimeoutRef.current = null;
+      }, NOTIFICATION_DISMISS_DELAY);
+    } else {
+      // Clear the flag after first render
+      dispatch({ type: 'CLEAR_TRANSITION_FLAG' });
     }
-  }, [timeRemaining, state, transitionToNextPhase]);
+
+    // Transition to next phase
+    dispatch({ type: 'TRANSITION_PHASE' });
+  }, [timerState.timeRemaining, timerState.state, timerState.phase, timerState.wasTransitioned]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -243,7 +320,7 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
   }, []);
 
   return [
-    { phase, state, timeRemaining, showNotification },
+    { phase: timerState.phase, state: timerState.state, timeRemaining: timerState.timeRemaining, showNotification },
     { start, pause, reset, dismissNotification, skipToNextPhase }
   ];
 }
