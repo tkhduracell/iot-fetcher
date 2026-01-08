@@ -60,7 +60,7 @@ services:
       - database
 
   tibber-influx-bridge:
-    image: tkhduracell/tibber-influxdb-bridge:latest
+    image: tkhduracell/tibber-influxdb-bridge:v1.1.1
     container_name: tibber-influxdb-bridge
     restart: unless-stopped
     depends_on:
