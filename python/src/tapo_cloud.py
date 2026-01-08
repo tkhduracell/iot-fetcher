@@ -1,6 +1,9 @@
 import asyncio
+import base64
+import binascii
 import logging
 import os
+import re
 import aiohttp
 from typing import List, Dict, Any
 
@@ -14,10 +17,41 @@ from influx import write_influx, Point
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
+# Regex pattern for detecting base64-encoded strings
+BASE64_PATTERN = re.compile(r'^[A-Za-z0-9+/]*={0,2}$')
+
+# Regex pattern for verifying decoded string contains only printable ASCII characters
+PRINTABLE_PATTERN = re.compile(r'^[\x20-\x7E\s]+$')
+
 def strip_quote(s: str) -> str:
     if s.startswith('"') and s.endswith('"'):
         return s[1:-1]
     return s
+
+def decode_if_base64(s: str) -> str:
+    """
+    Attempts to decode a base64-encoded string.
+    TP-Link Tapo cloud API sometimes returns device names and aliases as base64-encoded strings.
+    This function heuristically detects and decodes them, falling back to the original string if decoding fails.
+    """
+    if not s:
+        return s
+
+    # Check if string matches base64 pattern (alphanumeric + +/ and optional padding)
+    if not BASE64_PATTERN.match(s):
+        return s
+
+    try:
+        decoded = base64.b64decode(s)
+        decoded_str = decoded.decode('utf-8')
+
+        # Verify decoded string contains printable characters (avoid false positives from binary data)
+        if not PRINTABLE_PATTERN.match(decoded_str):
+            return s
+
+        return decoded_str
+    except (binascii.Error, UnicodeDecodeError):
+        return s
 
 tapo_email = strip_quote(os.environ.get('TAPO_EMAIL', ''))
 tapo_password = strip_quote(os.environ.get('TAPO_PASSWORD', ''))
@@ -61,8 +95,8 @@ async def _tapo():
                     device_type = cloud_device.deviceType
                     device_model = cloud_device.deviceModel
                     device_id = cloud_device.deviceId
-                    device_name = cloud_device.deviceName
-                    device_alias = cloud_device.alias
+                    device_name = decode_if_base64(cloud_device.deviceName)
+                    device_alias = decode_if_base64(cloud_device.alias)
 
                     logger.info(f"[tapo_cloud] Processing device: {device_name} ({device_model}) at {device_ip}")
                     
