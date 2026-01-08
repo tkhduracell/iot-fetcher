@@ -22,10 +22,10 @@ WORKDIR /app
 COPY --from=nodejs-build /usr/local/bin/node /usr/local/bin/node
 RUN node -v
 
-# Install InfluxDB CLI
+# Install InfluxDB CLI and net-tools (for arp command needed by tp-link-tapo-connect)
 RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor > /etc/apt/trusted.gpg.d/influxdata.gpg && \
     echo 'deb https://repos.influxdata.com/debian stable main' > /etc/apt/sources.list.d/influxdata.list && \
-    apt-get update && apt-get install -y influxdb2-client && \
+    apt-get update && apt-get install -y influxdb2-client net-tools && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Python deps
