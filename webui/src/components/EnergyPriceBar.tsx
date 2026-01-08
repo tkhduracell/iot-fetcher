@@ -50,9 +50,6 @@ const EnergyPriceBar: React.FC = () => {
     return <Wrapper>Inga energipriser tillgängliga.</Wrapper>;
   }
 
-  const minValue = Math.min(...values, 0);
-  const maxValue = Math.max(...values, 150);
-
   const getBucketColorClass = (value: number | null): string => {
     if (value === undefined || value === null) {
       return 'bg-gray-200 dark:bg-gray-700';
