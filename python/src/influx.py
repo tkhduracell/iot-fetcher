@@ -2,16 +2,19 @@ import logging
 import os
 from typing import List
 
-from influxdb_client_3 import InfluxDBClient3, Point, write_client_options
-from influxdb_client_3.write_client.client.write_api import ASYNCHRONOUS
+from influxdb_client_3 import InfluxDBClient3, Point
 
 # InfluxDB v3 Cloud configuration
-influx_host = os.environ.get('INFLUX_HOST') or "192.168.67.52:6666"
-influx_token = os.environ.get('INFLUX_TOKEN') or ''
-influx_database = os.environ.get('INFLUX_DATABASE') or 'irisgatan'
+influx_host = os.environ.get('INFLUX_HOST', '')
+influx_token = os.environ.get('INFLUX_TOKEN', '')
+influx_database = os.environ.get('INFLUX_DATABASE', 'irisgatan')
 
 
 def write_influx(points: List[Point]):
+    if not influx_host or not influx_token:
+        logging.error("INFLUX_HOST and INFLUX_TOKEN must be configured for v3 Cloud")
+        return
+
     logging.debug("Connecting to InfluxDB v3 Cloud...")
 
     client = InfluxDBClient3(
