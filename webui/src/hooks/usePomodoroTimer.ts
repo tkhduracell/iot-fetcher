@@ -42,11 +42,11 @@ function loadPersistedState(): PersistedState | null {
     if (!stored) return null;
     const parsed = JSON.parse(stored) as PersistedState;
     // Validate the parsed object has required fields and valid enum values
-    const validPhases: PomodoroPhase[] = ['work', 'break'];
-    const validStates: PomodoroState[] = ['idle', 'running', 'paused'];
+    const validPhases = ['work', 'break'] as const;
+    const validStates = ['idle', 'running', 'paused'] as const;
     if (
-      validPhases.includes(parsed.phase) &&
-      validStates.includes(parsed.state) &&
+      (validPhases as readonly string[]).includes(parsed.phase) &&
+      (validStates as readonly string[]).includes(parsed.state) &&
       typeof parsed.timeRemaining === 'number' &&
       parsed.timeRemaining >= 0 &&
       typeof parsed.lastUpdated === 'number' &&
@@ -56,7 +56,8 @@ function loadPersistedState(): PersistedState | null {
       return parsed;
     }
     return null;
-  } catch {
+  } catch (error) {
+    console.error('Failed to load persisted Pomodoro state:', error);
     return null;
   }
 }
@@ -70,16 +71,16 @@ function savePersistedState(phase: PomodoroPhase, state: PomodoroState, timeRema
   };
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore storage errors
+  } catch (error) {
+    console.error('Failed to save Pomodoro state to sessionStorage:', error);
   }
 }
 
 function clearPersistedState(): void {
   try {
     sessionStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // Ignore storage errors
+  } catch (error) {
+    console.error('Failed to clear Pomodoro state from sessionStorage:', error);
   }
 }
 
@@ -301,14 +302,14 @@ export function usePomodoroTimer(): [PomodoroTimerState, PomodoroTimerActions] {
         setShowNotification(false);
         notificationTimeoutRef.current = null;
       }, NOTIFICATION_DISMISS_DELAY);
+
+      // Transition to next phase
+      dispatch({ type: 'TRANSITION_PHASE' });
     } else {
-      // Clear the flag after first render
+      // Clear the flag without transitioning (already transitioned during reload)
       dispatch({ type: 'CLEAR_TRANSITION_FLAG' });
     }
-
-    // Transition to next phase
-    dispatch({ type: 'TRANSITION_PHASE' });
-  }, [timerState.timeRemaining, timerState.state, timerState.phase, timerState.wasTransitioned]);
+  }, [timerState.timeRemaining, timerState.state]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
