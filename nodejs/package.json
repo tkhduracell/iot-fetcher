@@ -25,5 +25,10 @@
   "devDependencies": {
     "@types/node": "^24.3.0",
     "esbuild": "^0.25.9"
+  },
+  "overrides": {
+    "axios": "^1.7.0",
+    "qs": "^6.14.1",
+    "get-ip-range": "^4.0.0"
   }
 }
