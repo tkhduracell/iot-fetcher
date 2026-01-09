@@ -42,7 +42,7 @@ services:
 
   # HTTPS reverse proxy for InfluxDB v3 (local)
   influx-proxy:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
+    build: ./influx-proxy
     container_name: caddy-influxdb-proxy
     restart: unless-stopped
     ports:
