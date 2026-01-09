@@ -38,7 +38,7 @@ services:
   #     - --object-store=file
   #     - --data-dir=/home/influxdb3/.influxdb3
 
-  # HTTPS reverse proxy for InfluxDB 2 (database)
+  # HTTPS reverse proxy for InfluxDB v3 Cloud
   influx-proxy:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
     container_name: caddy-influxdb-proxy
@@ -47,7 +47,6 @@ services:
       - "443:443"
       - "80:80"
     depends_on:
-      - database
       - iot-fetcher
 
   iot-fetcher:
@@ -56,15 +55,13 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    depends_on:
-      - database
 
   tibber-influx-bridge:
     image: tkhduracell/tibber-influxdb-bridge:1.1.1
     container_name: tibber-influxdb-bridge
     restart: unless-stopped
     depends_on:
-      - database
+      - influx-proxy
 
   garmin-influx-bridge:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
@@ -73,5 +70,5 @@ services:
     volumes:
       - garmin-tokens:/home/appuser/.garminconnect
     depends_on:
-      - database
+      - influx-proxy
 
