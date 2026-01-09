@@ -1,29 +1,11 @@
 version: "2.4"
 
 volumes:
-  database:
-  database-config:
   garmin-tokens:
   influx:
 
 services:
   database:
-    image: influxdb:2
-    container_name: influxdb
-    restart: unless-stopped
-    ports:
-      - "8086:8086"
-    volumes:
-      - database:/var/lib/influxdb
-      - database-config:/etc/influxdb2/influx-configs.txt
-    healthcheck:
-      test: influx ping || exit 1
-      interval: 30s
-      retries: 5
-      start_period: 20s
-      timeout: 10s
-
-  influx-3:
     build: ./influx-3
     container_name: influxdb-3
     restart: unless-stopped
@@ -50,7 +32,7 @@ services:
       - "80:80"
     depends_on:
       - iot-fetcher
-      - influx-3
+      - database
 
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
