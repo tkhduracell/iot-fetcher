@@ -23,22 +23,24 @@ services:
       start_period: 20s
       timeout: 10s
 
-  # influx-3:
-  #   image: influxdb:3-core
-  #   container_name: influxdb-3
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8181:8181"
-  #   volumes:
-  #     - influx:/home/influxdb3/.influxdb3
-  #   command: 
-  #     - influxdb3
-  #     - serve
-  #     - --node-id=rpi3
-  #     - --object-store=file
-  #     - --data-dir=/home/influxdb3/.influxdb3
+  influx-3:
+    build: ./influx-3
+    container_name: influxdb-3
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    volumes:
+      - influx:/home/influxdb3/.influxdb3
+    command:
+      - influxdb3
+      - serve
+      - --node-id=rpi3
+      - --object-store=google
+      - --bucket=filiplindqvist-com-ea66d.appspot.com
+      - --google-service-account=/home/influxdb3/.influxdb3/gcs-credentials.json
+      - --data-dir=/home/influxdb3/.influxdb3
 
-  # HTTPS reverse proxy for InfluxDB 2 (database)
+  # HTTPS reverse proxy for InfluxDB v3 (local)
   influx-proxy:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
     container_name: caddy-influxdb-proxy
@@ -47,8 +49,8 @@ services:
       - "443:443"
       - "80:80"
     depends_on:
-      - database
       - iot-fetcher
+      - influx-3
 
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
@@ -56,15 +58,13 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    depends_on:
-      - database
 
   tibber-influx-bridge:
     image: tkhduracell/tibber-influxdb-bridge:1.1.1
     container_name: tibber-influxdb-bridge
     restart: unless-stopped
     depends_on:
-      - database
+      - influx-proxy
 
   garmin-influx-bridge:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
@@ -73,5 +73,5 @@ services:
     volumes:
       - garmin-tokens:/home/appuser/.garminconnect
     depends_on:
-      - database
+      - influx-proxy
 

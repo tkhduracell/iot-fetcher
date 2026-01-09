@@ -1,0 +1,8 @@
+version: "2.4"
+
+services:
+  influx-3:
+    env_file: .env
+
+  influx-proxy:
+    env_file: .env
