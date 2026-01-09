@@ -27,6 +27,12 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 		header_up X-Forwarded-Proto {scheme}
 	}
 
+	reverse_proxy /api/v3/* {$INFLUX_TARGET} {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
 	reverse_proxy /metrics/* {$API_TARGET} {
 		header_up Host {host}
 		header_up X-Forwarded-For {remote}
