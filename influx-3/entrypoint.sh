@@ -12,8 +12,15 @@ if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
     echo "GCS credentials written to /home/influxdb3/.influxdb3/gcs-credentials.json"
 fi
 
-# Note: InfluxDB v3 Core doesn't support --bearer-token argument
-# Authentication can be configured after startup via the API
+# Setup admin token if provided
+if [ -n "$INFLUXDB3_ADMIN_TOKEN" ]; then
+    TOKEN_FILE="/home/influxdb3/.influxdb3/admin-token"
+    echo "$INFLUXDB3_ADMIN_TOKEN" > "$TOKEN_FILE"
+    chown influxdb3:influxdb3 "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE"
+    echo "Admin token configured"
+fi
+
 echo "Starting InfluxDB v3 Core as influxdb3 user..."
 
 # Use gosu to drop privileges and run as influxdb3 user
