@@ -21,6 +21,7 @@ services:
       - --bucket=filiplindqvist-com-ea66d.appspot.com
       - --google-service-account=/home/influxdb3/.influxdb3/gcs-credentials.json
       - --data-dir=/home/influxdb3/.influxdb3
+      - --admin-token-file=/home/influxdb3/.influxdb3/admin-token
 
   # HTTPS reverse proxy for InfluxDB v3 (local)
   influx-proxy:
