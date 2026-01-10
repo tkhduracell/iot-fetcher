@@ -12,13 +12,23 @@ if [ -n "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
     echo "GCS credentials written to /home/influxdb3/.influxdb3/gcs-credentials.json"
 fi
 
-# Setup admin token if provided
+# Setup admin token if provided - MUST be JSON format for InfluxDB v3 Core
 if [ -n "$INFLUXDB3_ADMIN_TOKEN" ]; then
     TOKEN_FILE="/home/influxdb3/.influxdb3/admin-token"
-    echo "$INFLUXDB3_ADMIN_TOKEN" > "$TOKEN_FILE"
+    # Calculate expiry (1 year from now in milliseconds)
+    EXPIRY_MS=$(($(date +%s) * 1000 + 31536000000))
+    # Write JSON format required by InfluxDB v3 Core
+    # Token must have apiv3_ prefix for compatibility
+    cat > "$TOKEN_FILE" <<EOF
+{
+  "token": "apiv3_${INFLUXDB3_ADMIN_TOKEN}",
+  "name": "_admin",
+  "expiry_millis": ${EXPIRY_MS}
+}
+EOF
     chown influxdb3:influxdb3 "$TOKEN_FILE"
     chmod 600 "$TOKEN_FILE"
-    echo "Admin token configured"
+    echo "Admin token configured (JSON format with apiv3_ prefix)"
 fi
 
 echo "Starting InfluxDB v3 Core as influxdb3 user..."
