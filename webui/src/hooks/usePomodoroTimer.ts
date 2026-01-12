@@ -84,13 +84,16 @@ function clearPersistedState(): void {
   }
 }
 
-// Sound URLs (external assets - could be moved to local /public directory for better reliability)
+// Sound URLs (external assets)
 const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/99591aa7-ec53-40fc-b6c4-f768f1a73881/d0794f38-b1c8-43f9-9ca3-432ad18a7710/preview.m4a';
 const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/dc07756a-54e3-4851-acc4-9fce465ee255/54252202-2ca1-45b3-963c-a3747597aac5/preview.m4a';
 
-// Pre-loaded audio instances for better performance and memory efficiency
+// Pre-loaded audio instances for better performance
 const workCompleteAudio = new Audio(WORK_COMPLETE_SOUND);
+workCompleteAudio.preload = 'auto';
+
 const breakCompleteAudio = new Audio(BREAK_COMPLETE_SOUND);
+breakCompleteAudio.preload = 'auto';
 
 // Sonos TTS configuration
 const SONOS_SPEAKER = 'Kontor';
@@ -124,8 +127,25 @@ export interface PomodoroTimerActions {
 }
 
 function playSound(audio: HTMLAudioElement) {
-  audio.currentTime = 0;
-  audio.play().catch(err => console.error('Failed to play sound:', err));
+  // Ensure audio is loaded before playing
+  if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    // Audio not ready, wait for it to load then play
+    const playWhenReady = () => {
+      audio.currentTime = 0;
+      audio.play().catch(() => {
+        // Silently handle playback errors - audio may be blocked by browser autoplay policy
+      });
+      audio.removeEventListener('canplaythrough', playWhenReady);
+    };
+    audio.addEventListener('canplaythrough', playWhenReady);
+    audio.load();
+  } else {
+    // Audio is ready, play immediately
+    audio.currentTime = 0;
+    audio.play().catch(() => {
+      // Silently handle playback errors - audio may be blocked by browser autoplay policy
+    });
+  }
 }
 
 // Reducer for timer state management
