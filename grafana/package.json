@@ -1,0 +1,15 @@
+{
+  "name": "iot-fetcher-grafana",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "generate": "node --disable-warning=ExperimentalWarning --experimental-strip-types --env-file=.env src/index.ts",
+    "build": "GRAFANA_SKIP_UPLOAD=1 node --disable-warning=ExperimentalWarning --experimental-strip-types src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "dependencies": {
+    "@grafana/grafana-foundation-sdk": "~11.6.0-cogv0.0.x.1769699379"
+  }
+}
