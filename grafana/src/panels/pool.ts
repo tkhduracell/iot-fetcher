@@ -2,7 +2,7 @@ import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-s
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
-import { INFLUXDB_DS, influxSql, influxRawSql } from '../datasource.ts';
+import { INFLUXDB_DS, influxSql } from '../datasource.ts';
 import {
   greenRedThresholds, thresholds, paletteColor,
   legendBottom, tooltipSingle,
@@ -78,7 +78,7 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenRedThresholds(80))
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .overrides([overrideDisplayAndColor('speed', 'Temperatur', 'blue')])
+    .overrides([overrideDisplayAndColor('speed', 'Varvtal', 'blue')])
     .withTarget(influxSql('B', 'pool_iqpump_motordata', 'speed'))
     .gridPos({ h: 7, w: 7, x: 17, y: 30 });
 

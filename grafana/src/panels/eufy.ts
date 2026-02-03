@@ -1,6 +1,5 @@
 import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-sdk/timeseries';
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
-import { PanelBuilder as TextBuilder } from '@grafana/grafana-foundation-sdk/text';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { INFLUXDB_DS, influxSql } from '../datasource.ts';
