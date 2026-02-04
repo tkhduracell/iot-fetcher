@@ -1,53 +1,50 @@
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 
-const INFLUXDB_DS_UID = process.env.INFLUXDB_DS_UID ?? 'influxdb3';
+const VM_DS_UID = process.env.VM_DS_UID ?? 'cfc7gnph2ojr4d';
 
-export const INFLUXDB_DS: dashboard.DataSourceRef = {
-  type: 'influxdb',
-  uid: INFLUXDB_DS_UID,
+export const VM_DS: dashboard.DataSourceRef = {
+  type: 'victoriametrics-metrics-datasource',
+  uid: VM_DS_UID,
 };
 
-interface InfluxDbQuery {
+interface VMQuery {
   refId: string;
   datasource: dashboard.DataSourceRef;
-  rawSql: string;
-  resultFormat: string;
-  dataset?: string;
-  table?: string;
+  expr: string;
+  legendFormat?: string;
+  range: boolean;
+  instant: boolean;
   _implementsDataqueryVariant(): void;
 }
 
-export class InfluxDbQueryBuilder implements cog.Builder<cog.Dataquery> {
-  private readonly internal: InfluxDbQuery;
+export class VMQueryBuilder implements cog.Builder<cog.Dataquery> {
+  private readonly internal: VMQuery;
 
   constructor(refId: string) {
     this.internal = {
       refId,
-      datasource: INFLUXDB_DS,
-      rawSql: '',
-      resultFormat: 'time_series',
+      datasource: VM_DS,
+      expr: '',
+      range: true,
+      instant: false,
       _implementsDataqueryVariant() {},
     };
   }
 
-  sql(rawSql: string): this {
-    this.internal.rawSql = rawSql;
+  expr(expression: string): this {
+    this.internal.expr = expression;
     return this;
   }
 
-  datasource(ds: dashboard.DataSourceRef): this {
-    this.internal.datasource = ds;
+  legendFormat(format: string): this {
+    this.internal.legendFormat = format;
     return this;
   }
 
-  resultFormat(format: string): this {
-    this.internal.resultFormat = format;
-    return this;
-  }
-
-  table(table: string): this {
-    this.internal.table = table;
+  instant(value = true): this {
+    this.internal.instant = value;
+    this.internal.range = !value;
     return this;
   }
 
@@ -56,34 +53,67 @@ export class InfluxDbQueryBuilder implements cog.Builder<cog.Dataquery> {
   }
 }
 
-/** Shorthand to create a time-bucketed SQL query for a single field */
-export function influxSql(
+type Agg = 'AVG' | 'MAX' | 'LAST_VALUE' | 'MEDIAN';
+
+const AGG_FN: Record<Agg, string> = {
+  AVG: 'avg_over_time',
+  MAX: 'max_over_time',
+  LAST_VALUE: 'last_over_time',
+  MEDIAN: 'mad_over_time', // fallback; see quantile below
+};
+
+/** Build a MetricsQL metric name from measurement + field (InfluxDB line-protocol convention) */
+function metricName(measurement: string, field: string): string {
+  return `${measurement}_${field}`;
+}
+
+/** Convert SQL-style WHERE conditions to PromQL label selectors */
+function labelSelector(where?: string): string {
+  if (!where) return '';
+  const conditions = where
+    .split(/\s+AND\s+/i)
+    .map((c) => {
+      const m = c.trim().match(/^"?(\w+)"?\s*=\s*'([^']+)'$/);
+      return m ? `${m[1]}="${m[2]}"` : '';
+    })
+    .filter(Boolean);
+  return conditions.length > 0 ? `{${conditions.join(', ')}}` : '';
+}
+
+/**
+ * Shorthand to create a MetricsQL query for a single metric.
+ *
+ * Metric name is derived as `measurement_field` (InfluxDB line-protocol naming).
+ * legendFormat defaults to the field name so existing panel overrides (byName)
+ * continue to match.
+ */
+export function vmMetric(
   refId: string,
   measurement: string,
   field: string,
   opts: {
-    agg?: 'AVG' | 'MAX' | 'LAST_VALUE' | 'MEDIAN';
+    agg?: Agg;
     where?: string;
     expr?: string;
   } = {},
-): InfluxDbQueryBuilder {
+): VMQueryBuilder {
   const agg = opts.agg ?? 'AVG';
-  const col = opts.expr ?? `"${field}"`;
-  const alias = `"${field}"`;
-  const where = opts.where ? ` AND ${opts.where}` : '';
-  const sql = [
-    `SELECT`,
-    `  DATE_BIN(INTERVAL '$__interval', time) AS time,`,
-    `  ${agg}(${col}) AS ${alias}`,
-    `FROM "${measurement}"`,
-    `WHERE time >= $__timeFrom AND time <= $__timeTo${where}`,
-    `GROUP BY 1`,
-    `ORDER BY 1`,
-  ].join('\n');
-  return new InfluxDbQueryBuilder(refId).sql(sql);
+  const metric = opts.expr ?? metricName(measurement, field);
+  const labels = labelSelector(opts.where);
+
+  let expression: string;
+  if (agg === 'MEDIAN') {
+    expression = `quantile_over_time(0.5, ${metric}${labels}[$__interval])`;
+  } else {
+    expression = `${AGG_FN[agg]}(${metric}${labels}[$__interval])`;
+  }
+
+  return new VMQueryBuilder(refId).expr(expression).legendFormat(field);
 }
 
-/** Raw SQL query without aggregation helpers */
-export function influxRawSql(refId: string, sql: string): InfluxDbQueryBuilder {
-  return new InfluxDbQueryBuilder(refId).sql(sql);
+/** Raw MetricsQL expression */
+export function vmExpr(refId: string, expression: string, legend?: string): VMQueryBuilder {
+  const b = new VMQueryBuilder(refId).expr(expression);
+  if (legend !== undefined) b.legendFormat(legend);
+  return b;
 }

@@ -11,5 +11,8 @@
   },
   "dependencies": {
     "@grafana/grafana-foundation-sdk": "~11.6.0-cogv0.0.x.1769699379"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.0"
   }
 }
