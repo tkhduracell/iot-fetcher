@@ -6,6 +6,7 @@ import { config } from 'dotenv'
 import tailwindcss from '@tailwindcss/vite'
 
 config({ path: '.env' })
+config({ path: '.env.local', override: true })
 
 function influxProxy(): Plugin {
   return {

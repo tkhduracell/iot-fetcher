@@ -17,3 +17,5 @@ nodejs/persistent.json
 *.pyc
 
 influx-backuper-*.json
+volumes/
+backup-dashboard/

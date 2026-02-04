@@ -25,6 +25,30 @@ def _fallback_response(version, route):
     return Response('', status=200)
 
 
+@influx_bp.route('/influx/query', methods=['GET'])
+def influx_query():
+    """Proxy legacy InfluxQL queries to InfluxDB v3's /query endpoint."""
+    influx_host = os.environ.get('INFLUX_HOST')
+    influx_token = os.environ.get('INFLUX_TOKEN')
+    if not influx_host or not influx_token:
+        return Response('{"results":[]}', status=200, mimetype='application/json')
+
+    resp = requests.get(
+        f"{influx_host}/query",
+        params=request.args,
+        headers={
+            'Authorization': f'Bearer {influx_token}',
+            'Accept': 'application/json',
+        },
+        timeout=10,
+    )
+    excluded_headers = ['content-encoding',
+                        'content-length', 'transfer-encoding', 'connection']
+    response_headers = [(name, value) for (
+        name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
+    return Response(resp.content, resp.status_code, response_headers)
+
+
 @influx_bp.route('/influx/api/<version>/<route>', methods=['POST', 'GET'])
 def influx_proxy(version, route):
     # Validate API version
@@ -44,9 +68,9 @@ def influx_proxy(version, route):
 
     # Construct URL - health endpoint is at root level for both versions
     if route == 'health':
-        url = f"http://{influx_host}/health"
+        url = f"{influx_host}/health"
     else:
-        url = f"http://{influx_host}/api/{version}/{route}"
+        url = f"{influx_host}/api/{version}/{route}"
 
     # Prepare headers with version-specific authentication
     headers = dict(request.headers)
