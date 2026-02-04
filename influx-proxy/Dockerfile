@@ -13,6 +13,11 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 	acme_ca https://acme.zerossl.com/v2/DV90
 	email {$CERT_EMAIL}
 
+	acme_eab {
+    	key_id {$ZEROSSL_EAB_KID}
+    	mac_key {$ZEROSSL_EAB_HMAC}
+  	}
+
 	log default {
 		output stdout
 		format console
@@ -20,6 +25,24 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 }
 
 {$PROXY_DOMAIN} {
+
+	reverse_proxy /arrow.flight.protocol.FlightService/* {$INFLUX_TARGET} {
+		transport http {
+			versions h2c
+		}
+	}
+
+	reverse_proxy /health {$INFLUX_TARGET} {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	reverse_proxy /query* {$INFLUX_TARGET} {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote}
+		header_up X-Forwarded-Proto {scheme}
+	}
 
 	reverse_proxy /api/v2/* {$INFLUX_TARGET} {
 		header_up Host {host}

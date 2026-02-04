@@ -1,8 +1,76 @@
-version: "2.4"
-
 services:
-  influx-3:
-    env_file: .env
+  database:
+    build: ./influx-3
+    env_file: ./influx-3/.env
+    container_name: influxdb-3
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8181:8181"
+    volumes:
+      - ./volumes/influx:/home/influxdb3/.influxdb3
+    command:
+      - influxdb3
+      - serve
+      - --node-id=macbookpro
+      - --object-store=google
+      - --bucket=filiplindqvist-com-ea66d.appspot.com
+      - --google-service-account=/home/influxdb3/.influxdb3/gcs-credentials.json
+      - --data-dir=/home/influxdb3/.influxdb3
+      - --admin-token-file=/home/influxdb3/.influxdb3/admin-token
+      - --query-file-limit=10000
+      - --log-filter=debug
 
+  influx-ui:
+    image: influxdata/influxdb3-ui:latest
+    container_name: influxdb3-explorer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:80"
+    volumes:
+      - ./volumes/influx-ui:/app-root/config:ro
+      - influx-ui-db:/db
+    depends_on:
+      - database
+
+  # HTTPS reverse proxy for InfluxDB v3 (local)
   influx-proxy:
-    env_file: .env
+    build: ./influx-proxy
+    env_file: ./influx-proxy/.env
+    container_name: caddy-influxdb-proxy
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:80:80"
+    depends_on:
+      - iot-fetcher
+      - database
+
+  iot-fetcher:
+    env_file: ./python/.env
+    build: .
+    container_name: iot-fetcher
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:8080:8080"
+
+  tibber-influx-bridge:
+    image: tkhduracell/tibber-influxdb-bridge:latest
+    env_file: ./tibber-influx-bridge/.env
+    container_name: tibber-influxdb-bridge
+    restart: unless-stopped
+    depends_on:
+      - influx-proxy
+
+  garmin-influx-bridge:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
+    container_name: garmin-influx-bridge
+    restart: unless-stopped
+    env_file: ./garmin-influx-bridge/.env
+    volumes:
+      - ./volumes/garmin-tokens:/home/appuser/.garminconnect
+    depends_on:
+      - influx-proxy
+
+volumes:
+  influx-ui-db:
+

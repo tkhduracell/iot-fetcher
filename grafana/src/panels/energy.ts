@@ -2,11 +2,12 @@ import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-s
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
-import { INFLUXDB_DS, influxSql, influxRawSql } from '../datasource.ts';
+import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
   thresholds, greenThreshold, paletteColor,
   legendBottom, tooltipSingle, tooltipMulti,
   overrideDisplayAndColor, overrideDisplayName,
+  SPAN_NULLS_MS,
 } from '../helpers.ts';
 
 const energyThresholds = () => thresholds([
@@ -19,7 +20,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
   // 🔋 Sigstore batterinivå (timeseries)
   const battery = new TimeseriesBuilder()
     .title('🔋 Sigstore batterinivå')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('percent')
     .min(0)
     .max(100)
@@ -28,19 +29,20 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(energyThresholds())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .withTarget(influxSql('A', 'sigenergy_battery', 'soc_percent'))
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmMetric('A', 'sigenergy_battery', 'soc_percent'))
     .gridPos({ h: 8, w: 9, x: 0, y: 47 });
 
   // ☀️ Solceller effekt (stat)
   const solar = new StatBuilder()
     .title('☀️ Solceller effekt')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('kwatt')
     .min(0)
     .max(3.2)
     .thresholds(greenThreshold())
     .withTarget(
-      influxSql('A', 'sigenergy_pv_power', 'power_kw', {
+      vmMetric('A', 'sigenergy_pv_power', 'power_kw', {
         where: `"string" = 'total'`,
       }),
     )
@@ -49,37 +51,39 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
   // 🪫 Urladdning (stat)
   const discharge = new StatBuilder()
     .title('🪫 Urladdning')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('kwatt')
     .min(0)
     .max(10)
     .thresholds(greenThreshold())
-    .withTarget(influxSql('A', 'sigenergy_battery', 'power_to_battery_kw'))
+    .withTarget(vmMetric('A', 'sigenergy_battery', 'power_to_battery_kw'))
     .gridPos({ h: 8, w: 4, x: 13, y: 47 });
 
   // ⚡️ Energiförbrukning - simple (timeseries, mean+max)
   const energySimple = new TimeseriesBuilder()
     .title('⚡️ Energiförbrukning')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('watt')
     .interval('1h')
     .colorScheme(paletteColor())
     .thresholds(energyThresholds())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .withTarget(influxSql('DjUv', 'tibber', 'power'))
-    .withTarget(influxSql('B', 'tibber', 'power', { agg: 'MAX' }))
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmMetric('DjUv', 'tibber', 'power'))
+    .withTarget(vmMetric('B', 'tibber', 'power', { agg: 'MAX' }))
     .gridPos({ h: 8, w: 7, x: 17, y: 47 });
 
   // ⚡️ Energiförbrukning - detailed (timeseries, 4 queries)
   const energyDetailed = new TimeseriesBuilder()
     .title('⚡️ Energiförbrukning')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('watt')
     .colorScheme(paletteColor())
     .thresholds(energyThresholds())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
+    .spanNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayName('power', 'Inköp'),
       overrideDisplayAndColor('power_to_battery_kw', 'Batteri', 'blue'),
@@ -98,56 +102,43 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
       },
       overrideDisplayAndColor('power_kw', 'Solceller', 'yellow'),
     ])
-    .withTarget(influxSql('Net', 'tibber', 'power'))
+    .withTarget(vmMetric('Net', 'tibber', 'power'))
     .withTarget(
-      influxRawSql('Battery', [
-        `SELECT`,
-        `  DATE_BIN(INTERVAL '$__interval', time) AS time,`,
-        `  AVG("power_to_battery_kw") * 1000 AS "power_to_battery_kw"`,
-        `FROM "sigenergy_battery"`,
-        `WHERE time >= $__timeFrom AND time <= $__timeTo`,
-        `GROUP BY 1`,
-        `ORDER BY 1`,
-      ].join('\n')),
+      vmExpr(
+        'Battery',
+        'avg_over_time(sigenergy_battery_power_to_battery_kw[$__interval]) * 1000',
+        'power_to_battery_kw',
+      ),
     )
     .withTarget(
-      influxRawSql('Price', [
-        `SELECT`,
-        `  DATE_BIN(INTERVAL '$__interval', time) AS time,`,
-        `  LAST_VALUE("SEK_per_kWh") + 0.307 + 0.54875 AS "SEK_per_kWh"`,
-        `FROM "energy_price"`,
-        `WHERE time >= $__timeFrom AND time <= $__timeTo`,
-        `GROUP BY 1`,
-        `ORDER BY 1`,
-      ].join('\n')),
+      vmExpr(
+        'Price',
+        'last_over_time(energy_price_SEK_per_kWh[$__interval]) + 0.307 + 0.54875',
+        'SEK_per_kWh',
+      ),
     )
     .withTarget(
-      influxRawSql('A', [
-        `SELECT`,
-        `  DATE_BIN(INTERVAL '$__interval', time) AS time,`,
-        `  AVG("power_kw") * 1000 AS "power_kw"`,
-        `FROM "sigenergy_pv_power"`,
-        `WHERE time >= $__timeFrom AND time <= $__timeTo`,
-        `  AND "string" = 'total'`,
-        `GROUP BY 1`,
-        `ORDER BY 1`,
-      ].join('\n')),
+      vmExpr(
+        'A',
+        'avg_over_time(sigenergy_pv_power_power_kw{string="total"}[$__interval]) * 1000',
+        'power_kw',
+      ),
     )
     .gridPos({ h: 8, w: 9, x: 0, y: 55 });
 
   // ⚡️ Energiförbrukning (stat)
   const energyStat = new StatBuilder()
     .title('⚡️ Energiförbrukning')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('kwatth')
     .thresholds(energyThresholds())
-    .withTarget(influxSql('A', 'tibber', 'accumulatedConsumption', { agg: 'LAST_VALUE' }))
+    .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption', { agg: 'LAST_VALUE' }))
     .gridPos({ h: 8, w: 3, x: 9, y: 55 });
 
   // ⚡️ Energiförbrukning per fas (timeseries)
   const energyPhases = new TimeseriesBuilder()
     .title('⚡️ Energiförbrukning per fas')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('watt')
     .colorScheme(paletteColor())
     .thresholds(thresholds([
@@ -158,25 +149,16 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom())
     .tooltip(tooltipMulti())
-    .withTarget(
-      influxRawSql('A', [
-        `SELECT`,
-        `  DATE_BIN(INTERVAL '$__interval', time) AS time,`,
-        `  AVG("powerL1") AS "powerL1",`,
-        `  AVG("powerL2") AS "powerL2",`,
-        `  AVG("powerL3") AS "powerL3"`,
-        `FROM "tibber"`,
-        `WHERE time >= $__timeFrom AND time <= $__timeTo`,
-        `GROUP BY 1`,
-        `ORDER BY 1`,
-      ].join('\n')),
-    )
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmExpr('A', 'avg_over_time(tibber_powerL1[$__interval])', 'powerL1'))
+    .withTarget(vmExpr('B', 'avg_over_time(tibber_powerL2[$__interval])', 'powerL2'))
+    .withTarget(vmExpr('C', 'avg_over_time(tibber_powerL3[$__interval])', 'powerL3'))
     .gridPos({ h: 8, w: 12, x: 12, y: 55 });
 
   // Dygnskostnad 30d (bar chart)
   const dailyCost30d = new TimeseriesBuilder()
     .title('Dygnskostnad')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('currencySEK')
     .drawStyle('bars' as any)
     .fillOpacity(100)
@@ -192,14 +174,15 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .withTarget(influxSql('A', 'tibber', 'accumulatedCost', { agg: 'MAX' }))
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmMetric('A', 'tibber', 'accumulatedCost', { agg: 'MAX' }))
     .timeFrom('30d/d')
     .gridPos({ h: 6, w: 7, x: 0, y: 63 });
 
   // Dygnsförbrukning 30d (bar chart)
   const dailyConsumption30d = new TimeseriesBuilder()
     .title('Dygnsförbrukning')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('kwatth')
     .drawStyle('bars' as any)
     .fillOpacity(100)
@@ -214,14 +197,15 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipSingle())
-    .withTarget(influxSql('A', 'tibber', 'accumulatedConsumption', { agg: 'MAX' }))
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption', { agg: 'MAX' }))
     .timeFrom('30d/d')
     .gridPos({ h: 6, w: 9, x: 7, y: 63 });
 
   // Veckopris (timeseries, stepAfter, 7d)
   const weeklyPrice = new TimeseriesBuilder()
     .title('Veckopris')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('currencySEK')
     .axisSoftMin(0)
     .axisSoftMax(0.8)
@@ -237,8 +221,9 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
     .queryCachingTTL(600000)
+    .spanNulls(SPAN_NULLS_MS)
     .withTarget(
-      influxSql('A', 'energy_price', 'SEK_per_kWh', {
+      vmMetric('A', 'energy_price', 'SEK_per_kWh', {
         agg: 'LAST_VALUE',
         where: `"area" = 'SE4'`,
       }),
@@ -249,7 +234,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
   // Dygnskostnad 1d (timeseries)
   const dailyCost1d = new TimeseriesBuilder()
     .title('Dygnskostnad')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('currencySEK')
     .axisSoftMin(0)
     .axisSoftMax(75)
@@ -262,14 +247,15 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .withTarget(influxSql('A', 'tibber', 'accumulatedCost'))
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmMetric('A', 'tibber', 'accumulatedCost'))
     .timeFrom('1d/d')
     .gridPos({ h: 8, w: 7, x: 0, y: 69 });
 
   // Dygnsförbrukning 1d (timeseries)
   const dailyConsumption1d = new TimeseriesBuilder()
     .title('Dygnsförbrukning')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('kwatth')
     .axisSoftMin(0)
     .axisSoftMax(75)
@@ -282,14 +268,15 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .withTarget(influxSql('A', 'tibber', 'accumulatedConsumption'))
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption'))
     .timeFrom('1d/d')
     .gridPos({ h: 8, w: 9, x: 7, y: 69 });
 
   // Dygnspris (timeseries, stepAfter, 1d)
   const dailyPrice = new TimeseriesBuilder()
     .title('Dygnspris')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('currencySEK')
     .axisSoftMin(0)
     .axisSoftMax(1)
@@ -304,8 +291,9 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
+    .spanNulls(SPAN_NULLS_MS)
     .withTarget(
-      influxSql('A', 'energy_price', 'SEK_per_kWh', {
+      vmMetric('A', 'energy_price', 'SEK_per_kWh', {
         agg: 'LAST_VALUE',
         where: `"area" = 'SE4'`,
       }),

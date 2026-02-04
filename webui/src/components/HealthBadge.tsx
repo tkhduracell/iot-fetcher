@@ -9,7 +9,14 @@ const HealthBadge: React.FC = () => {
         fetch('/influx/api/v2/health')
             .then(res => {
                 if (!res.ok) throw new Error('Network response was not ok');
-                return res.json();
+                const contentType = res.headers.get('content-type') || '';
+                if (contentType.includes('application/json')) {
+                    return res.json();
+                }
+                // InfluxDB v3 returns plain text "OK"
+                return res.text().then(text => ({
+                    status: text.trim() === 'OK' ? 'pass' : text.trim(),
+                }));
             })
             .then(data => {
                 setHealth(data);

@@ -2,52 +2,51 @@ import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-s
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
-import { INFLUXDB_DS, influxSql, influxRawSql } from '../datasource.ts';
+import { VM_DS, vmMetric } from '../datasource.ts';
 import {
   greenRedThresholds, greenThreshold, paletteColor, fixedColor,
   legendBottom, tooltipMulti, tooltipSingle,
   overrideDisplayAndColor, overrideDisplayName,
+  SPAN_NULLS_MS,
 } from '../helpers.ts';
 
 export function housePanels(): cog.Builder<dashboard.Panel>[] {
-  // Ngenic Innegivare - Temperatur (timeseries, two fields)
+  // Ngenic Innegivare - Temperatur (timeseries, two fields split into two targets)
   const indoorTemp = new TimeseriesBuilder()
     .title('Ngenic Innegivare - Temperatur')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .interval('1m')
     .colorScheme(paletteColor())
     .thresholds(greenRedThresholds(80))
     .legend(legendBottom())
     .tooltip(tooltipMulti())
+    .spanNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayAndColor('temperature_C', 'Temperatur', 'light-green'),
       overrideDisplayAndColor('target_temperature_C', 'Måltemperatur', 'purple'),
     ])
     .withTarget(
-      influxRawSql('A', [
-        `SELECT`,
-        `  DATE_BIN(INTERVAL '$__interval', time) AS time,`,
-        `  AVG("target_temperature_C") AS "target_temperature_C",`,
-        `  AVG("temperature_C") AS "temperature_C"`,
-        `FROM "ngenic_node_sensor_measurement_value"`,
-        `WHERE time >= $__timeFrom AND time <= $__timeTo`,
-        `  AND "node_type" = 'SENSOR'`,
-        `GROUP BY 1`,
-        `ORDER BY 1`,
-      ].join('\n')),
+      vmMetric('A', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
+        where: `"node_type" = 'SENSOR'`,
+      }),
+    )
+    .withTarget(
+      vmMetric('B', 'ngenic_node_sensor_measurement_value', 'target_temperature_C', {
+        where: `"node_type" = 'SENSOR'`,
+      }),
     )
     .gridPos({ h: 7, w: 8, x: 0, y: 8 });
 
   // Ngenic Inomhus (stat)
   const indoorStat = new StatBuilder()
     .title('')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('celsius')
     .colorScheme(fixedColor('purple'))
     .thresholds(greenRedThresholds(80))
     .overrides([overrideDisplayName('temperature_C', 'Innetemperatur')])
     .withTarget(
-      influxSql('B', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
+      vmMetric('B', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
         where: `"node_type" = 'SENSOR' AND "node" = 'a84f4c8f-47c5-465d-878e-957c0affb60b'`,
       }),
     )
@@ -57,16 +56,17 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
   // Ngenic Utetemp (timeseries)
   const outdoorTemp = new TimeseriesBuilder()
     .title('Ngenic Utetemp')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .colorScheme(paletteColor())
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipMulti())
+    .spanNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayAndColor('temperature_C', 'Utomhustemperatur', 'blue'),
     ])
     .withTarget(
-      influxSql('A', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
+      vmMetric('A', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
         where: `"node_type" = 'CONTROLLER'`,
       }),
     )
@@ -75,13 +75,13 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
   // Ngenic Utomhus (stat)
   const outdoorStat = new StatBuilder()
     .title('')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('celsius')
     .colorScheme(fixedColor('purple'))
     .thresholds(greenRedThresholds(80))
     .overrides([overrideDisplayName('temperature_C', 'Utetemperatur')])
     .withTarget(
-      influxSql('B', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
+      vmMetric('B', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
         where: `"node_type" = 'CONTROLLER' AND "node" = 'efc2897b-d9d3-41dd-81c6-b376d4bd4996'`,
       }),
     )
@@ -91,7 +91,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
   // Ngenic Innegivare - Relativ Luftfuktighet (timeseries)
   const humidity = new TimeseriesBuilder()
     .title('Ngenic Innegivare - Relativ Luftfuktighet')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .unit('humidity')
     .axisSoftMin(40)
     .axisSoftMax(50)
@@ -99,9 +99,10 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipMulti())
+    .spanNulls(SPAN_NULLS_MS)
     .overrides([overrideDisplayName('humidity_relative_percent', 'Relativ fuktighet')])
     .withTarget(
-      influxSql('A', 'ngenic_node_sensor_measurement_value', 'humidity_relative_percent', {
+      vmMetric('A', 'ngenic_node_sensor_measurement_value', 'humidity_relative_percent', {
         where: `"node_type" = 'SENSOR'`,
       }),
     )
@@ -110,7 +111,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
   // AQI - Luftkvalitét (timeseries, 7d range)
   const aqi = new TimeseriesBuilder()
     .title('AQI - Luftkvalitét')
-    .datasource(INFLUXDB_DS)
+    .datasource(VM_DS)
     .min(0)
     .max(100)
     .interval('1h')
@@ -118,9 +119,10 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
+    .spanNulls(SPAN_NULLS_MS)
     .overrides([overrideDisplayName('aqi', 'Luftkvalitet (AQI)')])
     .withTarget(
-      influxSql('A', 'air_quality', 'aqi', { agg: 'LAST_VALUE' }),
+      vmMetric('A', 'air_quality', 'aqi', { agg: 'LAST_VALUE' }),
     )
     .timeFrom('7d/d')
     .gridPos({ h: 7, w: 12, x: 12, y: 15 });
