@@ -25,7 +25,7 @@ python3 ./webui/web.py &
 
 python3 ./python/src/main.py &
 
-node ./nodejs/dist/index.js &
+# node ./nodejs/dist/index.js &
 
 # Wait for all background processes to finish
 wait
