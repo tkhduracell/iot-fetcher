@@ -26,10 +26,10 @@ while IFS= read -r line || [ -n "$line" ]; do
         if [[ "$var" == \#* ]] || [ -z "$var" ]; then
             continue
         fi
-        echo "balena env set --fleet "$FLEET_NAME" --service influx-proxy "$var" <...>"
-        balena env set --fleet "$FLEET_NAME" --service influx-proxy "$var" "$value"
+        echo "balena env set --fleet "$FLEET_NAME" --service https-proxy "$var" <...>"
+        balena env set --fleet "$FLEET_NAME" --service https-proxy "$var" "$value"
     fi
-done < "influx-proxy/.env"
+done < "https-proxy/.env"
 
 while IFS= read -r line || [ -n "$line" ]; do
     if [ -n "$line" ]; then
