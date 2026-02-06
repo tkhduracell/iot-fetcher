@@ -68,7 +68,7 @@ This repository is an IoT data collection system with Python backends, Node.js s
 │   └── web.py              # Flask server serving built React app
 ├── nodejs/                  # TypeScript cron jobs with esbuild
 │   └── package.json         # Node 24+, eufy-security-client, influxdb-client
-└── influx-proxy/           # Caddy HTTPS reverse proxy for InfluxDB
+└── https-proxy/            # Caddy HTTPS reverse proxy
 ```
 
 ### Build Timing and Cancellation Warnings

@@ -24,9 +24,9 @@ services:
       - --admin-token-file=/home/influxdb3/.influxdb3/admin-token
 
   # HTTPS reverse proxy for InfluxDB v3 (local)
-  influx-proxy:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/influxdb-proxy:latest
-    container_name: caddy-influxdb-proxy
+  https-proxy:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/https-proxy:latest
+    container_name: caddy-https-proxy
     restart: unless-stopped
     ports:
       - "443:443"
@@ -47,7 +47,7 @@ services:
     container_name: tibber-influxdb-bridge
     restart: unless-stopped
     depends_on:
-      - influx-proxy
+      - https-proxy
 
   garmin-influx-bridge:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
@@ -56,5 +56,5 @@ services:
     volumes:
       - garmin-tokens:/home/appuser/.garminconnect
     depends_on:
-      - influx-proxy
+      - https-proxy
 
