@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 import pytz
-from pybalboa.enums import HeatMode
+from pybalboa.enums import HeatMode, UnknownState
 
 from influx import write_influx, Point
 
@@ -101,8 +101,13 @@ async def _balboa():
             logger.info(
                 '[balboa] Temperature reading failed. Discarding temp data...')
 
-        heat = Point("spa_mode") \
-            .field("enabled", spa.heat_mode.state)
+        if spa.heat_mode.state != UnknownState.UNKNOWN:
+            heat = Point("spa_mode") \
+                .field("enabled", spa.heat_mode.state)
+        else:
+            logger.info(
+                '[balboa] Heat mode state unknown. Discarding mode data...')
+            heat = None
 
         circ = Point("spa_circulation_pump") \
             .field("enabled", spa.circulation_pump.state)
@@ -110,7 +115,7 @@ async def _balboa():
         logger.info("[balboa] Disconnecting from spa")
         await spa.disconnect()
 
-        write_influx([temp, heat, circ])
+        write_influx([p for p in [temp, heat, circ] if p is not None])
 
 
 def balboa_control():
@@ -154,6 +159,12 @@ async def _balboa_control():
             await spa.disconnect()
             return
 
+        if spa.heat_mode.state == UnknownState.UNKNOWN:
+            logger.warning(
+                "[balboa_control] Heat mode state unknown, skipping this run")
+            await spa.disconnect()
+            return
+
         # Safety check: Don't change mode if any pumps are running
         pumps_running = []
         for i, pump in enumerate(spa.pumps, start=1):
@@ -194,9 +205,9 @@ async def _balboa_control():
 
                 # Optional: Write control event to InfluxDB for tracking
                 control_point = Point("spa_heat_mode_control") \
-                    .field("mode", desired_name) \
+                    .field("mode", int(desired_mode)) \
                     .field("changed", True) \
-                    .field("previous_mode", current_name) \
+                    .field("previous_mode", int(current_mode)) \
                     .field("hour", current_time.hour)
                 write_influx([control_point])
             else:
