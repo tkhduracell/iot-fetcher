@@ -159,17 +159,9 @@ async def _balboa_control():
             await spa.disconnect()
             return
 
-        # Wait for heat mode state to be populated
-        retries = 0
-        while spa.heat_mode.state == UnknownState.UNKNOWN and retries < 10:
-            logger.info(
-                "[balboa_control] Waiting for heat mode state...")
-            await asyncio.sleep(2)
-            retries += 1
-
         if spa.heat_mode.state == UnknownState.UNKNOWN:
             logger.warning(
-                "[balboa_control] Heat mode state unknown after timeout, aborting")
+                "[balboa_control] Heat mode state unknown, skipping this run")
             await spa.disconnect()
             return
 
