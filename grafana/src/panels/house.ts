@@ -2,7 +2,7 @@ import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-s
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
-import { VM_DS, vmMetric } from '../datasource.ts';
+import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
   greenRedThresholds, greenThreshold, paletteColor, fixedColor,
   legendBottom, tooltipMulti, tooltipSingle,
@@ -127,5 +127,60 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('7d/d')
     .gridPos({ h: 7, w: 12, x: 12, y: 15 });
 
-  return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi];
+  // Ngenic Batteri (timeseries, 30d)
+  const sensorBattery = new TimeseriesBuilder()
+    .title('Ngenic Batteri')
+    .datasource(VM_DS)
+    .unit('percent')
+    .min(0)
+    .max(100)
+    .interval('1h')
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipSingle())
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(
+      vmExpr('A', 'avg_over_time(ngenic_node_battery_value[$__interval])', '{{node}}'),
+    )
+    .timeFrom('30d/d')
+    .gridPos({ h: 7, w: 12, x: 0, y: 22 });
+
+  // Ngenic Radiosignal (timeseries, 30d)
+  const sensorSignal = new TimeseriesBuilder()
+    .title('Ngenic Radiosignal')
+    .datasource(VM_DS)
+    .unit('percent')
+    .min(0)
+    .max(100)
+    .interval('1h')
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipSingle())
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(
+      vmExpr('A', 'avg_over_time(ngenic_node_radio_signal_value[$__interval])', '{{node}}'),
+    )
+    .timeFrom('30d/d')
+    .gridPos({ h: 7, w: 12, x: 12, y: 22 });
+
+  // Tapo Enheter Online (timeseries, 7d)
+  const tapoOnline = new TimeseriesBuilder()
+    .title('Tapo Enheter Online')
+    .datasource(VM_DS)
+    .min(0)
+    .interval('5m')
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .spanNulls(SPAN_NULLS_MS)
+    .withTarget(
+      vmExpr('A', 'last_over_time(tapo_cloud_device_device_count[$__interval])', '{{device_alias}}'),
+    )
+    .timeFrom('7d/d')
+    .gridPos({ h: 7, w: 12, x: 0, y: 29 });
+
+  return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi, sensorBattery, sensorSignal, tapoOnline];
 }
