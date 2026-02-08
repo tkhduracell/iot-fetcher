@@ -103,32 +103,45 @@ def aqualink():
 
 
 async def _aqualink():
-    points: List[Point] = []
-
     c = await _get_client()
     logger.info("[aqualink] Fetching Aqualink data...")
-    s = await c.get_systems()
+    systems = await c.get_systems()
 
-    for s in s.values():
-        devices = await s.get_devices()
-        for device in devices.values():
-            device: AquaLinkIQPump
-            motor = Point("pool_iqpump_motordata") \
-                .tag("system", s.serial) \
-                .tag("device", device.productId) \
-                .tag("firmware", device.firmware) \
-                .field("speed", device.motorSpeed) \
-                .field("power", device.motorPower) \
-                .field("temperature", device.motorTemperature)
-            points.append(motor)
+    max_retries = 4
+    for attempt in range(1, max_retries + 1):
+        points: List[Point] = []
+        for s in systems.values():
+            devices = await s.get_devices()
+            for device in devices.values():
+                device: AquaLinkIQPump
+                motor = Point("pool_iqpump_motordata") \
+                    .tag("system", s.serial) \
+                    .tag("device", device.productId) \
+                    .tag("firmware", device.firmware) \
+                    .field("speed", device.motorSpeed) \
+                    .field("power", device.motorPower) \
+                    .field("temperature", device.motorTemperature)
+                points.append(motor)
 
-            fp = Point("pool_iqpump_freezeprotect") \
-                .tag("system", s.serial) \
-                .tag("device", device.productId) \
-                .tag("firmware", device.firmware) \
-                .field("enabled", device.freezeProtectEnable) \
-                .field("status", device.freezeProtectStatus)
-            points.append(fp)
+                fp = Point("pool_iqpump_freezeprotect") \
+                    .tag("system", s.serial) \
+                    .tag("device", device.productId) \
+                    .tag("firmware", device.firmware) \
+                    .field("enabled", device.freezeProtectEnable) \
+                    .field("status", device.freezeProtectStatus)
+                points.append(fp)
+
+        if points:
+            break
+
+        if attempt < max_retries:
+            logger.warning(f"[aqualink] No online devices found (attempt {attempt}/{max_retries}), retrying in 10s...")
+            await asyncio.sleep(10)
+            for s in systems.values():
+                s.devices = {}
+        else:
+            logger.warning(f"[aqualink] No online devices found after {max_retries} attempts, giving up")
+            return
 
     write_influx(points)
 
