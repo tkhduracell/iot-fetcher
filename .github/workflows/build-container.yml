@@ -44,7 +44,7 @@ jobs:
       uses: docker/build-push-action@v6
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
-        context: .
+        context: ./fetcher-core/
         platforms: linux/amd64,linux/arm64
         push: true
         tags: europe-docker.pkg.dev/${{secrets.GCP_PROJECT_ID }}/images/iot-fetcher:latest
@@ -55,7 +55,7 @@ jobs:
       uses: docker/build-push-action@v6
       if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
       with:
-        context: .
+        context: ./fetcher-core/
         platforms: linux/amd64,linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max
