@@ -5,7 +5,7 @@ pytz>=2024.2
 influxdb3-python==0.17.0
 tuya-connector-python==0.1.2
 schedule==1.2.2
-google-cloud-storage==3.7.0
+google-cloud-storage==3.9.0
 
 ngenicpy==0.5.2
 SigenAPI==1.0.0
