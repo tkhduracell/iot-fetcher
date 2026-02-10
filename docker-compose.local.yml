@@ -1,19 +1,33 @@
+version: "2.4"
+
 services:
+  database:
+    container_name: victoria-metrics
+    volumes:
+      - ./volumes/victoria-metrics:/victoria-metrics-data
+
   database-auth:
+    container_name: victoria-metrics-auth
     volumes:
       - ./victoria-metrics/auth.yml:/etc/auth.yml:ro
     command:
       - -auth.config=/etc/auth.yml
 
   https-proxy:
+    container_name: https-proxy
     env_file: ./influx-proxy/.env
 
   iot-fetcher:
+    container_name: iot-fetcher
     build: .
     env_file: ./python/.env
 
   tibber-influx-bridge:
+    container_name: tibber-influxdb-bridge
     env_file: ./tibber-influx-bridge/.env
 
   garmin-influx-bridge:
+    container_name: garmin-influx-bridge
     env_file: ./garmin-influx-bridge/.env
+    volumes:
+      - ./volumes/garmin-tokens:/home/appuser/.garminconnect

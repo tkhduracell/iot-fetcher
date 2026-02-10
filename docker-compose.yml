@@ -1,13 +1,18 @@
+version: "2.4"
+
+volumes:
+  victoria-metrics:
+  garmin-tokens:
+
 services:
   database:
     image: victoriametrics/victoria-metrics:latest
-    container_name: victoria-metrics
     hostname: database
     restart: unless-stopped
     ports:
       - "8181:8181"
     volumes:
-      - ./volumes/victoria-metrics:/victoria-metrics-data
+      - victoria-metrics:/victoria-metrics-data
     command:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=3y
@@ -15,7 +20,6 @@ services:
 
   database-auth:
     image: victoriametrics/vmauth:latest
-    container_name: victoria-metrics-auth
     hostname: database-auth
     restart: unless-stopped
     ports:
@@ -31,7 +35,6 @@ services:
 
   https-proxy:
     build: ./influx-proxy
-    container_name: https-proxy
     restart: unless-stopped
     ports:
       - "443:443"
@@ -42,7 +45,6 @@ services:
 
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
-    container_name: iot-fetcher
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -51,16 +53,14 @@ services:
 
   tibber-influx-bridge:
     image: tkhduracell/tibber-influxdb-bridge:latest
-    container_name: tibber-influxdb-bridge
     restart: unless-stopped
     depends_on:
       - https-proxy
 
   garmin-influx-bridge:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
-    container_name: garmin-influx-bridge
     restart: unless-stopped
     volumes:
-      - ./volumes/garmin-tokens:/home/appuser/.garminconnect
+      - garmin-tokens:/home/appuser/.garminconnect
     depends_on:
       - https-proxy
