@@ -49,7 +49,7 @@ jobs:
         GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
         GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
         GRAFANA_FOLDER_UID: ${{ secrets.GRAFANA_FOLDER_UID }}
-      run: node --disable-warning=ExperimentalWarning --experimental-strip-types src/index.ts
+      run: node src/index.ts
 
     - name: Upload dashboard artifact
       if: always()
