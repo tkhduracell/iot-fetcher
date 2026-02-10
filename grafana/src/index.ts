@@ -1,8 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { DashboardBuilder, RowBuilder } from '@grafana/grafana-foundation-sdk/dashboard';
-import { sonosPanels } from './panels/sonos.ts';
-import { housePanels } from './panels/house.ts';
+import { housePanels, tapoPanels } from './panels/house.ts';
 import { poolPanels } from './panels/pool.ts';
 import { spaPanels } from './panels/spa.ts';
 import { energyPanels } from './panels/energy.ts';
@@ -19,26 +18,17 @@ function buildDashboard() {
     .editable()
     .liveNow(true);
 
-  // Sonos row
-  builder.withRow(new RowBuilder('Sonos'));
-  for (const panel of sonosPanels()) {
-    builder.withPanel(panel);
-  }
-
   // Huset row
   builder.withRow(new RowBuilder('Huset'));
   for (const panel of housePanels()) {
     builder.withPanel(panel);
   }
 
-  // Poolen row
+  // Poolen row (includes pool + spa panels)
   builder.withRow(new RowBuilder('Poolen'));
   for (const panel of poolPanels()) {
     builder.withPanel(panel);
   }
-
-  // Spabadet row
-  builder.withRow(new RowBuilder('Spabadet'));
   for (const panel of spaPanels()) {
     builder.withPanel(panel);
   }
@@ -55,6 +45,12 @@ function buildDashboard() {
     eufyRow.withPanel(panel);
   }
   builder.withRow(eufyRow);
+
+  // Tapo row
+  builder.withRow(new RowBuilder('Tapo'));
+  for (const panel of tapoPanels()) {
+    builder.withPanel(panel);
+  }
 
   return builder.build();
 }
