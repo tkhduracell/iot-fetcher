@@ -35,7 +35,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
         where: `"node_type" = 'SENSOR'`,
       }),
     )
-    .gridPos({ h: 7, w: 8, x: 0, y: 8 });
+    .gridPos({ h: 7, w: 8, x: 0, y: 1 });
 
   // Ngenic Inomhus (stat)
   const indoorStat = new StatBuilder()
@@ -51,7 +51,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
       }),
     )
     .timeFrom('30m')
-    .gridPos({ h: 7, w: 4, x: 8, y: 8 });
+    .gridPos({ h: 7, w: 4, x: 8, y: 1 });
 
   // Ngenic Utetemp (timeseries)
   const outdoorTemp = new TimeseriesBuilder()
@@ -70,7 +70,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
         where: `"node_type" = 'CONTROLLER'`,
       }),
     )
-    .gridPos({ h: 7, w: 8, x: 12, y: 8 });
+    .gridPos({ h: 7, w: 8, x: 12, y: 1 });
 
   // Ngenic Utomhus (stat)
   const outdoorStat = new StatBuilder()
@@ -86,7 +86,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
       }),
     )
     .timeFrom('30m')
-    .gridPos({ h: 7, w: 4, x: 20, y: 8 });
+    .gridPos({ h: 7, w: 4, x: 20, y: 1 });
 
   // Ngenic Innegivare - Relativ Luftfuktighet (timeseries)
   const humidity = new TimeseriesBuilder()
@@ -106,7 +106,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
         where: `"node_type" = 'SENSOR'`,
       }),
     )
-    .gridPos({ h: 7, w: 12, x: 0, y: 15 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 8 });
 
   // AQI - Luftkvalitét (timeseries, 7d range)
   const aqi = new TimeseriesBuilder()
@@ -125,7 +125,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
       vmMetric('A', 'air_quality', 'aqi', { agg: 'LAST_VALUE' }),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 7, w: 12, x: 12, y: 15 });
+    .gridPos({ h: 7, w: 12, x: 12, y: 8 });
 
   // Ngenic Batteri (timeseries, 30d) - aggregated by node type
   const sensorBattery = new TimeseriesBuilder()
@@ -148,7 +148,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
       vmExpr('A', 'avg by (node_type) (avg_over_time(ngenic_node_battery_value[$__interval]))', '{{node_type}}'),
     )
     .timeFrom('30d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 22 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 15 });
 
   // Ngenic Radiosignal (timeseries, 30d) - aggregated by node type
   const sensorSignal = new TimeseriesBuilder()
@@ -171,7 +171,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
       vmExpr('A', 'avg by (node_type) (avg_over_time(ngenic_node_radio_signal_value[$__interval]))', '{{node_type}}'),
     )
     .timeFrom('30d/d')
-    .gridPos({ h: 7, w: 12, x: 12, y: 22 });
+    .gridPos({ h: 7, w: 12, x: 12, y: 15 });
 
   return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi, sensorBattery, sensorSignal];
 }
