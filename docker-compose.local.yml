@@ -1,72 +1,19 @@
 services:
-  database:
-    image: victoriametrics/victoria-metrics:latest
-    container_name: victoria-metrics
-    hostname: database
-    restart: unless-stopped
-    ports:
-      - "0.0.0.0:8181:8181"
-    volumes:
-      - ./volumes/victoria-metrics:/victoria-metrics-data
-    command:
-      - -storageDataPath=/victoria-metrics-data
-      - -retentionPeriod=3y
-      - -httpListenAddr=:8181
-
   database-auth:
-    image: victoriametrics/vmauth:latest
-    container_name: victoria-metrics-auth
-    hostname: database-auth
-    restart: unless-stopped
-    ports:
-      - "0.0.0.0:8427:8427"
     volumes:
       - ./victoria-metrics/auth.yml:/etc/auth.yml:ro
     command:
       - -auth.config=/etc/auth.yml
-    depends_on:
-      - database
 
   https-proxy:
-    build: ./influx-proxy
     env_file: ./influx-proxy/.env
-    container_name: https-proxy
-    restart: unless-stopped
-    ports:
-      - "0.0.0.0:443:443"
-      - "0.0.0.0:80:80"
-    depends_on:
-      - iot-fetcher
-      - database-auth
 
   iot-fetcher:
-    env_file: ./python/.env
     build: .
-    container_name: iot-fetcher
-    restart: unless-stopped
-    ports:
-      - "0.0.0.0:8080:8080"
+    env_file: ./python/.env
 
   tibber-influx-bridge:
-    image: tkhduracell/tibber-influxdb-bridge:latest
     env_file: ./tibber-influx-bridge/.env
-    container_name: tibber-influxdb-bridge
-    restart: unless-stopped
-    #environment:
-    #  - BACKFILL_FROM_DATE=2024-10-01
-    depends_on:
-      - https-proxy
 
   garmin-influx-bridge:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
-    container_name: garmin-influx-bridge
-    restart: unless-stopped
     env_file: ./garmin-influx-bridge/.env
-    #environment:
-    #  - MANUAL_START_DATE=2020-01-01
-    volumes:
-      - ./volumes/garmin-tokens:/home/appuser/.garminconnect
-    depends_on:
-      - https-proxy
-
-

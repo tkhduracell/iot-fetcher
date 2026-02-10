@@ -1,39 +1,44 @@
-version: "2.4"
-
-volumes:
-  garmin-tokens:
-  influx:
-
 services:
   database:
-    build: ./influx-3
-    container_name: influxdb-3
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoria-metrics
+    hostname: database
     restart: unless-stopped
     ports:
       - "8181:8181"
     volumes:
-      - influx:/home/influxdb3/.influxdb3
+      - ./volumes/victoria-metrics:/victoria-metrics-data
     command:
-      - influxdb3
-      - serve
-      - --node-id=rpi3
-      - --object-store=google
-      - --bucket=filiplindqvist-com-ea66d.appspot.com
-      - --google-service-account=/home/influxdb3/.influxdb3/gcs-credentials.json
-      - --data-dir=/home/influxdb3/.influxdb3
-      - --admin-token-file=/home/influxdb3/.influxdb3/admin-token
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=3y
+      - -httpListenAddr=:8181
 
-  # HTTPS reverse proxy for InfluxDB v3 (local)
+  database-auth:
+    image: victoriametrics/vmauth:latest
+    container_name: victoria-metrics-auth
+    hostname: database-auth
+    restart: unless-stopped
+    ports:
+      - "8427:8427"
+    environment:
+      - VMAUTH_CONFIG
+    command:
+      - sh
+      - -c
+      - 'echo "$$VMAUTH_CONFIG" > /etc/auth.yml && exec vmauth -auth.config=/etc/auth.yml'
+    depends_on:
+      - database
+
   https-proxy:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/https-proxy:latest
-    container_name: caddy-https-proxy
+    build: ./influx-proxy
+    container_name: https-proxy
     restart: unless-stopped
     ports:
       - "443:443"
       - "80:80"
     depends_on:
       - iot-fetcher
-      - database
+      - database-auth
 
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
@@ -41,9 +46,11 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    depends_on:
+      - database-auth
 
   tibber-influx-bridge:
-    image: tkhduracell/tibber-influxdb-bridge:1.1.1
+    image: tkhduracell/tibber-influxdb-bridge:latest
     container_name: tibber-influxdb-bridge
     restart: unless-stopped
     depends_on:
@@ -54,7 +61,6 @@ services:
     container_name: garmin-influx-bridge
     restart: unless-stopped
     volumes:
-      - garmin-tokens:/home/appuser/.garminconnect
+      - ./volumes/garmin-tokens:/home/appuser/.garminconnect
     depends_on:
       - https-proxy
-
