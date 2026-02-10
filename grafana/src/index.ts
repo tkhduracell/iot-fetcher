@@ -68,7 +68,7 @@ async function uploadToGrafana(dashboardJson: object) {
     return null;
   }
 
-  const folderUid = process.env.GRAFANA_FOLDER_UID || undefined;
+  const folderUid = process.env.GRAFANA_FOLDER_UID?.trim() || undefined;
 
   const payload: Record<string, unknown> = {
     dashboard: dashboardJson,
@@ -93,8 +93,7 @@ async function uploadToGrafana(dashboardJson: object) {
 
   const body = await response.text();
   if (!response.ok) {
-    console.error(`Upload failed (${response.status}): ${body}`);
-    return null;
+    throw new Error(`Upload failed (${response.status}): ${body}`);
   }
 
   const result = JSON.parse(body);
