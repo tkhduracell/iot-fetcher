@@ -38,7 +38,7 @@ def main():
         return
 
     logging.info("Starting the scheduler...")
-    schedule.every(5).minutes.do(aqualink)
+    schedule.every(1).minutes.do(aqualink)
     schedule.every(5).minutes.do(ngenic)
     schedule.every(1).minutes.do(sigenergy)
     schedule.every(5).minutes.do(balboa)
