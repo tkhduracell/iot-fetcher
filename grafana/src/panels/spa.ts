@@ -28,7 +28,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmMetric('A', 'spa_temperature', 'value'))
     .withTarget(vmMetric('B', 'spa_temperature', 'min'))
     .withTarget(vmMetric('C', 'spa_temperature', 'max'))
-    .gridPos({ h: 8, w: 12, x: 0, y: 38 });
+    .gridPos({ h: 8, w: 12, x: 0, y: 37 });
 
   // Spabadet (stat) - latest temp values
   const spaStat = new StatBuilder()
@@ -44,7 +44,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmMetric('A', 'spa_temperature', 'value'))
     .withTarget(vmMetric('B', 'spa_temperature', 'min'))
     .withTarget(vmMetric('C', 'spa_temperature', 'max'))
-    .gridPos({ h: 8, w: 4, x: 12, y: 38 });
+    .gridPos({ h: 8, w: 4, x: 12, y: 37 });
 
   // Spa Active? (gauge)
   const spaActive = new GaugeBuilder()
@@ -53,7 +53,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     .unit('bool_on_off')
     .thresholds(greenRedThresholds(80))
     .withTarget(vmMetric('A', 'spa_mode', 'enabled'))
-    .gridPos({ h: 8, w: 4, x: 16, y: 38 });
+    .gridPos({ h: 8, w: 4, x: 16, y: 37 });
 
   // Spa Circulation (gauge)
   const spaCirculation = new GaugeBuilder()
@@ -62,7 +62,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     .unit('bool_on_off')
     .thresholds(greenThreshold())
     .withTarget(vmMetric('A', 'spa_circulation_pump', 'enabled'))
-    .gridPos({ h: 8, w: 4, x: 20, y: 38 });
+    .gridPos({ h: 8, w: 4, x: 20, y: 37 });
 
   return [spaTs, spaStat, spaActive, spaCirculation];
 }
