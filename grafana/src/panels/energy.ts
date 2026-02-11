@@ -31,7 +31,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .tooltip(tooltipSingle())
     .spanNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'sigenergy_battery', 'soc_percent'))
-    .gridPos({ h: 8, w: 9, x: 0, y: 47 });
+    .gridPos({ h: 8, w: 9, x: 0, y: 46 });
 
   // ☀️ Solceller effekt (stat)
   const solar = new StatBuilder()
@@ -46,7 +46,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
         where: `"string" = 'total'`,
       }),
     )
-    .gridPos({ h: 8, w: 4, x: 9, y: 47 });
+    .gridPos({ h: 8, w: 4, x: 9, y: 46 });
 
   // 🪫 Urladdning (stat)
   const discharge = new StatBuilder()
@@ -57,7 +57,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .max(10)
     .thresholds(greenThreshold())
     .withTarget(vmMetric('A', 'sigenergy_battery', 'power_to_battery_kw'))
-    .gridPos({ h: 8, w: 4, x: 13, y: 47 });
+    .gridPos({ h: 8, w: 4, x: 13, y: 46 });
 
   // ⚡️ Energiförbrukning - simple (timeseries, mean+max)
   const energySimple = new TimeseriesBuilder()
@@ -72,7 +72,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .spanNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('DjUv', 'tibber', 'power'))
     .withTarget(vmMetric('B', 'tibber', 'power', { agg: 'MAX' }))
-    .gridPos({ h: 8, w: 7, x: 17, y: 47 });
+    .gridPos({ h: 8, w: 7, x: 17, y: 46 });
 
   // ⚡️ Energiförbrukning - detailed (timeseries, 4 queries)
   const energyDetailed = new TimeseriesBuilder()
@@ -124,7 +124,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
         'power_kw',
       ),
     )
-    .gridPos({ h: 8, w: 9, x: 0, y: 55 });
+    .gridPos({ h: 8, w: 9, x: 0, y: 54 });
 
   // ⚡️ Energiförbrukning (stat)
   const energyStat = new StatBuilder()
@@ -133,7 +133,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .unit('kwatth')
     .thresholds(energyThresholds())
     .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption', { agg: 'LAST_VALUE' }))
-    .gridPos({ h: 8, w: 3, x: 9, y: 55 });
+    .gridPos({ h: 8, w: 3, x: 9, y: 54 });
 
   // ⚡️ Energiförbrukning per fas (timeseries)
   const energyPhases = new TimeseriesBuilder()
@@ -153,7 +153,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'avg_over_time(tibber_powerL1[$__interval])', 'powerL1'))
     .withTarget(vmExpr('B', 'avg_over_time(tibber_powerL2[$__interval])', 'powerL2'))
     .withTarget(vmExpr('C', 'avg_over_time(tibber_powerL3[$__interval])', 'powerL3'))
-    .gridPos({ h: 8, w: 12, x: 12, y: 55 });
+    .gridPos({ h: 8, w: 12, x: 12, y: 54 });
 
   // Dygnskostnad 30d (bar chart)
   const dailyCost30d = new TimeseriesBuilder()
@@ -177,7 +177,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .spanNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedCost', { agg: 'MAX' }))
     .timeFrom('30d/d')
-    .gridPos({ h: 6, w: 7, x: 0, y: 63 });
+    .gridPos({ h: 6, w: 7, x: 0, y: 62 });
 
   // Dygnsförbrukning 30d (bar chart)
   const dailyConsumption30d = new TimeseriesBuilder()
@@ -200,7 +200,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .spanNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption', { agg: 'MAX' }))
     .timeFrom('30d/d')
-    .gridPos({ h: 6, w: 9, x: 7, y: 63 });
+    .gridPos({ h: 6, w: 9, x: 7, y: 62 });
 
   // Veckopris (timeseries, stepAfter, 7d)
   const weeklyPrice = new TimeseriesBuilder()
@@ -229,7 +229,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
       }),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 6, w: 8, x: 16, y: 63 });
+    .gridPos({ h: 6, w: 8, x: 16, y: 62 });
 
   // Dygnskostnad 1d (timeseries)
   const dailyCost1d = new TimeseriesBuilder()
@@ -250,7 +250,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .spanNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedCost'))
     .timeFrom('1d/d')
-    .gridPos({ h: 8, w: 7, x: 0, y: 69 });
+    .gridPos({ h: 8, w: 7, x: 0, y: 68 });
 
   // Dygnsförbrukning 1d (timeseries)
   const dailyConsumption1d = new TimeseriesBuilder()
@@ -271,7 +271,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .spanNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption'))
     .timeFrom('1d/d')
-    .gridPos({ h: 8, w: 9, x: 7, y: 69 });
+    .gridPos({ h: 8, w: 9, x: 7, y: 68 });
 
   // Dygnspris (timeseries, stepAfter, 1d)
   const dailyPrice = new TimeseriesBuilder()
@@ -299,7 +299,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
       }),
     )
     .timeFrom('1d/d')
-    .gridPos({ h: 8, w: 8, x: 16, y: 69 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 68 });
 
   return [
     battery, solar, discharge, energySimple,

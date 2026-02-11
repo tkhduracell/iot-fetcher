@@ -192,7 +192,7 @@ export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
       vmExpr('A', 'last_over_time(tapo_cloud_device_device_count[$__interval])', '{{device_alias}}'),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 1 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 78 });
 
   return [tapoOnline];
 }
