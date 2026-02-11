@@ -78,12 +78,14 @@ def _ngenic():
                     battery = node_status.battery_percentage()
                     points.append(Point("ngenic_node_battery")
                                   .tag("node", node.uuid())
+                                  .tag("node_type", type.name)
                                   .field("value", int(battery))
                                   )
 
                     radio_signal = node_status.radio_signal_percentage()
                     points.append(Point("ngenic_node_radio_signal")
                                   .tag("node", node.uuid())
+                                  .tag("node_type", type.name)
                                   .field("value", int(radio_signal))
                                   )
 
