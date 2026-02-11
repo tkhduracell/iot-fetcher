@@ -34,20 +34,20 @@ function buildDashboard() {
   }
 
   // Energi row
-  builder.withRow(new RowBuilder('Energi'));
+  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 45 }));
   for (const panel of energyPanels()) {
     builder.withPanel(panel);
   }
 
   // Eufy Cameras row (collapsed)
-  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true);
+  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 76 });
   for (const panel of eufyPanels()) {
     eufyRow.withPanel(panel);
   }
   builder.withRow(eufyRow);
 
   // Tapo row
-  builder.withRow(new RowBuilder('Tapo'));
+  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 77 }));
   for (const panel of tapoPanels()) {
     builder.withPanel(panel);
   }
