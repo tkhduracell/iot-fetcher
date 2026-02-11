@@ -126,7 +126,7 @@ def solve_captcha_with_gemini(captcha_img: str) -> str:
         resp = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={gemini_token}",
             json={"contents": [{"parts": parts}]},
-            timeout=30,
+            timeout=120,
         )
         resp.raise_for_status()
         answer = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
