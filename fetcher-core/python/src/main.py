@@ -14,7 +14,7 @@ from aquatemp import aquatemp
 from tapo import tapo
 from sonos import sonos
 from backup_influx import backup_influx
-from eufy import eufy
+from eufy import eufy, eufy_snapshot
 
 logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s %(message)s')
@@ -28,10 +28,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'balboa_control', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'balboa_control', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [balboa, balboa_control, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy]:
+        for m in [balboa, balboa_control, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -50,6 +50,7 @@ def main():
     schedule.every(6).hours.at(':05').do(elpris)
     schedule.every(1).hours.at(':05').do(airquality)
     schedule.every(1).hours.at(':10').do(balboa_control)
+    schedule.every(3).hours.at(':15').do(eufy_snapshot)
 
     logging.info("Starting the scheduler...")
     schedule.run_all(delay_seconds=10)

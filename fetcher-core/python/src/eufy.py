@@ -209,6 +209,12 @@ def _parse_params(params_list: list) -> dict:
     return result
 
 
+SNAPSHOT_DIR = "/tmp/eufy_snapshots"
+
+# Cached cover_path URLs from last _eufy() run: [{device_sn, device_name, cover_path}, ...]
+_device_covers: list = []
+
+
 def _safe_int(value, default=0) -> int:
     try:
         return int(value)
@@ -249,6 +255,17 @@ def _eufy():
     logger.info("[eufy] Found %d device(s)", len(devices))
 
     points: List[Point] = []
+
+    # Cache cover_path URLs for eufy_snapshot()
+    _device_covers.clear()
+    for dev in devices:
+        cover_path = dev.get("cover_path", "")
+        if cover_path:
+            _device_covers.append({
+                "device_sn": dev.get("device_sn", "unknown"),
+                "device_name": dev.get("device_name", "unknown"),
+                "cover_path": cover_path,
+            })
 
     for dev in devices:
         params = _parse_params(dev.get("params"))
@@ -297,3 +314,36 @@ def _eufy():
         write_influx(points)
     else:
         logger.info("[eufy] No data points to write")
+
+
+def eufy_snapshot():
+    """Download cached cover_path images. Relies on _eufy() populating _device_covers."""
+    from datetime import datetime
+
+    if not _device_covers:
+        logger.info("[eufy_snapshot] No cover URLs cached yet, skipping")
+        return
+
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    saved = 0
+
+    for dev in _device_covers:
+        device_sn = dev["device_sn"]
+        device_name = dev["device_name"]
+        cover_path = dev["cover_path"]
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filepath = os.path.join(SNAPSHOT_DIR, f"{device_sn}_{ts}.jpg")
+
+        try:
+            img_resp = requests.get(cover_path, timeout=30)
+            img_resp.raise_for_status()
+            with open(filepath, "wb") as f:
+                f.write(img_resp.content)
+            logger.info("[eufy_snapshot] Saved %s (%s) -> %s (%d bytes)",
+                        device_name, device_sn, filepath, len(img_resp.content))
+            saved += 1
+        except Exception:
+            logger.exception("[eufy_snapshot] Failed to download snapshot for %s (%s)",
+                             device_name, device_sn)
+
+    logger.info("[eufy_snapshot] Saved %d snapshot(s)", saved)
