@@ -50,7 +50,7 @@ def getToken() -> Optional[Tuple[str, str]]:
 
     logger.info('[aquatemp] Getting new AquaTemp token...')
     login_response = requests.post(
-        f"{cloudurl}/app/user/login?lang=en", json=login_payload)
+        f"{cloudurl}/app/user/login?lang=en", json=login_payload, timeout=30)
 
     if login_response.status_code != 200:
         logger.error(
@@ -73,7 +73,7 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
     devices_response = requests.post(
         f"{cloudurl}/app/device/deviceList?lang=en", headers=headers, json={
             'appId': '14',
-        })
+        }, timeout=30)
     if devices_response.status_code != 200:
         logger.error(
             f"[aquatemp] Failed to fetch device list: {devices_response.text}")
@@ -85,7 +85,7 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
         f"{cloudurl}/app/device/getMyAppectDeviceShareDataList?lang=en", headers=headers, json={
             'appId': '14',
             'toUser': user_id
-        })
+        }, timeout=30)
     if devices_response_share.status_code != 200:
         logger.error(
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
@@ -105,7 +105,7 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[Dict[str, str]]]
             'deviceCode': deviceCode,
             'protocalCodes': list(CODES.keys()),
             'appId': '14',
-        })
+        }, timeout=30)
     if deviceData_response.status_code != 200:
         logger.error(
             f"[aquatemp] Failed to fetch device data: {deviceData_response.text}")

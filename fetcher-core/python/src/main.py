@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 import os
 import sys
@@ -20,6 +21,21 @@ logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s %(message)s')
 
 
+def with_timeout(func, timeout_seconds=120):
+    """Wrap a scheduled job with a timeout to prevent the scheduler from getting stuck."""
+    def wrapper():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func)
+            try:
+                future.result(timeout=timeout_seconds)
+            except concurrent.futures.TimeoutError:
+                logging.error("[scheduler] %s timed out after %ds", func.__name__, timeout_seconds)
+            except Exception as e:
+                logging.error("[scheduler] %s failed: %s", func.__name__, e)
+    wrapper.__name__ = func.__name__
+    return wrapper
+
+
 if os.environ.get('PYDEBUGGER', None):
     import debugpy
     debugpy.listen(("0.0.0.0", 5678))
@@ -38,25 +54,25 @@ def main():
         return
 
     logging.info("Starting the scheduler...")
-    schedule.every(1).minutes.do(aqualink)
-    schedule.every(5).minutes.do(ngenic)
-    schedule.every(1).minutes.do(sigenergy)
-    schedule.every(5).minutes.do(balboa)
-    schedule.every(5).minutes.do(aquatemp)
-    schedule.every(5).minutes.do(tapo)
-    schedule.every(5).minutes.do(eufy)
-    schedule.every(1).minutes.do(sonos)
+    schedule.every(1).minutes.do(with_timeout(aqualink))
+    schedule.every(5).minutes.do(with_timeout(ngenic))
+    schedule.every(1).minutes.do(with_timeout(sigenergy))
+    schedule.every(5).minutes.do(with_timeout(balboa))
+    schedule.every(5).minutes.do(with_timeout(aquatemp))
+    schedule.every(5).minutes.do(with_timeout(tapo))
+    schedule.every(5).minutes.do(with_timeout(eufy))
+    schedule.every(1).minutes.do(with_timeout(sonos))
 
-    schedule.every(6).hours.at(':05').do(elpris)
-    schedule.every(1).hours.at(':05').do(airquality)
-    schedule.every(1).hours.at(':10').do(balboa_control)
-    schedule.every(3).hours.at(':15').do(eufy_snapshot)
+    schedule.every(6).hours.at(':05').do(with_timeout(elpris))
+    schedule.every(1).hours.at(':05').do(with_timeout(airquality))
+    schedule.every(1).hours.at(':10').do(with_timeout(balboa_control))
+    schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
 
     logging.info("Starting the scheduler...")
     schedule.run_all(delay_seconds=10)
 
     # Avoid this from running every startup
-    schedule.every(12).hours.at(':10').do(backup_influx)
+    schedule.every(12).hours.at(':10').do(with_timeout(backup_influx))
 
     while 1:
         schedule.run_pending()

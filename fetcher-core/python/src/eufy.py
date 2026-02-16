@@ -135,7 +135,7 @@ def _login(session: requests.Session, api_base: str) -> tuple:
         "transaction": str(int(time.time() * 1000)),
     }
 
-    resp = session.post(f"{api_base}/v2/passport/login_sec", json=login_data)
+    resp = session.post(f"{api_base}/v2/passport/login_sec", json=login_data, timeout=30)
     resp.raise_for_status()
     result = resp.json()
 
@@ -154,7 +154,7 @@ def _login(session: requests.Session, api_base: str) -> tuple:
         # Retry login with captcha answer
         login_data["captcha_id"] = captcha_id
         login_data["answer"] = answer
-        resp = session.post(f"{api_base}/v2/passport/login_sec", json=login_data)
+        resp = session.post(f"{api_base}/v2/passport/login_sec", json=login_data, timeout=30)
         resp.raise_for_status()
         result = resp.json()
         code = result.get("code")
@@ -182,6 +182,7 @@ def _api_request(session: requests.Session, api_base: str, endpoint: str, token:
         f"{api_base}/{endpoint}",
         headers={"X-Auth-Token": token},
         json=json_data or {},
+        timeout=30,
     )
     resp.raise_for_status()
     result = resp.json()
@@ -236,7 +237,7 @@ def _eufy():
     logger.info("[eufy] Fetching Eufy device data...")
 
     # Resolve API domain
-    resp = requests.get(f"{DOMAIN_BASE}/domain/{eufy_country.upper()}")
+    resp = requests.get(f"{DOMAIN_BASE}/domain/{eufy_country.upper()}", timeout=30)
     resp.raise_for_status()
     domain_data = resp.json()
     if domain_data.get("code") != 0:

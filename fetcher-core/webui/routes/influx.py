@@ -87,6 +87,7 @@ def influx_proxy(version, route):
         params=request.args,
         cookies=request.cookies,
         allow_redirects=False,
+        timeout=30,
     )
     excluded_headers = ['content-encoding',
                         'content-length', 'transfer-encoding', 'connection']
