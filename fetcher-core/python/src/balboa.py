@@ -75,10 +75,15 @@ async def _balboa():
     async with pybalboa.SpaClient(spa_ip) as spa:
         await spa.connect()
 
-        # wait for the spa to be ready for use
-        while not spa.available:
+        # wait for the spa to be ready for use (max 60 seconds)
+        for _ in range(12):
+            if spa.available:
+                break
             logger.info("[balboa] Waiting for spa to be ready...")
             await asyncio.sleep(5)
+        else:
+            logger.warning("[balboa] Spa did not become available after 60s, aborting")
+            return
 
         # read/run spa commands
         if not spa.connected:
@@ -148,10 +153,15 @@ async def _balboa_control():
     async with pybalboa.SpaClient(spa_ip) as spa:
         await spa.connect()
 
-        # Wait for spa to be ready
-        while not spa.available:
+        # Wait for spa to be ready (max 60 seconds)
+        for _ in range(12):
+            if spa.available:
+                break
             logger.info("[balboa_control] Waiting for spa to be ready...")
             await asyncio.sleep(5)
+        else:
+            logger.warning("[balboa_control] Spa did not become available after 60s, aborting")
+            return
 
         if not spa.connected:
             logger.warning(

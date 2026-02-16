@@ -43,7 +43,7 @@ def _airquality():
             "extraComputations": [
                 "POLLUTANT_CONCENTRATION"
             ]
-        })
+        }, timeout=30)
     except requests.exceptions.RequestException as e:
         logger.error(f"[airquality] Error making API request: {e}")
         return
