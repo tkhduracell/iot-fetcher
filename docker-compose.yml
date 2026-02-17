@@ -3,6 +3,7 @@ version: "2.4"
 volumes:
   victoria-metrics:
   garmin-tokens:
+  home-assistant-config:
 
 services:
   database:
@@ -64,3 +65,12 @@ services:
       - garmin-tokens:/home/appuser/.garminconnect
     depends_on:
       - https-proxy
+
+  home-assistant:
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    volumes:
+      - home-assistant-config:/config
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=Europe/Stockholm

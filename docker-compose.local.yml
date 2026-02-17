@@ -31,3 +31,9 @@ services:
     env_file: ./garmin-influx-bridge/.env
     volumes:
       - ./volumes/garmin-tokens:/home/appuser/.garminconnect
+
+  home-assistant:
+    container_name: home-assistant
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    volumes:
+      - ./volumes/home-assistant-config:/config
