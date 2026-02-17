@@ -68,7 +68,7 @@ def main():
     schedule.every(1).hours.at(':10').do(with_timeout(balboa_control))
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
 
-    logging.info("Starting the scheduler...")
+    logging.info("Starting the scheduler, running all...")
     schedule.run_all(delay_seconds=10)
 
     # Avoid this from running every startup

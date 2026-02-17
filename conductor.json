@@ -1,5 +1,5 @@
 {
     "scripts": {
-        "setup": "cp $CONDUCTOR_ROOT_PATH/.env .env\ncp $CONDUCTOR_ROOT_PATH/core-fetcher/.env core-fetcher/.env\ncp $CONDUCTOR_ROOT_PATH/core-fetcher/python/.env core-fetcher/python/.env"
+        "setup": "rsync -aR --include='*/' --include='.env' --exclude='*' $CONDUCTOR_ROOT_PATH/./ ."
     }
 }
