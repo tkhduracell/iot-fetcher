@@ -1,4 +1,4 @@
-build: 
+build:
 	docker build -t europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest .
 
 push: build
@@ -6,8 +6,8 @@ push: build
 	docker push europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
 
 run-webui:
-	@echo "\nStarting webui web on port 8080...\n"
-	(cd ./webui && source venv/bin/activate && python web.py)
+	@echo "\nStarting Next.js webui on port 3000...\n"
+	(cd ./webui && npm run dev)
 
 run:
 	docker build . -t iot-fetcher:latest && docker run --rm -p 8080:8080 --env-file .env iot-fetcher:latest -- $(MODULE)
