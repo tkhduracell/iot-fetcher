@@ -19,8 +19,6 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
   field,
   window = "60m",
 }) => {
-  if (!open) return null;
-
   const start = useMemo(() => startOfYesterday(), []);
   const end = useMemo(() => endOfYesterday(), []);
 
@@ -38,6 +36,8 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
     end: end.toISOString(),
     step: window,
   });
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
