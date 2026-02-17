@@ -1,4 +1,4 @@
-# Stage 1: Build React app
+# Stage 1: Build Next.js app
 FROM node:22 AS frontend-build
 WORKDIR /app
 COPY webui/package*.json ./
@@ -6,9 +6,14 @@ RUN npm ci || npm install
 COPY webui/ .
 RUN npm run build
 
-# Stage 2: Python backend runtime
+# Stage 2: Python + Node.js runtime
 FROM python:3.13
 WORKDIR /app
+
+# Install Node.js 22 for Next.js standalone server
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install InfluxDB CLI
 RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor > /etc/apt/trusted.gpg.d/influxdata.gpg && \
@@ -16,7 +21,7 @@ RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor 
     apt-get update && apt-get install -y influxdb2-client && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Python deps
+# Python deps for scheduler
 COPY python/requirements.txt python/
 RUN pip install --no-cache-dir -r python/requirements.txt
 
@@ -25,19 +30,19 @@ RUN if [ "$PYDEBUGGER" = "1" ]; then \
         pip install debugpy; \
     fi
 
-# Copy Python stack
+# Copy Python scheduler
 COPY python/ ./python
 
-COPY webui/requirements.txt ./webui/
-RUN pip install --no-cache-dir -r webui/requirements.txt
+# Python deps for roborock sidecar
+COPY roborock-sidecar/requirements.txt roborock-sidecar/
+RUN pip install --no-cache-dir -r roborock-sidecar/requirements.txt
 
-# Copy built frontend from previous stage
-COPY --from=frontend-build /app/dist ./webui/dist
+# Copy roborock sidecar
+COPY roborock-sidecar/ ./roborock-sidecar
 
-# Copy webui source files
-COPY webui/lib ./webui/lib
-COPY webui/routes ./webui/routes
-COPY webui/web.py ./webui/
+# Copy Next.js standalone build
+COPY --from=frontend-build /app/.next/standalone ./webui
+COPY --from=frontend-build /app/.next/static ./webui/.next/static
 
 # Copy start script
 COPY start.sh .
