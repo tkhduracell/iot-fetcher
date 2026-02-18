@@ -7,6 +7,7 @@ import schedule
 
 from balboa import balboa
 # from balboa import balboa_control  # Disabled SPA control
+from deco import deco
 from elpris import elpris
 from ngenic import ngenic
 from sigenergy import sigenergy
@@ -45,10 +46,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [balboa, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
+        for m in [balboa, deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -60,6 +61,7 @@ def main():
     schedule.every(1).minutes.do(with_timeout(sigenergy))
     schedule.every(5).minutes.do(with_timeout(balboa))
     schedule.every(5).minutes.do(with_timeout(aquatemp))
+    schedule.every(5).minutes.do(with_timeout(deco))
     schedule.every(5).minutes.do(with_timeout(tapo))
     schedule.every(5).minutes.do(with_timeout(eufy))
     schedule.every(1).minutes.do(with_timeout(sonos))
