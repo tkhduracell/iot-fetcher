@@ -19,7 +19,6 @@ services:
 
   iot-fetcher:
     container_name: iot-fetcher
-    build: .
     env_file: 
       - ./fetcher-core/python/.env
       - ./fetcher-core/webui/.env
