@@ -19,10 +19,9 @@ services:
 
   iot-fetcher:
     container_name: iot-fetcher
-    build: .
     env_file: 
-      - ./core-fetcher/python/.env
-      - ./core-fetcher/webui/.env
+      - ./fetcher-core/python/.env
+      - ./fetcher-core/webui/.env
 
   tibber-influx-bridge:
     container_name: tibber-influxdb-bridge
