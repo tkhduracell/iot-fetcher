@@ -15,12 +15,14 @@ services:
 
   https-proxy:
     container_name: https-proxy
-    env_file: ./influx-proxy/.env
+    env_file: ./https-proxy/.env
 
   iot-fetcher:
     container_name: iot-fetcher
     build: .
-    env_file: ./core-fetcher/.env
+    env_file: 
+      - ./core-fetcher/python/.env
+      - ./core-fetcher/webui/.env
 
   tibber-influx-bridge:
     container_name: tibber-influxdb-bridge
@@ -38,13 +40,3 @@ services:
     volumes:
       - ./volumes/home-assistant-config:/config
 
-  watchtower:
-    container_name: watchtower
-    image: containrrr/watchtower:latest
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=300
-      - WATCHTOWER_INCLUDE_STOPPED=false
