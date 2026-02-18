@@ -13,3 +13,4 @@ pyModbusTCP==0.3.0
 
 iaqualink==0.6.0
 plugp100==5.1.5
+tplinkrouterc6u==5.15.1
