@@ -35,7 +35,7 @@ services:
       - database
 
   https-proxy:
-    build: ./influx-proxy
+    build: ./https-proxy
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
