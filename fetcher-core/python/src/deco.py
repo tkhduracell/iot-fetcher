@@ -5,6 +5,7 @@ from typing import List
 from tplinkrouterc6u import TPLinkDecoClient, Connection
 from influx import write_influx, Point
 
+# Configure module-specific logger
 logger = logging.getLogger(__name__)
 
 deco_ip = os.environ.get('DECO_IP', 'http://192.168.68.1')
@@ -111,5 +112,4 @@ def _deco():
 
     if points:
         write_influx(points)
-    else:
-        logger.info("[deco] No data points to write")
+
