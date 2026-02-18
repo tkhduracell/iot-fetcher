@@ -37,6 +37,8 @@ services:
   https-proxy:
     build: ./influx-proxy
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "443:443"
       - "80:80"
