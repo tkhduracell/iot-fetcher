@@ -13,7 +13,7 @@ if [ -n "$1" ]; then
 
     # the arg is webui
     if [ "$1" = "webui" ]; then
-        PORT=${WEB_UI_PORT:-8080} node ./webui/server.js &
+        HOSTNAME=0.0.0.0 PORT=${WEB_UI_PORT:-8080} node ./webui/server.js &
         python3 ./roborock-sidecar/sidecar.py &
         wait
         exit 0
@@ -23,7 +23,7 @@ if [ -n "$1" ]; then
     exit 0
 fi
 
-PORT=${WEB_UI_PORT:-8080} node ./webui/server.js &
+HOSTNAME=0.0.0.0 PORT=${WEB_UI_PORT:-8080} node ./webui/server.js &
 
 python3 ./roborock-sidecar/sidecar.py &
 
