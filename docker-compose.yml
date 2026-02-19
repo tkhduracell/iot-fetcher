@@ -10,8 +10,7 @@ services:
     image: victoriametrics/victoria-metrics:latest
     hostname: database
     restart: unless-stopped
-    ports:
-      - "8181:8181"
+    # No ports exposed - only accessible via database-auth (vmauth) for security
     volumes:
       - victoria-metrics:/victoria-metrics-data
     command:
