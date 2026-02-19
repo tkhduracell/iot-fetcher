@@ -39,3 +39,6 @@ services:
     volumes:
       - ./volumes/home-assistant-config:/config
 
+  wud:
+    container_name: wud
+

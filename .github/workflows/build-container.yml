@@ -71,3 +71,53 @@ jobs:
     - name: Log release ID built
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       run: echo "Built release ID ${{ steps.deploy.outputs.release_id }}"
+
+  build-proxy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - uses: 'google-github-actions/auth@v3'
+      id: auth
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      with:
+        token_format: access_token
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER_ID }}
+        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+    - uses: docker/login-action@v3
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      with:
+        registry: europe-docker.pkg.dev
+        username: oauth2accesstoken
+        password: '${{ steps.auth.outputs.access_token }}'
+
+    - name: Build And Push https-proxy image
+      uses: docker/build-push-action@v6
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+      with:
+        context: ./https-proxy/
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: europe-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/images/https-proxy:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build https-proxy image
+      uses: docker/build-push-action@v6
+      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
+      with:
+        context: ./https-proxy/
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
