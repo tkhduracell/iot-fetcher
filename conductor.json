@@ -1,5 +1,5 @@
 {
     "scripts": {
-        "setup": "rsync -aR --include='*/' --include='.env' --exclude='*' $CONDUCTOR_ROOT_PATH/./ ."
+        "setup": "rsync -a --include='*/' --include='.env' --exclude='*' $CONDUCTOR_ROOT_PATH/ ."
     }
 }
