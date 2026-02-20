@@ -66,21 +66,20 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 		header_up X-Forwarded-Proto {scheme}
 	}
 
-	handle /ha/* {
-		@denied not remote_ip 192.168.68.0/24 185.176.29.48
-		abort @denied
+}
 
-		header {
-			X-Frame-Options "SAMEORIGIN"
-			X-Content-Type-Options "nosniff"
-			Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-			X-XSS-Protection "1; mode=block"
-		}
+ha.{$PROXY_DOMAIN} {
+	@denied not remote_ip 192.168.68.0/24 185.176.29.48
+	abort @denied
 
-		uri strip_prefix /ha
-		reverse_proxy http://host.docker.internal:8123
+	header {
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-XSS-Protection "1; mode=block"
 	}
 
+	reverse_proxy http://host.docker.internal:8123
 }
 CADDYFILE
 EOF
