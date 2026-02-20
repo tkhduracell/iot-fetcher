@@ -18,3 +18,5 @@ volumes/
 backup-dashboard/
 
 victoria-metrics/auth.yml
+
+.context/
