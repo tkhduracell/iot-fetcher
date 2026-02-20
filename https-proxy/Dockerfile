@@ -67,7 +67,7 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 	}
 
 	handle /ha/* {
-		@denied not remote_ip 192.168.68.0/24
+		@denied not remote_ip 192.168.68.0/24 185.176.29.48
 		abort @denied
 
 		header {
