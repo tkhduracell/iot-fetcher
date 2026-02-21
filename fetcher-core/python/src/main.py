@@ -59,7 +59,7 @@ def main():
     schedule.every(1).minutes.do(with_timeout(aqualink))
     schedule.every(5).minutes.do(with_timeout(ngenic))
     schedule.every(1).minutes.do(with_timeout(sigenergy))
-    schedule.every(5).minutes.do(with_timeout(balboa))
+    # schedule.every(5).minutes.do(with_timeout(balboa))
     schedule.every(5).minutes.do(with_timeout(aquatemp))
     schedule.every(5).minutes.do(with_timeout(deco))
     schedule.every(5).minutes.do(with_timeout(tapo))
