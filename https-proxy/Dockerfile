@@ -68,7 +68,7 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 
 }
 
-ha.{$PROXY_DOMAIN} {
+{$HA_DOMAIN} {
 	@denied not remote_ip 192.168.68.0/24 185.176.29.48
 	abort @denied
 
