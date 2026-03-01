@@ -14,3 +14,10 @@
 - List label names: `curl -s "https://$INFLUXDB_V3_URL/api/v1/labels" -H "Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN"`
 - List values for a label: `curl -s "https://$INFLUXDB_V3_URL/api/v1/label/<label>/values" -H "Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN"`
 - Query a metric: `curl -s "https://$INFLUXDB_V3_URL/api/v1/query?query=<metric_name>" -H "Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN"`
+
+# Deployment (rpi5)
+- On rpi5, always use `sudo` and both compose files: `sudo docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
+
+# Grafana
+- In Grafana dashboards, use `$__interval` with `spanNulls` instead of hardcoded lookback windows
+- Update the Grafana dashboard via the conversion script (`convert_dashboard.py`), not by editing JSON directly
