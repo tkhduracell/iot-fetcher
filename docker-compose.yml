@@ -51,10 +51,13 @@ services:
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     depends_on:
       - database-auth
+      - sonos-http-api
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
@@ -82,6 +85,16 @@ services:
       - home-assistant-config:/config
     restart: unless-stopped
     network_mode: host
+    environment:
+      - TZ=Europe/Stockholm
+
+  sonos-http-api:
+    image: chrisns/docker-node-sonos-http-api:latest
+    hostname: sonos-http-api
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./sonos-http-api/settings.json:/app/settings.json:ro
     environment:
       - TZ=Europe/Stockholm
 
