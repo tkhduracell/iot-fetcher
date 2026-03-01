@@ -29,7 +29,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(energyThresholds())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'sigenergy_battery', 'soc_percent'))
     .gridPos({ h: 8, w: 9, x: 0, y: 46 });
 
@@ -69,7 +69,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(energyThresholds())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('DjUv', 'tibber', 'power'))
     .withTarget(vmMetric('B', 'tibber', 'power', { agg: 'MAX' }))
     .gridPos({ h: 8, w: 7, x: 17, y: 46 });
@@ -83,7 +83,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(energyThresholds())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayName('power', 'Inköp'),
       overrideDisplayAndColor('power_to_battery_kw', 'Batteri', 'blue'),
@@ -149,7 +149,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom())
     .tooltip(tooltipMulti())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmExpr('A', 'avg_over_time(tibber_powerL1[$__interval])', 'powerL1'))
     .withTarget(vmExpr('B', 'avg_over_time(tibber_powerL2[$__interval])', 'powerL2'))
     .withTarget(vmExpr('C', 'avg_over_time(tibber_powerL3[$__interval])', 'powerL3'))
@@ -174,7 +174,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedCost', { agg: 'MAX' }))
     .timeFrom('30d/d')
     .gridPos({ h: 6, w: 7, x: 0, y: 62 });
@@ -197,7 +197,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption', { agg: 'MAX' }))
     .timeFrom('30d/d')
     .gridPos({ h: 6, w: 9, x: 7, y: 62 });
@@ -221,7 +221,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
     .queryCachingTTL(600000)
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(
       vmMetric('A', 'energy_price', 'SEK_per_kWh', {
         agg: 'LAST_VALUE',
@@ -247,7 +247,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedCost'))
     .timeFrom('1d/d')
     .gridPos({ h: 8, w: 7, x: 0, y: 68 });
@@ -268,7 +268,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'tibber', 'accumulatedConsumption'))
     .timeFrom('1d/d')
     .gridPos({ h: 8, w: 9, x: 7, y: 68 });
@@ -291,7 +291,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(SPAN_NULLS_MS)
     .withTarget(
       vmMetric('A', 'energy_price', 'SEK_per_kWh', {
         agg: 'LAST_VALUE',
