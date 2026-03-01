@@ -7,7 +7,7 @@ allowed-tools: Bash
 
 # VictoriaMetrics Query
 
-Query the VictoriaMetrics instance using credentials from the project env files.
+Query the VictoriaMetrics instance using `scripts/vm-query.sh`, which handles credential loading automatically.
 
 ## Arguments
 
@@ -17,45 +17,18 @@ Query the VictoriaMetrics instance using credentials from the project env files.
   - `label <name>` - List values for a specific label (e.g. `label source`)
   - Any other string - Treated as a PromQL instant query (e.g. `up`, `balboa_temperature{source="balboa"}`)
 - `range` (optional): Set to `true` to use a range query instead of instant query
-- `start` (optional): Start time for range queries, relative or absolute (default: `1h` ago, e.g. `-2h`, `2024-01-01T00:00:00Z`)
+- `start` (optional): Start time for range queries (default: `1h` ago)
 - `end` (optional): End time for range queries (default: `now`)
 - `step` (optional): Step interval for range queries (default: `5m`)
 
 ## Steps
 
-1. **Extract credentials** from the project env files:
+1. **Run the query** using the helper script:
 
-```bash
-TOKEN=$(grep '^INFLUX_TOKEN=' fetcher-core/python/.env | cut -d'=' -f2-)
-DOMAIN=$(grep '^PROXY_DOMAIN=' https-proxy/.env | cut -d'=' -f2-)
-BASE_URL="https://${DOMAIN}"
-```
+   - **`metrics`**: `./scripts/vm-query.sh metrics`
+   - **`labels`**: `./scripts/vm-query.sh labels`
+   - **`label <name>`**: `./scripts/vm-query.sh label <name>`
+   - **PromQL instant query**: `./scripts/vm-query.sh query '<promql>'`
+   - **PromQL range query**: `./scripts/vm-query.sh range '<promql>' --start <start> --end <end> --step <step>`
 
-2. **Execute the appropriate query** based on the `query` argument:
-
-   - **`metrics`** - List all metric names:
-     ```bash
-     curl -s "${BASE_URL}/api/v1/label/__name__/values" -H "Authorization: Bearer ${TOKEN}" | jq .
-     ```
-
-   - **`labels`** - List all label names:
-     ```bash
-     curl -s "${BASE_URL}/api/v1/labels" -H "Authorization: Bearer ${TOKEN}" | jq .
-     ```
-
-   - **`label <name>`** - List values for a specific label:
-     ```bash
-     curl -s "${BASE_URL}/api/v1/label/<name>/values" -H "Authorization: Bearer ${TOKEN}" | jq .
-     ```
-
-   - **PromQL instant query** (any other string):
-     ```bash
-     curl -s "${BASE_URL}/api/v1/query" --data-urlencode "query=<query>" -H "Authorization: Bearer ${TOKEN}" | jq .
-     ```
-
-   - **PromQL range query** (when `range` is set):
-     ```bash
-     curl -s "${BASE_URL}/api/v1/query_range" --data-urlencode "query=<query>" --data-urlencode "start=<start>" --data-urlencode "end=<end>" --data-urlencode "step=<step>" -H "Authorization: Bearer ${TOKEN}" | jq .
-     ```
-
-3. **Report findings**: Summarize the query results. For metric/label listings, show the count and the values. For queries, format the results in a readable table.
+2. **Report findings**: Summarize the query results. For metric/label listings, show the count and the values. For queries, format the results in a readable table.
