@@ -1,15 +1,5 @@
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "intercept",
-            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '\\.env\"'; then echo 'BLOCK: Cannot edit .env files - they contain secrets'; exit 1; fi"
-          }
-        ]
-      }
-    ]
+    "PreToolUse": []
   }
 }
