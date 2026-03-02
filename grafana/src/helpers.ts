@@ -74,6 +74,9 @@ export function tooltipMulti(): cog.Builder<{ mode: string; sort: string; hideZe
 /** Max gap (ms) before inserting a null to disconnect the line. 10 min covers 1-5 min ingest intervals with margin. */
 export const SPAN_NULLS_MS = 600_000;
 
+/** Max gap (ms) before inserting a null for Eufy devices, which report every few hours. 6h covers typical polling intervals with margin. */
+export const EUFY_SPAN_NULLS_MS = 21_600_000;
+
 export function overrideDisplayName(fieldName: string, displayName: string): {
   matcher: dashboard.MatcherConfig;
   properties: dashboard.DynamicConfigValue[];
