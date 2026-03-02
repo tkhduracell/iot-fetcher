@@ -93,16 +93,12 @@ services:
     hostname: sonos-http-api
     restart: unless-stopped
     network_mode: host
-    volumes:
-      - ./sonos-http-api/settings.json:/app/settings.json:ro
     environment:
       - TZ=Europe/Stockholm
 
   wud:
     image: getwud/wud
     restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "3000:3000"
     environment:
