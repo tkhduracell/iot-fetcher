@@ -6,6 +6,7 @@ import { poolPanels } from './panels/pool.ts';
 import { spaPanels } from './panels/spa.ts';
 import { energyPanels } from './panels/energy.ts';
 import { eufyPanels } from './panels/eufy.ts';
+import { lightingPanels } from './panels/lighting.ts';
 
 function buildDashboard() {
   const builder = new DashboardBuilder('Irisgatan')
@@ -24,6 +25,12 @@ function buildDashboard() {
     builder.withPanel(panel);
   }
 
+  // Belysning row
+  builder.withRow(new RowBuilder('Belysning'));
+  for (const panel of lightingPanels()) {
+    builder.withPanel(panel);
+  }
+
   // Poolen row (includes pool + spa panels)
   builder.withRow(new RowBuilder('Poolen'));
   for (const panel of poolPanels()) {
@@ -34,7 +41,7 @@ function buildDashboard() {
   }
 
   // Energi row
-  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 45 }));
+  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 52 }));
   for (const panel of energyPanels()) {
     builder.withPanel(panel);
   }

@@ -6,7 +6,6 @@ import { VM_DS, vmMetric } from '../datasource.ts';
 import {
   thresholds, greenThreshold, paletteColor,
   legendBottom, tooltipSingle,
-  SPAN_NULLS_MS,
 } from '../helpers.ts';
 
 export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
@@ -20,7 +19,7 @@ export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(21_600_000)
     .withTransformation({ id: 'labelsToFields', options: { valueLabel: 'device_name' } })
     .withTarget(vmMetric('A', 'eufy_device', 'battery'))
     .timeFrom('7d/d')
@@ -36,7 +35,7 @@ export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(21_600_000)
     .withTransformation({ id: 'labelsToFields', options: { valueLabel: 'device_name' } })
     .withTarget(vmMetric('A', 'eufy_device', 'batteryTemperature'))
     .timeFrom('7d/d')
@@ -56,7 +55,7 @@ export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
     ]))
     .legend(legendBottom())
     .tooltip(tooltipSingle())
-    .spanNulls(SPAN_NULLS_MS)
+    .insertNulls(21_600_000)
     .withTransformation({ id: 'labelsToFields', options: { valueLabel: 'device_name' } })
     .withTarget(vmMetric('A', 'eufy_device', 'wifiRssi'))
     .timeFrom('7d/d')

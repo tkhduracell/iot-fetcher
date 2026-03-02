@@ -71,7 +71,7 @@ export function tooltipMulti(): cog.Builder<{ mode: string; sort: string; hideZe
   };
 }
 
-/** Max gap (ms) to bridge with a line. 10 min covers 1-5 min ingest intervals with margin. */
+/** Max gap (ms) before inserting a null to disconnect the line. 10 min covers 1-5 min ingest intervals with margin. */
 export const SPAN_NULLS_MS = 600_000;
 
 export function overrideDisplayName(fieldName: string, displayName: string): {
