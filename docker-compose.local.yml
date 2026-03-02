@@ -39,6 +39,13 @@ services:
     volumes:
       - ./volumes/home-assistant-config:/config
 
+  sonos-http-api:
+    container_name: sonos-http-api
+    volumes:
+      - ./sonos-http-api/settings.json:/app/settings.json:ro
+
   wud:
     container_name: wud
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
