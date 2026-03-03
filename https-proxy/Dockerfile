@@ -68,6 +68,10 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 
 }
 
+{$AI_DOMAIN} {
+	reverse_proxy http://claude-chat:3001
+}
+
 {$HA_DOMAIN} {
 	@denied not remote_ip 192.168.68.0/24 185.176.29.48
 	abort @denied

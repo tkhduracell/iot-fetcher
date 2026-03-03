@@ -44,6 +44,10 @@ services:
     volumes:
       - ./sonos-http-api/settings.json:/app/settings.json:ro
 
+  claude-chat:
+    container_name: claude-chat
+    env_file: ./claude-chat/.env
+
   wud:
     container_name: wud
     volumes:

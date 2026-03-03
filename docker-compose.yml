@@ -44,6 +44,21 @@ services:
     depends_on:
       - iot-fetcher
       - database-auth
+      - claude-chat
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  claude-chat:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/claude-chat:latest
+    hostname: claude-chat
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3001:3001"
+    depends_on:
+      - database-auth
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
