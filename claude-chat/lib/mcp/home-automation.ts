@@ -1,9 +1,7 @@
-import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { FunctionTool } from "@google/adk";
 import { z } from "zod";
 
 const SONOS_HOST = process.env.SONOS_HOST ?? "host.docker.internal";
-const ROBOROCK_SIDECAR_URL =
-  process.env.ROBOROCK_SIDECAR_URL ?? "http://iot-fetcher:8081";
 const INFLUXDB_URL = process.env.INFLUXDB_V3_URL ?? "";
 const INFLUXDB_TOKEN = process.env.INFLUXDB_V3_ACCESS_TOKEN ?? "";
 
@@ -24,19 +22,16 @@ async function fetchJson(url: string, options?: RequestInit) {
   }
 }
 
-function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
-
 // --- Sonos tools ---
 
-const sonosGetZones = tool(
-  "sonos_get_zones",
-  "List all Sonos speaker zones/rooms with their current playback state, volume, and what is playing",
-  {},
-  async () => {
+const sonosGetZones = new FunctionTool({
+  name: "sonos_get_zones",
+  description:
+    "List all Sonos speaker zones/rooms with their current playback state, volume, and what is playing",
+  parameters: z.object({}),
+  execute: async () => {
     const data = await fetchJson(`http://${SONOS_HOST}:5005/zones`);
-    if (data.error) return textResult(`Error: ${data.error}`);
+    if (data.error) return { error: data.error };
 
     const zones = Array.isArray(data)
       ? data.map(
@@ -66,190 +61,141 @@ const sonosGetZones = tool(
         )
       : data;
 
-    return textResult(JSON.stringify(zones, null, 2));
-  }
-);
-
-const sonosPlay = tool(
-  "sonos_play",
-  "Resume playback on a Sonos zone/room",
-  {
-    room: z
-      .string()
-      .describe("Room name, e.g. 'Living Room', 'Kitchen'"),
+    return { zones };
   },
-  async ({ room }) => {
-    const encoded = encodeURIComponent(room);
-    const data = await fetchJson(
-      `http://${SONOS_HOST}:5005/${encoded}/play`
-    );
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
+});
 
-const sonosPause = tool(
-  "sonos_pause",
-  "Pause playback on a Sonos zone/room",
-  {
+const sonosPlay = new FunctionTool({
+  name: "sonos_play",
+  description: "Resume playback on a Sonos zone/room",
+  parameters: z.object({
+    room: z.string().describe("Room name, e.g. 'Living Room', 'Kitchen'"),
+  }),
+  execute: async ({ room }) => {
+    const encoded = encodeURIComponent(room);
+    return await fetchJson(`http://${SONOS_HOST}:5005/${encoded}/play`);
+  },
+});
+
+const sonosPause = new FunctionTool({
+  name: "sonos_pause",
+  description: "Pause playback on a Sonos zone/room",
+  parameters: z.object({
     room: z.string().describe("Room name"),
-  },
-  async ({ room }) => {
+  }),
+  execute: async ({ room }) => {
     const encoded = encodeURIComponent(room);
-    const data = await fetchJson(
-      `http://${SONOS_HOST}:5005/${encoded}/pause`
-    );
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
+    return await fetchJson(`http://${SONOS_HOST}:5005/${encoded}/pause`);
+  },
+});
 
-const sonosVolume = tool(
-  "sonos_volume",
-  "Set the volume of a Sonos zone/room (0-100)",
-  {
+const sonosVolume = new FunctionTool({
+  name: "sonos_volume",
+  description: "Set the volume of a Sonos zone/room (0-100)",
+  parameters: z.object({
     room: z.string().describe("Room name"),
     volume: z.number().min(0).max(100).describe("Volume level 0-100"),
-  },
-  async ({ room, volume }) => {
+  }),
+  execute: async ({ room, volume }) => {
     const encoded = encodeURIComponent(room);
-    const data = await fetchJson(
+    return await fetchJson(
       `http://${SONOS_HOST}:5005/${encoded}/volume/${volume}`
     );
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
+  },
+});
 
-const sonosFavourite = tool(
-  "sonos_favourite",
-  "Play a Sonos favourite/playlist on a zone/room",
-  {
+const sonosFavourite = new FunctionTool({
+  name: "sonos_favourite",
+  description: "Play a Sonos favourite/playlist on a zone/room",
+  parameters: z.object({
     room: z.string().describe("Room name"),
     favourite: z.string().describe("Name of the favourite or playlist"),
-  },
-  async ({ room, favourite }) => {
+  }),
+  execute: async ({ room, favourite }) => {
     const encodedRoom = encodeURIComponent(room);
     const encodedFav = encodeURIComponent(favourite);
-    const data = await fetchJson(
+    return await fetchJson(
       `http://${SONOS_HOST}:5005/${encodedRoom}/favourite/${encodedFav}`
     );
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
-
-// --- Roborock tools ---
-
-const roborockListZones = tool(
-  "roborock_list_zones",
-  "List all available vacuum cleaning zones/rooms across all maps",
-  {},
-  async () => {
-    const data = await fetchJson(`${ROBOROCK_SIDECAR_URL}/roborock/zones`);
-    if (data.error) return textResult(`Error: ${data.error}`);
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
-
-const roborockCleanZone = tool(
-  "roborock_clean_zone",
-  "Start vacuum cleaning of a specific zone/room. Use 'all' as zone_id for full-house cleaning.",
-  {
-    device_id: z.string().describe("Device ID from zone listing"),
-    map_id: z
-      .string()
-      .describe("Map flag/ID from zone listing (e.g. map_flag value)"),
-    zone_id: z
-      .string()
-      .describe(
-        "Zone segment ID from zone listing, or 'all' for full-house clean"
-      ),
   },
-  async ({ device_id, map_id, zone_id }) => {
-    const data = await fetchJson(
-      `${ROBOROCK_SIDECAR_URL}/roborock/${encodeURIComponent(device_id)}/${encodeURIComponent(map_id)}/${encodeURIComponent(zone_id)}/clean`,
-      { method: "POST" }
-    );
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
+});
 
 // --- Metrics tools ---
 
-const listMetrics = tool(
-  "list_metrics",
-  "List all available metric names from VictoriaMetrics",
-  {},
-  async () => {
-    if (!INFLUXDB_URL) return textResult("Error: INFLUXDB_V3_URL not configured");
+const listMetrics = new FunctionTool({
+  name: "list_metrics",
+  description: "List all available metric names from VictoriaMetrics",
+  parameters: z.object({}),
+  execute: async () => {
+    if (!INFLUXDB_URL)
+      return { error: "INFLUXDB_V3_URL not configured" };
     const data = await fetchJson(
-      `https://${INFLUXDB_URL}/api/v1/label/__name__/values`,
+      `${INFLUXDB_URL}/api/v1/label/__name__/values`,
       { headers: { Authorization: `Bearer ${INFLUXDB_TOKEN}` } }
     );
-    if (data.error) return textResult(`Error: ${data.error}`);
-    return textResult(JSON.stringify(data.data ?? data, null, 2));
-  }
-);
+    if (data.error) return { error: data.error };
+    return { metrics: data.data ?? data };
+  },
+});
 
-const queryMetrics = tool(
-  "query_metrics",
-  "Query VictoriaMetrics with a PromQL expression. Returns current values for the given metric/query.",
-  {
+const queryMetrics = new FunctionTool({
+  name: "query_metrics",
+  description:
+    "Query VictoriaMetrics with a PromQL expression. Returns current values for the given metric/query.",
+  parameters: z.object({
     query: z
       .string()
       .describe(
         "PromQL query expression, e.g. 'sigenergy_battery_soc' or 'rate(tapo_device_power[5m])'"
       ),
-  },
-  async ({ query }) => {
-    if (!INFLUXDB_URL) return textResult("Error: INFLUXDB_V3_URL not configured");
-    const url = `https://${INFLUXDB_URL}/api/v1/query?query=${encodeURIComponent(query)}`;
+  }),
+  execute: async ({ query }) => {
+    if (!INFLUXDB_URL)
+      return { error: "INFLUXDB_V3_URL not configured" };
+    const url = `${INFLUXDB_URL}/api/v1/query?query=${encodeURIComponent(query)}`;
     const data = await fetchJson(url, {
       headers: { Authorization: `Bearer ${INFLUXDB_TOKEN}` },
     });
-    if (data.error) return textResult(`Error: ${data.error}`);
-    return textResult(JSON.stringify(data, null, 2));
-  }
-);
+    if (data.error) return { error: data.error };
+    return data;
+  },
+});
 
-const listLabels = tool(
-  "list_metric_labels",
-  "List all label names or values for a specific label in VictoriaMetrics. Useful for discovering metric dimensions.",
-  {
+const listLabels = new FunctionTool({
+  name: "list_metric_labels",
+  description:
+    "List all label names or values for a specific label in VictoriaMetrics. Useful for discovering metric dimensions.",
+  parameters: z.object({
     label: z
       .string()
       .optional()
       .describe(
         "If provided, list values for this label. If omitted, list all label names."
       ),
-  },
-  async ({ label }) => {
-    if (!INFLUXDB_URL) return textResult("Error: INFLUXDB_V3_URL not configured");
+  }),
+  execute: async ({ label }) => {
+    if (!INFLUXDB_URL)
+      return { error: "INFLUXDB_V3_URL not configured" };
     const path = label
       ? `/api/v1/label/${encodeURIComponent(label)}/values`
       : "/api/v1/labels";
-    const data = await fetchJson(`https://${INFLUXDB_URL}${path}`, {
+    const data = await fetchJson(`${INFLUXDB_URL}${path}`, {
       headers: { Authorization: `Bearer ${INFLUXDB_TOKEN}` },
     });
-    if (data.error) return textResult(`Error: ${data.error}`);
-    return textResult(JSON.stringify(data.data ?? data, null, 2));
-  }
-);
+    if (data.error) return { error: data.error };
+    return { labels: data.data ?? data };
+  },
+});
 
-// --- Create the MCP server ---
+// --- Export all tools ---
 
-export function createHomeAutomationServer() {
-  return createSdkMcpServer({
-    name: "home-automation",
-    version: "1.0.0",
-    tools: [
-      sonosGetZones,
-      sonosPlay,
-      sonosPause,
-      sonosVolume,
-      sonosFavourite,
-      roborockListZones,
-      roborockCleanZone,
-      listMetrics,
-      queryMetrics,
-      listLabels,
-    ],
-  });
-}
+export const homeAutomationTools = [
+  sonosGetZones,
+  sonosPlay,
+  sonosPause,
+  sonosVolume,
+  sonosFavourite,
+  listMetrics,
+  queryMetrics,
+  listLabels,
+];
