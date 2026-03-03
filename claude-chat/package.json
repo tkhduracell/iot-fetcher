@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@google/adk": "^0.1.0",
+    "better-sqlite3": "^12.6.2",
+    "googleapis": "^171.4.0",
     "next": "^15.3.0",
     "next-auth": "^4.24.0",
     "react": "^18.3.1",
@@ -18,12 +20,13 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "postcss": "^8.5.0",
     "tailwindcss": "^4.1.0",
-    "typescript": "^5.8.0",
-    "@tailwindcss/postcss": "^4.1.0"
+    "typescript": "^5.8.0"
   }
 }
