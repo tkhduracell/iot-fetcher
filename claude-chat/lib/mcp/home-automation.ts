@@ -1,7 +1,7 @@
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-const SONOS_HOST = process.env.SONOS_HOST ?? "sonos-http-api";
+const SONOS_HOST = process.env.SONOS_HOST ?? "host.docker.internal";
 const ROBOROCK_SIDECAR_URL =
   process.env.ROBOROCK_SIDECAR_URL ?? "http://localhost:8081";
 const INFLUXDB_URL = process.env.INFLUXDB_V3_URL ?? "";
