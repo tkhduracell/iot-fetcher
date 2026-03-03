@@ -1,70 +1,77 @@
-import { LlmAgent, InMemoryRunner } from "@google/adk";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { homeAutomationTools } from "@/lib/mcp/home-automation";
-
-// ADK reads GOOGLE_GENAI_API_KEY or GEMINI_API_KEY
-if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_GENAI_API_KEY) {
-  process.env.GOOGLE_GENAI_API_KEY = process.env.GEMINI_API_KEY;
-}
-
-const SYSTEM_PROMPT = `You are a helpful home automation assistant for Filip's smart home.
-
-You have access to tools for:
-- **Sonos**: Control music playback, volume, favourites across rooms
-- **Metrics**: Query VictoriaMetrics for home sensor data (energy, temperature, devices)
-
-Guidelines:
-- Be concise and helpful
-- When asked about music, check what's playing first with sonos_get_zones
-- When asked to list metrics or about available metrics, call list_metrics immediately
-- For metrics queries, use list_metrics to discover what's available if unsure
-- Present data in a readable format, not raw JSON
-- If a tool call fails, explain the error simply`;
-
-const agent = new LlmAgent({
-  name: "home_assistant",
-  model: "gemini-3-flash-preview",
-  instruction: SYSTEM_PROMPT,
-  tools: homeAutomationTools,
-});
-
-const runner = new InMemoryRunner({
-  agent,
-  appName: "home-automation-chat",
-});
+import { getSession as getDbSession, getMessages, addMessage } from "@/lib/db";
+import { getRunner } from "@/lib/agents";
+import { getPersona } from "@/lib/personas";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session) {
+  if (!session?.user?.email) {
     return new Response("Unauthorized", { status: 401 });
   }
 
   const body = await req.json();
   const { message, sessionId } = body as {
     message: string;
-    sessionId?: string;
+    sessionId: string;
   };
 
   if (!message || typeof message !== "string") {
     return new Response("Missing message", { status: 400 });
   }
+  if (!sessionId) {
+    return new Response("Missing sessionId", { status: 400 });
+  }
 
-  // Get or create a session for this user
-  const userId = session.user?.email ?? "anonymous";
-  let adkSession = sessionId
-    ? await runner.sessionService.getSession({
-        appName: "home-automation-chat",
-        userId,
-        sessionId,
-      })
-    : null;
+  // Load session from DB
+  const dbSession = getDbSession(sessionId);
+  if (!dbSession || dbSession.user_email !== session.user.email) {
+    return new Response("Session not found", { status: 404 });
+  }
+
+  const persona = getPersona(dbSession.persona);
+  if (!persona) {
+    return new Response("Unknown persona", { status: 400 });
+  }
+
+  const userId = session.user.email;
+  const runner = getRunner(sessionId, persona, dbSession.model);
+
+  // Get or create ADK session
+  let adkSession = await runner.sessionService
+    .getSession({
+      appName: "home-automation-chat",
+      userId,
+      sessionId,
+    })
+    .catch(() => null);
+
   if (!adkSession) {
     adkSession = await runner.sessionService.createSession({
       appName: "home-automation-chat",
       userId,
+      sessionId,
     });
+
+    // Replay existing messages into ADK session if resuming from DB
+    const existingMessages = getMessages(sessionId);
+    if (existingMessages.length > 0) {
+      for (const msg of existingMessages) {
+        const content = {
+          parts: [{ text: msg.content || "(tool interaction)" }],
+          role: msg.role === "user" ? "user" : "model",
+        };
+        // Cast to bypass strict Event type — we only need parts/role for context replay
+        adkSession.events.push({
+          author: msg.role === "user" ? "user" : persona.id.replace(/-/g, "_"),
+          content,
+        } as unknown as (typeof adkSession.events)[number]);
+      }
+    }
   }
+
+  // Save user message to DB
+  addMessage(sessionId, "user", message);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -75,49 +82,61 @@ export async function POST(req: Request) {
         );
       }
 
-      try {
-        const userMessage = {
-          parts: [{ text: message }],
-        };
+      let fullText = "";
+      const toolCalls: { id: string; name: string; input: unknown; result?: string }[] = [];
 
-        // Send session ID to client
-        send({ type: "session_id", sessionId: adkSession.id });
+      try {
+        send({ type: "session_id", sessionId });
 
         for await (const event of runner.runAsync({
           userId,
-          sessionId: adkSession.id,
-          newMessage: userMessage,
+          sessionId,
+          newMessage: { parts: [{ text: message }] },
         })) {
           if (!event.content?.parts) continue;
 
+          const agentName = persona.id.replace(/-/g, "_");
+
           for (const part of event.content.parts) {
-            // Text response
             if ("text" in part && part.text) {
-              if (event.author === "home_assistant") {
+              if (event.author === agentName) {
                 send({ type: "text", text: part.text });
+                fullText += part.text;
               }
             }
 
-            // Function call (tool use)
             if ("functionCall" in part && part.functionCall) {
+              const tc = {
+                id: (part.functionCall.id ?? part.functionCall.name) as string,
+                name: part.functionCall.name as string,
+                input: part.functionCall.args as unknown,
+              };
+              toolCalls.push(tc);
               send({
                 type: "tool_use",
-                id: part.functionCall.id ?? part.functionCall.name,
-                name: part.functionCall.name,
-                input: part.functionCall.args,
+                id: tc.id,
+                name: tc.name,
+                input: tc.input,
               });
             }
 
-            // Function response (tool result)
             if ("functionResponse" in part && part.functionResponse) {
-              send({
-                type: "tool_result",
-                id: part.functionResponse.id ?? part.functionResponse.name,
-                result: JSON.stringify(part.functionResponse.response),
-              });
+              const id = part.functionResponse.id ?? part.functionResponse.name;
+              const result = JSON.stringify(part.functionResponse.response);
+              const tc = toolCalls.find((t) => t.id === id);
+              if (tc) tc.result = result;
+              send({ type: "tool_result", id, result });
             }
           }
         }
+
+        // Save assistant message to DB
+        addMessage(
+          sessionId,
+          "assistant",
+          fullText,
+          toolCalls.length > 0 ? toolCalls : undefined
+        );
 
         send({ type: "done" });
       } catch (err) {
