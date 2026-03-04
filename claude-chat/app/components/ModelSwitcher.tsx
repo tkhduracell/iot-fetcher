@@ -1,9 +1,9 @@
 "use client";
 
 const MODELS = [
-  { id: "gemini-3-flash", label: "Gemini 3 Flash" },
+  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
   { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-  { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
+  { id: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash Lite" },
 ];
 
 type Props = {
