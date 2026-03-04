@@ -9,6 +9,49 @@ if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_GENAI_API_KEY) {
   process.env.GOOGLE_GENAI_API_KEY = process.env.GEMINI_API_KEY;
 }
 
+// In test mode, redirect external API calls to the local mock server
+if (process.env.NODE_ENV === "test" && process.env.MOCK_SERVER_PORT) {
+  const MOCK_BASE = `http://localhost:${process.env.MOCK_SERVER_PORT}`;
+  const REDIRECT_HOSTS = [
+    "generativelanguage.googleapis.com",
+    "api.search.brave.com",
+    "sheets.googleapis.com",
+    "www.googleapis.com",
+  ];
+  const _originalFetch = globalThis.fetch;
+  globalThis.fetch = async function testFetchInterceptor(
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1]
+  ) {
+    let url: string | undefined;
+    if (typeof input === "string") url = input;
+    else if (input instanceof URL) url = input.toString();
+    else if (input && typeof input === "object" && "url" in input)
+      url = (input as { url: string }).url;
+
+    if (url) {
+      for (const host of REDIRECT_HOSTS) {
+        if (url.includes(host)) {
+          const parsed = new URL(url);
+          return _originalFetch(
+            `${MOCK_BASE}${parsed.pathname}${parsed.search}`,
+            init
+          );
+        }
+      }
+      if (url.includes("localhost:5005") || url.includes("127.0.0.1:5005")) {
+        const parsed = new URL(url);
+        return _originalFetch(
+          `${MOCK_BASE}${parsed.pathname}${parsed.search}`,
+          init
+        );
+      }
+    }
+    return _originalFetch(input, init);
+  };
+  console.log("[agents] Test mode: API calls redirected to", MOCK_BASE);
+}
+
 type CachedRunner = {
   runner: InMemoryRunner;
   persona: string;
