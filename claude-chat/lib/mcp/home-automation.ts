@@ -190,12 +190,12 @@ const listLabels = new FunctionTool({
 // --- Export all tools ---
 
 export const homeAutomationTools = [
+  listMetrics,
+  queryMetrics,
+  listLabels,
   sonosGetZones,
   sonosPlay,
   sonosPause,
   sonosVolume,
   sonosFavourite,
-  listMetrics,
-  queryMetrics,
-  listLabels,
 ];
