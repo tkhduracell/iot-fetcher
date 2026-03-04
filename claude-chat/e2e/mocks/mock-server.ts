@@ -150,11 +150,48 @@ export function createMockServer(): http.Server {
       const body = await readBody(req);
       state.requestLog.push({ url, body, timestamp: Date.now() });
 
+      // Title generation requests get a fixed response (don't consume the queue)
+      const isTitleRequest = body.includes("Generate a very short title");
+      if (isTitleRequest) {
+        console.log("[mock-server] Title generation request — returning fixed title");
+        const titleResp = buildGeminiResponse({ text: "Test Chat Title" });
+        jsonResponse(res, titleResp[0]);
+        return;
+      }
+
       const mockResp = getNextGeminiResponse();
       const responseChunks = buildGeminiResponse(mockResp);
 
-      // Return as JSON array (ADK expects streamed JSON chunks)
-      jsonResponse(res, responseChunks);
+      if (url.includes("alt=sse") || url.includes("streamGenerateContent")) {
+        // Streaming: return SSE format
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        });
+        for (const chunk of responseChunks) {
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        }
+        res.end();
+      } else {
+        // Non-streaming generateContent: return single response object (not array)
+        // Merge all chunks into one response with combined parts
+        const allParts: unknown[] = [];
+        for (const chunk of responseChunks) {
+          const c = chunk as { candidates?: { content?: { parts?: unknown[] } }[] };
+          if (c.candidates?.[0]?.content?.parts) {
+            allParts.push(...c.candidates[0].content.parts);
+          }
+        }
+        jsonResponse(res, {
+          candidates: [
+            {
+              content: { parts: allParts, role: "model" },
+              finishReason: "STOP",
+            },
+          ],
+        });
+      }
       return;
     }
 

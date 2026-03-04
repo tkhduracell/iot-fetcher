@@ -51,8 +51,8 @@ test.describe("Tool Call Display", () => {
     const successIcon = toolCallButton.locator('svg path[d="M8 12l3 3 5-5"]');
     await expect(successIcon).toBeVisible({ timeout: 15_000 });
 
-    // Verify the follow-up text appears after tool completion
-    await expect(page.locator("text=Living Room")).toBeVisible({ timeout: 15_000 });
+    // Verify the follow-up text appears in a .prose container (the assistant message)
+    await expect(page.locator(".prose", { hasText: "Living Room is playing jazz" })).toBeVisible({ timeout: 15_000 });
   });
 
   test("displays metrics query tool call", async ({
@@ -75,8 +75,8 @@ test.describe("Tool Call Display", () => {
     const successIcon = toolCallButton.locator('svg path[d="M8 12l3 3 5-5"]');
     await expect(successIcon).toBeVisible({ timeout: 15_000 });
 
-    // Verify follow-up text
-    await expect(page.locator("text=battery")).toBeVisible({ timeout: 15_000 });
+    // Verify follow-up text in assistant message
+    await expect(page.locator(".prose", { hasText: "battery state of charge" })).toBeVisible({ timeout: 15_000 });
   });
 
   test("displays brave search tool call for researcher persona", async ({
@@ -99,8 +99,8 @@ test.describe("Tool Call Display", () => {
     const successIcon = toolCallButton.locator('svg path[d="M8 12l3 3 5-5"]');
     await expect(successIcon).toBeVisible({ timeout: 15_000 });
 
-    // Verify follow-up text
-    await expect(page.locator("text=Stockholm")).toBeVisible({ timeout: 15_000 });
+    // Verify follow-up text in assistant message
+    await expect(page.locator(".prose", { hasText: "partly cloudy" })).toBeVisible({ timeout: 15_000 });
   });
 
   test("displays list metrics tool call", async ({
@@ -123,7 +123,7 @@ test.describe("Tool Call Display", () => {
     const successIcon = toolCallButton.locator('svg path[d="M8 12l3 3 5-5"]');
     await expect(successIcon).toBeVisible({ timeout: 15_000 });
 
-    // Verify follow-up text
-    await expect(page.locator("text=sigenergy_battery_soc")).toBeVisible({ timeout: 15_000 });
+    // Verify follow-up text in assistant message
+    await expect(page.locator(".prose", { hasText: "sigenergy_battery_soc" })).toBeVisible({ timeout: 15_000 });
   });
 });
