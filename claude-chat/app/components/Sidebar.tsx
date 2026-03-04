@@ -109,19 +109,29 @@ export function Sidebar({ open }: { open: boolean }) {
               <button
                 key={s.id}
                 onClick={() => router.push(`/chat/${s.id}`)}
-                className={`w-full group flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors cursor-pointer
+                className={`w-full group flex items-start gap-2 px-3 py-2 text-xs rounded-lg transition-colors cursor-pointer
                   ${activeId === s.id
                     ? "bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)]"
                     : "text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-hover)]"
                   }`}
               >
-                <span className="shrink-0">{PERSONA_ICONS[s.persona] ?? "💬"}</span>
-                <span className="truncate flex-1 text-left">
-                  {s.title || "New chat"}
+                <span className="shrink-0 mt-0.5">{PERSONA_ICONS[s.persona] ?? "💬"}</span>
+                <span className="flex-1 min-w-0 text-left">
+                  <span className="block truncate">
+                    {s.title || "New chat"}
+                  </span>
+                  <span className="flex gap-1 mt-0.5">
+                    <span className="inline-block px-1.5 py-0.5 rounded text-[10px] leading-tight bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
+                      {s.persona}
+                    </span>
+                    <span className="inline-block px-1.5 py-0.5 rounded text-[10px] leading-tight bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
+                      {s.model.replace("gemini-", "").replace("-preview", "")}
+                    </span>
+                  </span>
                 </span>
                 <span
                   onClick={(e) => handleDelete(s.id, e)}
-                  className="shrink-0 opacity-0 group-hover:opacity-100 text-[var(--color-text-muted)]
+                  className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 text-[var(--color-text-muted)]
                              hover:text-[var(--color-tool-error)] transition-all cursor-pointer"
                   title="Delete"
                 >
