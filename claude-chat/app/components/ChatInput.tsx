@@ -2,12 +2,19 @@
 
 import { useState, useRef, useEffect } from "react";
 
+const PERSONA_HINTS: Record<string, string> = {
+  "home-assistant": "Control Sonos, Roborock, and query home metrics.",
+  researcher: "Search the web for information and answers.",
+  analyst: "Query spreadsheets and home metrics for insights.",
+};
+
 type Props = {
   onSend: (message: string) => void;
   disabled: boolean;
+  persona?: string;
 };
 
-export function ChatInput({ onSend, disabled }: Props) {
+export function ChatInput({ onSend, disabled, persona }: Props) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -17,7 +24,6 @@ export function ChatInput({ onSend, disabled }: Props) {
     }
   }, [disabled]);
 
-  // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current;
     if (el) {
@@ -32,6 +38,8 @@ export function ChatInput({ onSend, disabled }: Props) {
     onSend(trimmed);
     setInput("");
   }
+
+  const hint = persona ? PERSONA_HINTS[persona] : undefined;
 
   return (
     <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] p-4">
@@ -79,9 +87,11 @@ export function ChatInput({ onSend, disabled }: Props) {
           </svg>
         </button>
       </div>
-      <p className="text-center text-xs text-[var(--color-text-muted)] mt-2">
-        Claude can control Sonos, Roborock, and query home metrics.
-      </p>
+      {hint && (
+        <p className="text-center text-xs text-[var(--color-text-muted)] mt-2">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

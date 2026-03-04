@@ -13,8 +13,13 @@
   --color-accent-dim: #b8956a;
   --color-tool-bg: #1a1a2e;
   --color-tool-border: #2a2a4a;
+  --color-tool-success: #4ade80;
+  --color-tool-running: #facc15;
+  --color-tool-error: #f87171;
   --color-user-bg: #1a2a1a;
   --color-user-border: #2a4a2a;
+  --color-sidebar-bg: #111111;
+  --color-sidebar-hover: #1a1a1a;
 }
 
 html {

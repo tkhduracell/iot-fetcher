@@ -47,6 +47,8 @@ services:
   claude-chat:
     container_name: claude-chat
     env_file: ./claude-chat/.env
+    volumes:
+      - ./volumes/claude-chat-data:/app/data
 
   wud:
     container_name: wud
