@@ -26,7 +26,7 @@ export function getDb(): Database.Database {
       user_email TEXT NOT NULL,
       persona TEXT NOT NULL,
       title TEXT DEFAULT '',
-      model TEXT DEFAULT 'gemini-3-flash',
+      model TEXT DEFAULT 'gemini-3-flash-preview',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -71,7 +71,7 @@ export function createSession(id: string, userEmail: string, persona: string, mo
   const stmt = db.prepare(
     `INSERT INTO sessions (id, user_email, persona, model) VALUES (?, ?, ?, ?) RETURNING *`
   );
-  return stmt.get(id, userEmail, persona, model ?? "gemini-3-flash") as Session;
+  return stmt.get(id, userEmail, persona, model ?? "gemini-3-flash-preview") as Session;
 }
 
 export function getSession(id: string): Session | undefined {

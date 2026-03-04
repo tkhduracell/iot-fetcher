@@ -12,7 +12,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const sessionId = params?.sessionId;
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [currentModel, setCurrentModel] = useState("gemini-3-flash");
+  const [currentModel, setCurrentModel] = useState("gemini-3-flash-preview");
 
   // Sync model from session data when sessionId changes
   useEffect(() => {

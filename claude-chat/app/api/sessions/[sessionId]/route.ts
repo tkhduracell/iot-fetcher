@@ -3,7 +3,7 @@ import { authOptions } from "@/lib/auth";
 import { getSession, deleteSession, updateSession } from "@/lib/db";
 import { evictRunner } from "@/lib/agents";
 
-const ALLOWED_MODELS = ["gemini-3-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
+const ALLOWED_MODELS = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview"];
 
 type Params = { params: Promise<{ sessionId: string }> };
 
