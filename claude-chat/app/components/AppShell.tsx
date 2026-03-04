@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useParams } from "next/navigation";
 import { Header } from "./Header";
@@ -12,7 +12,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const sessionId = params?.sessionId;
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [currentModel, setCurrentModel] = useState("gemini-2.0-flash");
+  const [currentModel, setCurrentModel] = useState("gemini-3-flash");
+
+  // Sync model from session data when sessionId changes
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`/api/sessions/${sessionId}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.model) setCurrentModel(data.model);
+      })
+      .catch(() => {});
+  }, [sessionId]);
 
   const handleModelChange = useCallback(
     async (model: string) => {

@@ -41,7 +41,7 @@ export async function POST(_req: Request, { params }: Params) {
 
     const genai = new GoogleGenAI({ apiKey });
     const result = await genai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-3-flash",
       contents: `Generate a very short title (3-6 words, no quotes) for this conversation:\n\n${context}`,
     });
 

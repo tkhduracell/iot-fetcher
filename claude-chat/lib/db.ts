@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import path from "path";
+import fs from "fs";
 
 const DB_PATH = process.env.SQLITE_PATH ?? path.join(process.cwd(), "data", "chat.db");
 
@@ -10,7 +11,6 @@ export function getDb(): Database.Database {
 
   // Ensure data directory exists
   const dir = path.dirname(DB_PATH);
-  const fs = require("fs");
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -26,7 +26,7 @@ export function getDb(): Database.Database {
       user_email TEXT NOT NULL,
       persona TEXT NOT NULL,
       title TEXT DEFAULT '',
-      model TEXT DEFAULT 'gemini-2.0-flash',
+      model TEXT DEFAULT 'gemini-3-flash',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -71,7 +71,7 @@ export function createSession(id: string, userEmail: string, persona: string, mo
   const stmt = db.prepare(
     `INSERT INTO sessions (id, user_email, persona, model) VALUES (?, ?, ?, ?) RETURNING *`
   );
-  return stmt.get(id, userEmail, persona, model ?? "gemini-2.0-flash") as Session;
+  return stmt.get(id, userEmail, persona, model ?? "gemini-3-flash") as Session;
 }
 
 export function getSession(id: string): Session | undefined {

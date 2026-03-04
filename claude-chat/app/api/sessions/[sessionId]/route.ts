@@ -1,6 +1,9 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getSession, deleteSession, updateSession } from "@/lib/db";
+import { evictRunner } from "@/lib/agents";
+
+const ALLOWED_MODELS = ["gemini-3-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
 
 type Params = { params: Promise<{ sessionId: string }> };
 
@@ -32,6 +35,7 @@ export async function DELETE(_req: Request, { params }: Params) {
   }
 
   deleteSession(sessionId);
+  evictRunner(sessionId);
   return new Response(null, { status: 204 });
 }
 
@@ -49,6 +53,11 @@ export async function PATCH(req: Request, { params }: Params) {
 
   const body = await req.json();
   const { title, model } = body as { title?: string; model?: string };
+
+  if (model && !ALLOWED_MODELS.includes(model)) {
+    return new Response(`Invalid model. Allowed: ${ALLOWED_MODELS.join(", ")}`, { status: 400 });
+  }
+
   const updated = updateSession(sessionId, { title, model });
   return Response.json(updated);
 }

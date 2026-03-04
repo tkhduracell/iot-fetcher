@@ -20,7 +20,7 @@ const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 const runnerCache = new Map<string, CachedRunner>();
 
 // Cleanup expired runners periodically
-setInterval(() => {
+const cleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of runnerCache) {
     if (now - entry.lastUsed > CACHE_TTL) {
@@ -28,6 +28,7 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000); // check every 5 min
+cleanupInterval.unref();
 
 function getToolsForPersona(persona: PersonaConfig) {
   const tools = [];
