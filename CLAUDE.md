@@ -5,6 +5,7 @@
 
 # Build Instructions
 - Use "make build" to build the main (iot-fetcher) docker image
+- Build Docker images locally and push to registry — don't build on rpi5
 - You can run ssh commands like "echo "uptime; exit;" | balena device ssh 192.168.68.93 database"
 
 # VictoriaMetrics
