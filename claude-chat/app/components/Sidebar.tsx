@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { type MouseEvent, useEffect, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 
 type Session = {
@@ -31,7 +31,7 @@ function groupByDate(sessions: Session[]): GroupedSessions[] {
   };
 
   for (const s of sessions) {
-    const d = new Date(s.updated_at + "Z");
+    const d = new Date(s.updated_at.replace(" ", "T") + "Z");
     if (d >= today) groups["Today"].push(s);
     else if (d >= yesterday) groups["Yesterday"].push(s);
     else if (d >= weekAgo) groups["This week"].push(s);
@@ -74,7 +74,7 @@ export function Sidebar({ open }: { open: boolean }) {
     return () => window.removeEventListener("sessions-updated", handler);
   }, [fetchSessions]);
 
-  const handleDelete = async (id: string, e: React.MouseEvent) => {
+  const handleDelete = async (id: string, e: MouseEvent) => {
     e.stopPropagation();
     await fetch(`/api/sessions/${id}`, { method: "DELETE" });
     setSessions((prev) => prev.filter((s) => s.id !== id));
@@ -119,14 +119,14 @@ export function Sidebar({ open }: { open: boolean }) {
                 <span className="truncate flex-1 text-left">
                   {s.title || "New chat"}
                 </span>
-                <span
+                <button
                   onClick={(e) => handleDelete(s.id, e)}
                   className="shrink-0 opacity-0 group-hover:opacity-100 text-[var(--color-text-muted)]
-                             hover:text-[var(--color-tool-error)] transition-all cursor-pointer"
+                             hover:text-[var(--color-tool-error)] transition-all cursor-pointer bg-transparent border-none p-0"
                   title="Delete"
                 >
                   ×
-                </span>
+                </button>
               </button>
             ))}
           </div>

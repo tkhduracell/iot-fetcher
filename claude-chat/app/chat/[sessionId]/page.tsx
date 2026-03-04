@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { ChatMessage, type Message, type ToolCall } from "../../components/ChatMessage";
 import { ChatInput } from "../../components/ChatInput";
+import { personas } from "../../../lib/personas";
 
 type SessionData = {
   id: string;
@@ -19,12 +20,12 @@ export default function ChatSessionPage() {
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const hasFetched = useRef(false);
 
-  // Load session data and messages
+  // Load session data and messages when sessionId changes
   useEffect(() => {
-    if (hasFetched.current) return;
-    hasFetched.current = true;
+    setLoading(true);
+    setMessages([]);
+    setSessionData(null);
 
     async function load() {
       try {
@@ -64,8 +65,13 @@ export default function ChatSessionPage() {
     }
   }, [messages]);
 
-  // Generate title after first assistant response
+  // Reset title generation flag when sessionId changes
   const titleGenerated = useRef(false);
+  useEffect(() => {
+    titleGenerated.current = false;
+  }, [sessionId]);
+
+  // Generate title after first assistant response
   useEffect(() => {
     if (
       titleGenerated.current ||
@@ -192,8 +198,10 @@ export default function ChatSessionPage() {
     [sessionId]
   );
 
-  // Get persona-specific suggestions
-  const suggestions = getSuggestions(sessionData?.persona);
+  // Get persona-specific suggestions from shared config
+  const suggestions = sessionData?.persona && personas[sessionData.persona]
+    ? personas[sessionData.persona].suggestions
+    : ["What can you do?"];
 
   if (loading) {
     return (
@@ -257,15 +265,3 @@ export default function ChatSessionPage() {
   );
 }
 
-function getSuggestions(persona?: string): string[] {
-  switch (persona) {
-    case "home-assistant":
-      return ["What music is playing?", "Vacuum the kitchen", "Show energy usage", "List all metrics"];
-    case "researcher":
-      return ["What's the weather in Stockholm?", "Latest news about home automation", "Compare Zigbee vs Z-Wave", "Best smart home devices 2025"];
-    case "analyst":
-      return ["List available spreadsheets", "Show current energy production", "List all metrics", "Show battery status"];
-    default:
-      return ["What can you do?"];
-  }
-}

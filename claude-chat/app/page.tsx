@@ -3,30 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { PersonaCard } from "./components/PersonaCard";
-
-const PERSONAS = [
-  {
-    id: "home-assistant",
-    name: "Home Assistant",
-    description: "Control Sonos, Roborock, and query home metrics",
-    icon: "🏠",
-    color: "#d4a574",
-  },
-  {
-    id: "researcher",
-    name: "Researcher",
-    description: "Search the web and answer questions with sources",
-    icon: "🔍",
-    color: "#74b4d4",
-  },
-  {
-    id: "analyst",
-    name: "Data Analyst",
-    description: "Query spreadsheets and home metrics for insights",
-    icon: "📊",
-    color: "#74d4a5",
-  },
-];
+import { PERSONA_DISPLAY } from "../lib/personas";
 
 export default function HomePage() {
   const router = useRouter();
@@ -59,7 +36,7 @@ export default function HomePage() {
         </div>
 
         <div className="flex flex-wrap gap-4 justify-center">
-          {PERSONAS.map((p) => (
+          {PERSONA_DISPLAY.map((p) => (
             <PersonaCard
               key={p.id}
               {...p}

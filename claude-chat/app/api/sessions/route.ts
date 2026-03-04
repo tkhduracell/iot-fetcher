@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { createSession, listSessions } from "@/lib/db";
+import { getPersona } from "@/lib/personas";
 import { randomUUID } from "crypto";
 
 export async function GET() {
@@ -22,8 +23,8 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { persona, model } = body as { persona: string; model?: string };
 
-  if (!persona) {
-    return new Response("Missing persona", { status: 400 });
+  if (!persona || !getPersona(persona)) {
+    return new Response("Missing or unknown persona", { status: 400 });
   }
 
   const id = randomUUID();

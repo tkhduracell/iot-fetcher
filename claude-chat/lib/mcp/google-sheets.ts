@@ -20,7 +20,10 @@ async function getAccessToken(): Promise<string | null> {
     const { google } = await import("googleapis");
     const auth = new google.auth.GoogleAuth({
       credentials: creds,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      scopes: [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.metadata.readonly",
+      ],
     });
     const client = await auth.getClient();
     const token = await client.getAccessToken();

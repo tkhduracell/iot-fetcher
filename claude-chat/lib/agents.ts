@@ -16,19 +16,37 @@ type CachedRunner = {
   lastUsed: number;
 };
 
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-const runnerCache = new Map<string, CachedRunner>();
+const GLOBAL_RUNNER_CACHE_KEY = "__claude_chat_runner_cache__";
 
-// Cleanup expired runners periodically
-const cleanupInterval = setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of runnerCache) {
-    if (now - entry.lastUsed > CACHE_TTL) {
-      runnerCache.delete(key);
+type GlobalRunnerCacheState = {
+  runnerCache: Map<string, CachedRunner>;
+  cleanupIntervalId?: ReturnType<typeof setInterval>;
+};
+
+const globalRunnerCacheState: GlobalRunnerCacheState =
+  (globalThis as Record<string, unknown>)[GLOBAL_RUNNER_CACHE_KEY] as GlobalRunnerCacheState ??
+  (() => {
+    const state: GlobalRunnerCacheState = {
+      runnerCache: new Map<string, CachedRunner>(),
+    };
+    (globalThis as Record<string, unknown>)[GLOBAL_RUNNER_CACHE_KEY] = state;
+    return state;
+  })();
+
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const runnerCache = globalRunnerCacheState.runnerCache;
+
+// Cleanup expired runners periodically (singleton across module reloads)
+if (!globalRunnerCacheState.cleanupIntervalId) {
+  globalRunnerCacheState.cleanupIntervalId = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of runnerCache) {
+      if (now - entry.lastUsed > CACHE_TTL) {
+        runnerCache.delete(key);
+      }
     }
-  }
-}, 5 * 60 * 1000); // check every 5 min
-cleanupInterval.unref();
+  }, 5 * 60 * 1000); // check every 5 min
+}
 
 function getToolsForPersona(persona: PersonaConfig) {
   const tools = [];

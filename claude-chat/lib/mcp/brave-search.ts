@@ -25,10 +25,10 @@ export const braveSearchTools = [
       const numResults = count ?? 5;
       const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${numResults}`;
 
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15_000);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
 
+      try {
         const res = await fetch(url, {
           headers: {
             Accept: "application/json",
@@ -37,7 +37,6 @@ export const braveSearchTools = [
           },
           signal: controller.signal,
         });
-        clearTimeout(timeout);
 
         if (!res.ok) {
           const text = await res.text().catch(() => "");
@@ -56,6 +55,8 @@ export const braveSearchTools = [
         return { results, query };
       } catch (err) {
         return { error: String(err) };
+      } finally {
+        clearTimeout(timeout);
       }
     },
   }),

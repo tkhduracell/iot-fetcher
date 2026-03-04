@@ -96,3 +96,10 @@ export function getPersona(id: string): PersonaConfig | undefined {
 export function listPersonas(): PersonaConfig[] {
   return Object.values(personas);
 }
+
+// Client-safe display metadata (no system prompts or tool config)
+export type PersonaDisplay = Pick<PersonaConfig, "id" | "name" | "description" | "icon" | "color">;
+
+export const PERSONA_DISPLAY: PersonaDisplay[] = Object.values(personas).map(
+  ({ id, name, description, icon, color }) => ({ id, name, description, icon, color })
+);

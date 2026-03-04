@@ -80,7 +80,14 @@ export function ToolCallDisplay({ toolCall }: { toolCall: ToolCall }) {
 
   const handleCopy = useCallback(async () => {
     if (!toolCall.result) return;
-    await navigator.clipboard.writeText(toolCall.result);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(toolCall.result);
+      }
+    } catch {
+      // Swallow clipboard errors (non-secure context, permissions, etc.)
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [toolCall.result]);
