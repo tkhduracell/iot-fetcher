@@ -3,6 +3,7 @@ import { authOptions } from "@/lib/auth";
 import { getSession as getDbSession, getMessages, addMessage } from "@/lib/db";
 import { getRunner } from "@/lib/agents";
 import { getPersona } from "@/lib/personas";
+import { createEvent } from "@google/adk";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -57,15 +58,13 @@ export async function POST(req: Request) {
     const existingMessages = getMessages(sessionId);
     if (existingMessages.length > 0) {
       for (const msg of existingMessages) {
-        const content = {
-          parts: [{ text: msg.content || "(tool interaction)" }],
-          role: msg.role === "user" ? "user" : "model",
-        };
-        // Cast to bypass strict Event type — we only need parts/role for context replay
-        adkSession.events.push({
+        adkSession.events.push(createEvent({
           author: msg.role === "user" ? "user" : persona.id.replace(/-/g, "_"),
-          content,
-        } as unknown as (typeof adkSession.events)[number]);
+          content: {
+            role: msg.role === "user" ? "user" : "model",
+            parts: [{ text: msg.content || "(tool interaction)" }],
+          },
+        }));
       }
     }
   }
@@ -91,7 +90,7 @@ export async function POST(req: Request) {
         for await (const event of runner.runAsync({
           userId,
           sessionId,
-          newMessage: { parts: [{ text: message }] },
+          newMessage: { role: "user", parts: [{ text: message }] },
         })) {
           if (!event.content?.parts) continue;
 
