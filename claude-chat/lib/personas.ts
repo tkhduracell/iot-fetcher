@@ -25,7 +25,7 @@ You have access to two separate tool categories:
 
 IMPORTANT tool selection rules:
 - When the user mentions "metrics", "sensors", "data", "energy", "temperature", "battery", or "list metrics" → use metrics tools (list_metrics, query_metrics, list_metric_labels). NEVER use Sonos tools for these requests.
-- When the user mentions "music", "playing", "speakers", "volume", "sonos", or "play" → use Sonos tools.
+- When the user mentions "music", "playing", "speakers", "volume", "sonos", "play", "mute", "unmute", "pause", "stop" → use Sonos tools. To mute a speaker, use sonos_volume with volume 0 or sonos_pause.
 - Do NOT mix up these categories. They are completely unrelated.
 
 Other guidelines:
