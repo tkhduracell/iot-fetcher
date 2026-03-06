@@ -1,4 +1,4 @@
-import { FunctionTool } from "@google/adk";
+import { FunctionTool, MCPToolset } from "@google/adk";
 import { z } from "zod";
 
 const SONOS_HOST = process.env.SONOS_HOST ?? "host.docker.internal";
@@ -22,121 +22,11 @@ async function fetchJson(url: string, options?: RequestInit) {
   }
 }
 
-// --- Sonos tools ---
+// --- Sonos MCP toolset ---
 
-const sonosGetZones = new FunctionTool({
-  name: "sonos_get_zones",
-  description:
-    "List all Sonos speaker zones/rooms with their current playback state, volume, and what is playing",
-  parameters: z.object({}),
-  execute: async () => {
-    const data = await fetchJson(`http://${SONOS_HOST}:5005/zones`);
-    if (data.error) return { error: data.error };
-
-    const zones = Array.isArray(data)
-      ? data.map(
-          (z: {
-            coordinator: {
-              roomName: string;
-              state: {
-                volume: number;
-                playbackState: string;
-                currentTrack: {
-                  artist: string;
-                  title: string;
-                  album: string;
-                };
-              };
-            };
-            members: unknown[];
-          }) => ({
-            room: z.coordinator.roomName,
-            volume: z.coordinator.state.volume,
-            playback: z.coordinator.state.playbackState,
-            artist: z.coordinator.state.currentTrack?.artist,
-            title: z.coordinator.state.currentTrack?.title,
-            album: z.coordinator.state.currentTrack?.album,
-            members: z.members?.length ?? 1,
-          })
-        )
-      : data;
-
-    return { zones };
-  },
-});
-
-const sonosPlay = new FunctionTool({
-  name: "sonos_play",
-  description: "Resume playback on a Sonos zone/room",
-  parameters: z.object({
-    room: z.string().describe("Room name, e.g. 'Living Room', 'Kitchen'"),
-  }),
-  execute: async ({ room }) => {
-    const encoded = encodeURIComponent(room);
-    return await fetchJson(`http://${SONOS_HOST}:5005/${encoded}/play`);
-  },
-});
-
-const sonosPause = new FunctionTool({
-  name: "sonos_pause",
-  description: "Pause playback on a Sonos zone/room",
-  parameters: z.object({
-    room: z.string().describe("Room name"),
-  }),
-  execute: async ({ room }) => {
-    const encoded = encodeURIComponent(room);
-    return await fetchJson(`http://${SONOS_HOST}:5005/${encoded}/pause`);
-  },
-});
-
-const sonosVolume = new FunctionTool({
-  name: "sonos_volume",
-  description: "Set the volume of a Sonos zone/room (0-100)",
-  parameters: z.object({
-    room: z.string().describe("Room name"),
-    volume: z.number().min(0).max(100).describe("Volume level 0-100"),
-  }),
-  execute: async ({ room, volume }) => {
-    const encoded = encodeURIComponent(room);
-    return await fetchJson(
-      `http://${SONOS_HOST}:5005/${encoded}/volume/${volume}`
-    );
-  },
-});
-
-const sonosMute = new FunctionTool({
-  name: "sonos_mute",
-  description: "Mute or unmute a Sonos zone/room",
-  parameters: z.object({
-    room: z.string().describe("Room name, e.g. 'Living Room', 'Kontor'"),
-    mute: z
-      .boolean()
-      .describe("true to mute, false to unmute")
-      .default(true),
-  }),
-  execute: async ({ room, mute }) => {
-    const encoded = encodeURIComponent(room);
-    const action = mute ? "mute" : "unmute";
-    return await fetchJson(
-      `http://${SONOS_HOST}:5005/${encoded}/${action}`
-    );
-  },
-});
-
-const sonosFavourite = new FunctionTool({
-  name: "sonos_favourite",
-  description: "Play a Sonos favourite/playlist on a zone/room",
-  parameters: z.object({
-    room: z.string().describe("Room name"),
-    favourite: z.string().describe("Name of the favourite or playlist"),
-  }),
-  execute: async ({ room, favourite }) => {
-    const encodedRoom = encodeURIComponent(room);
-    const encodedFav = encodeURIComponent(favourite);
-    return await fetchJson(
-      `http://${SONOS_HOST}:5005/${encodedRoom}/favourite/${encodedFav}`
-    );
-  },
+export const sonosToolset = new MCPToolset({
+  type: "StreamableHTTPConnectionParams",
+  url: `http://${SONOS_HOST}:5005/mcp`,
 });
 
 // --- Metrics tools ---
@@ -206,16 +96,10 @@ const listLabels = new FunctionTool({
   },
 });
 
-// --- Export all tools ---
+// --- Export metrics tools ---
 
-export const homeAutomationTools = [
+export const metricsTools = [
   listMetrics,
   queryMetrics,
   listLabels,
-  sonosGetZones,
-  sonosPlay,
-  sonosPause,
-  sonosVolume,
-  sonosMute,
-  sonosFavourite,
 ];

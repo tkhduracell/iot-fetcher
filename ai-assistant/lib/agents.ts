@@ -1,7 +1,13 @@
-import { LlmAgent, InMemoryRunner, GOOGLE_SEARCH } from "@google/adk";
+import {
+  LlmAgent,
+  InMemoryRunner,
+  GOOGLE_SEARCH,
+  BaseTool,
+  BaseToolset,
+} from "@google/adk";
 import { FunctionCallingConfigMode } from "@google/genai";
 import type { PersonaConfig } from "./personas";
-import { homeAutomationTools } from "./mcp/home-automation";
+import { metricsTools, sonosToolset } from "./mcp/home-automation";
 import { braveSearchTools } from "./mcp/brave-search";
 import { googleSheetsTools } from "./mcp/google-sheets";
 import { veganSearchTools } from "./mcp/vegan-search";
@@ -77,12 +83,12 @@ const cleanupInterval = setInterval(() => {
 }, 5 * 60 * 1000); // check every 5 min
 cleanupInterval.unref();
 
-function getToolsForPersona(persona: PersonaConfig) {
-  const tools = [];
+function getToolsForPersona(persona: PersonaConfig): (BaseTool | BaseToolset)[] {
+  const tools: (BaseTool | BaseToolset)[] = [];
   for (const toolSet of persona.toolSets) {
     switch (toolSet) {
       case "home-automation":
-        tools.push(...homeAutomationTools);
+        tools.push(...metricsTools, sonosToolset);
         break;
       case "brave-search":
         tools.push(...braveSearchTools);
