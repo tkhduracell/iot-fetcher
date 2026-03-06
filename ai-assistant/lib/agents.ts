@@ -1,4 +1,5 @@
 import { LlmAgent, InMemoryRunner, GOOGLE_SEARCH } from "@google/adk";
+import { FunctionCallingConfigMode } from "@google/genai";
 import type { PersonaConfig } from "./personas";
 import { homeAutomationTools } from "./mcp/home-automation";
 import { braveSearchTools } from "./mcp/brave-search";
@@ -128,13 +129,24 @@ export function getRunner(
         ]
       : undefined;
 
-  const agent = new LlmAgent({
+  const tools = getToolsForPersona(persona);
+  const agentConfig: ConstructorParameters<typeof LlmAgent>[0] = {
     name: persona.id.replace(/-/g, "_"),
     model,
     instruction: persona.systemPrompt,
-    tools: getToolsForPersona(persona),
+    tools,
     subAgents,
-  });
+  };
+  if (tools.length > 0) {
+    // Force the model to call tools rather than respond with text-only greetings.
+    // Gemini preview models often ignore tools on first turn without this.
+    agentConfig.generateContentConfig = {
+      toolConfig: {
+        functionCallingConfig: { mode: FunctionCallingConfigMode.ANY },
+      },
+    };
+  }
+  const agent = new LlmAgent(agentConfig);
 
   const runner = new InMemoryRunner({
     agent,

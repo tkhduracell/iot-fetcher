@@ -104,6 +104,25 @@ const sonosVolume = new FunctionTool({
   },
 });
 
+const sonosMute = new FunctionTool({
+  name: "sonos_mute",
+  description: "Mute or unmute a Sonos zone/room",
+  parameters: z.object({
+    room: z.string().describe("Room name, e.g. 'Living Room', 'Kontor'"),
+    mute: z
+      .boolean()
+      .describe("true to mute, false to unmute")
+      .default(true),
+  }),
+  execute: async ({ room, mute }) => {
+    const encoded = encodeURIComponent(room);
+    const action = mute ? "mute" : "unmute";
+    return await fetchJson(
+      `http://${SONOS_HOST}:5005/${encoded}/${action}`
+    );
+  },
+});
+
 const sonosFavourite = new FunctionTool({
   name: "sonos_favourite",
   description: "Play a Sonos favourite/playlist on a zone/room",
@@ -197,5 +216,6 @@ export const homeAutomationTools = [
   sonosPlay,
   sonosPause,
   sonosVolume,
+  sonosMute,
   sonosFavourite,
 ];
