@@ -1,6 +1,7 @@
-import { LlmAgent, InMemoryRunner } from "@google/adk";
+import { LlmAgent, InMemoryRunner, BaseTool, BaseToolset } from "@google/adk";
+import { FunctionCallingConfigMode } from "@google/genai";
 import type { PersonaConfig } from "./personas";
-import { homeAutomationTools } from "./mcp/home-automation";
+import { metricsTools, sonosToolset } from "./mcp/home-automation";
 import { braveSearchTools } from "./mcp/brave-search";
 import { googleSheetsTools } from "./mcp/google-sheets";
 
@@ -73,12 +74,12 @@ const cleanupInterval = setInterval(() => {
 }, 5 * 60 * 1000); // check every 5 min
 cleanupInterval.unref();
 
-function getToolsForPersona(persona: PersonaConfig) {
-  const tools = [];
+function getToolsForPersona(persona: PersonaConfig): (BaseTool | BaseToolset)[] {
+  const tools: (BaseTool | BaseToolset)[] = [];
   for (const toolSet of persona.toolSets) {
     switch (toolSet) {
       case "home-automation":
-        tools.push(...homeAutomationTools);
+        tools.push(...metricsTools, sonosToolset);
         break;
       case "brave-search":
         tools.push(...braveSearchTools);
@@ -104,12 +105,23 @@ export function getRunner(
     return cached.runner;
   }
 
-  const agent = new LlmAgent({
+  const tools = getToolsForPersona(persona);
+  const agentConfig: ConstructorParameters<typeof LlmAgent>[0] = {
     name: persona.id.replace(/-/g, "_"),
     model,
     instruction: persona.systemPrompt,
-    tools: getToolsForPersona(persona),
-  });
+    tools,
+  };
+  if (tools.length > 0) {
+    // Force the model to call tools rather than respond with text-only greetings.
+    // Gemini preview models often ignore tools on first turn without this.
+    agentConfig.generateContentConfig = {
+      toolConfig: {
+        functionCallingConfig: { mode: FunctionCallingConfigMode.ANY },
+      },
+    };
+  }
+  const agent = new LlmAgent(agentConfig);
 
   const runner = new InMemoryRunner({
     agent,
