@@ -7,7 +7,7 @@ import schedule
 
 from deco import deco
 from elpris import elpris
-from ngenic import ngenic
+from ngenic import ngenic, ngenic_backfill
 from aqualink import aqualink
 from airquality import airquality
 from aquatemp import aquatemp
@@ -43,14 +43,17 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_vm', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'ngenic_backfill', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_vm', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [deco, elpris, ngenic, aqualink, aquatemp, airquality, tapo, sonos, backup_vm, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, ngenic_backfill, aqualink, aquatemp, airquality, tapo, sonos, backup_vm, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
         return
+
+    logging.info("Running ngenic backfill check...")
+    ngenic_backfill()
 
     logging.info("Starting the scheduler...")
     schedule.every(1).minutes.do(with_timeout(aqualink))
