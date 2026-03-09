@@ -41,7 +41,7 @@ jobs:
         password: '${{ steps.auth.outputs.access_token }}'
 
     - name: Build And Push Docker image
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
         context: ./fetcher-core/
@@ -52,7 +52,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Build Docker image
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
       with:
         context: ./fetcher-core/
@@ -103,7 +103,7 @@ jobs:
         password: '${{ steps.auth.outputs.access_token }}'
 
     - name: Build And Push https-proxy image
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
         context: ./https-proxy/
@@ -114,7 +114,7 @@ jobs:
         cache-to: type=gha,mode=max
 
     - name: Build https-proxy image
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
       with:
         context: ./https-proxy/
