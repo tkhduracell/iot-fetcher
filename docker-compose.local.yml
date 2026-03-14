@@ -44,11 +44,11 @@ services:
     volumes:
       - ./sonos-http-api/settings.json:/app/settings.json:ro
 
-  claude-chat:
-    container_name: claude-chat
-    env_file: ./claude-chat/.env
+  agent-assistant:
+    container_name: agent-assistant
+    env_file: ./home-assistant/.env
     volumes:
-      - ./volumes/claude-chat-data:/app/data
+      - ./volumes/agent-assistant-data:/app/data
 
   wud:
     container_name: wud
