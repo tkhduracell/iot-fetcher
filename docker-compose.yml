@@ -44,14 +44,14 @@ services:
     depends_on:
       - iot-fetcher
       - database-auth
-      - claude-chat
+      - agent-assistant
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
 
-  claude-chat:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/claude-chat:latest
-    hostname: claude-chat
+  agent-assistant:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/agent-assistant:latest
+    hostname: agent-assistant
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

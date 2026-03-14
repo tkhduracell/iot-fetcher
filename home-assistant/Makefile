@@ -1,4 +1,4 @@
-IMAGE_NAME := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/claude-chat:latest
+IMAGE_NAME := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/agent-assistant:latest
 
 .PHONY: build push run dev
 

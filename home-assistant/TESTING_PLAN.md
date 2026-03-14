@@ -2,7 +2,7 @@
 
 ## Overview
 
-End-to-end tests for the claude-chat Next.js 15 application using Playwright. The app uses Google ADK (Gemini), NextAuth v4 (Google OAuth), SQLite (better-sqlite3), and streaming SSE responses.
+End-to-end tests for the agent-assistant Next.js 15 application using Playwright. The app uses Google ADK (Gemini), NextAuth v4 (Google OAuth), SQLite (better-sqlite3), and streaming SSE responses.
 
 ---
 
@@ -198,7 +198,7 @@ For Brave Search and Google Sheets, which use HTTPS to external domains, the glo
 ### Strategy: Per-test SQLite database + server restart
 
 **Database isolation:**
-- Set `SQLITE_PATH` to a unique temp file per test worker (e.g., `/tmp/claude-chat-test-<workerId>.db`)
+- Set `SQLITE_PATH` to a unique temp file per test worker (e.g., `/tmp/agent-assistant-test-<workerId>.db`)
 - Each test (or test file) starts with a fresh database
 - Use `test.beforeEach` to delete and recreate the DB file
 
@@ -216,10 +216,10 @@ export default defineConfig({
   webServer: {
     command: "npm run dev",
     port: 3001,
-    cwd: "./claude-chat",
+    cwd: "./agent-assistant",
     reuseExistingServer: !process.env.CI,
     env: {
-      SQLITE_PATH: "/tmp/claude-chat-test.db",
+      SQLITE_PATH: "/tmp/agent-assistant-test.db",
       NEXTAUTH_SECRET: "test-secret-for-playwright",
       NEXTAUTH_URL: "http://localhost:3001",
       ALLOWED_EMAILS: "test@example.com",
@@ -239,7 +239,7 @@ export default defineConfig({
 ## 5. Project Structure
 
 ```
-claude-chat/
+agent-assistant/
   e2e/
     playwright.config.ts          # Playwright configuration
     helpers/
@@ -340,7 +340,7 @@ GOOGLE_GENAI_API_KEY=test-key
 SONOS_HOST=localhost
 INFLUXDB_V3_URL=http://localhost:9876
 BRAVE_API_KEY=test-brave-key
-SQLITE_PATH=/tmp/claude-chat-playwright-test.db
+SQLITE_PATH=/tmp/agent-assistant-playwright-test.db
 ```
 
 ---
@@ -402,7 +402,7 @@ await fetch("http://localhost:9876/__mock/set-response", {
 ## 10. Running Tests
 
 ```bash
-cd claude-chat
+cd agent-assistant
 npx playwright install chromium
 npx playwright test
 npx playwright test --ui  # Interactive mode
