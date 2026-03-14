@@ -22,3 +22,4 @@ victoria-metrics/auth.yml
 sonos-http-api/settings.json
 
 .context/
+.claude/worktrees/
