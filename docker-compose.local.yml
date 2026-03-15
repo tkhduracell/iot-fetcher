@@ -44,11 +44,11 @@ services:
     volumes:
       - ./sonos-http-api/settings.json:/app/settings.json:ro
 
-  agent-assistant:
-    container_name: agent-assistant
-    env_file: ./home-assistant/.env
+  ai-assistant:
+    container_name: ai-assistant
+    env_file: ./ai-assistant/.env
     volumes:
-      - ./volumes/agent-assistant-data:/app/data
+      - ./volumes/ai-assistant-data:/app/data
 
   wud:
     container_name: wud
