@@ -4,5 +4,5 @@ services:
   https-proxy:
     build: ./https-proxy
 
-  agent-assistant:
-    build: ./home-assistant
+  ai-assistant:
+    build: ./ai-assistant

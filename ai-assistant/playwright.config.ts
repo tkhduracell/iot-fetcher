@@ -36,7 +36,7 @@ export default defineConfig({
       SONOS_HOST: "localhost",
       INFLUXDB_V3_URL: "http://localhost:9876",
       BRAVE_API_KEY: "test-brave-key",
-      SQLITE_PATH: "/tmp/agent-assistant-playwright-test.db",
+      SQLITE_PATH: "/tmp/ai-assistant-playwright-test.db",
       MOCK_SERVER_PORT: "9876",
       NODE_OPTIONS: "--require ./e2e/helpers/setup-fetch-mock.js",
     },

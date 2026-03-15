@@ -69,7 +69,7 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 }
 
 {$AI_DOMAIN} {
-	reverse_proxy http://agent-assistant:3001
+	reverse_proxy http://ai-assistant:3001
 }
 
 {$HA_DOMAIN} {

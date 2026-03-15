@@ -44,14 +44,14 @@ services:
     depends_on:
       - iot-fetcher
       - database-auth
-      - agent-assistant
+      - ai-assistant
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
 
-  agent-assistant:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/agent-assistant:latest
-    hostname: agent-assistant
+  ai-assistant:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-assistant:latest
+    hostname: ai-assistant
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
