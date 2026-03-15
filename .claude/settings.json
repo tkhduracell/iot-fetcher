@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "rsync -a --include='*/' --include='.env' --exclude='*' \"$CLAUDE_PROJECT_DIR/\" \"$CLAUDE_WORKTREE_PATH/\""
+            "command": "rsync -a --ignore-existing --include='*/' --include='.env' --exclude='*' \"$CLAUDE_PROJECT_DIR/\" \"$CLAUDE_WORKTREE_PATH/\""
           }
         ]
       }
