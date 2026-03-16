@@ -17,6 +17,8 @@ import {
   BRAVE_SEARCH_RESULTS,
   GOOGLE_DRIVE_FILES,
   GOOGLE_SHEETS_DATA,
+  GOOGLE_PLACES_RESULTS,
+  MOCK_WEBPAGE_HTML,
 } from "../fixtures/tool-responses";
 
 export type GeminiMockState = {
@@ -260,6 +262,55 @@ export function createMockServer(): http.Server {
     // ── Brave Search API ───────────────────────────────────
     if (url.includes("/res/v1/web/search")) {
       jsonResponse(res, BRAVE_SEARCH_RESULTS);
+      return;
+    }
+
+    // ── Google Places API (google_places_search) ──────────
+    if (url.includes("/places:searchText") && method === "POST") {
+      jsonResponse(res, GOOGLE_PLACES_RESULTS);
+      return;
+    }
+
+    // ── Google Places Photos API (analyze_place_photos) ──
+    // Metadata request with skipHttpRedirect=true returns a photoUri
+    if (url.includes("/photos/") && url.includes("/media")) {
+      jsonResponse(res, {
+        photoUri: `http://localhost:${(res.socket?.localPort ?? 9876)}/__mock/photo.jpg`,
+      });
+      return;
+    }
+
+    // Serve a tiny 1x1 JPEG for the photo URI
+    if (url === "/__mock/photo.jpg") {
+      // Minimal valid JPEG (1x1 pixel, red)
+      const jpeg = Buffer.from(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoH" +
+        "BwYIDAoMCwsKCwsNCw0OEA8QDQsRERMTFBQVFRgYGBobGxscHBwcHBz/2wBDAQME" +
+        "BAUEBQkFBQkcDwsPHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc" +
+        "HBwcHBwcHBwcHBwcHBz/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEA" +
+        "AAAAAAAAAAECAwQFBgcICQoL/8QAFRABAAAAAAAAAAAAAAAAAAAAAf/EABQBAQAAAAAA" +
+        "AAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwC/AB//2Q==",
+        "base64"
+      );
+      res.writeHead(200, { "Content-Type": "image/jpeg", "Content-Length": String(jpeg.length) });
+      res.end(jpeg);
+      return;
+    }
+
+    // ── Mock PDF for fetch_pdf tool ──────────────────────
+    if (url.endsWith(".pdf")) {
+      // Return a minimal valid PDF
+      const pdfContent = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Contents 4 0 R>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 100 700 Td (Vegan Menu) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000206 00000 n \ntrailer<</Size 5/Root 1 0 R>>\nstartxref\n300\n%%EOF";
+      res.writeHead(200, { "Content-Type": "application/pdf" });
+      res.end(pdfContent);
+      return;
+    }
+
+    // ── Mock webpage for fetch_webpage tool ──────────────
+    // Any request to example.com paths (redirected via fetch interceptor)
+    if (url.match(/^\/(greengarden|vegano|menu)/)) {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(MOCK_WEBPAGE_HTML);
       return;
     }
 

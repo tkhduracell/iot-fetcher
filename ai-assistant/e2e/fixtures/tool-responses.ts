@@ -111,6 +111,69 @@ export const GOOGLE_DRIVE_FILES = {
   ],
 };
 
+/** Mock response for Google Places API (google_places_search) */
+export const GOOGLE_PLACES_RESULTS = {
+  places: [
+    {
+      displayName: { text: "Green Garden Vegan" },
+      formattedAddress: "Hornsgatan 42, 118 20 Stockholm, Sweden",
+      rating: 4.6,
+      userRatingCount: 234,
+      websiteUri: "https://example.com/greengarden",
+      googleMapsUri: "https://maps.google.com/?cid=123456",
+      reviews: [
+        { text: { text: "Amazing vegan burgers and great atmosphere!" } },
+        { text: { text: "Best plant-based food in Södermalm" } },
+      ],
+      regularOpeningHours: {
+        weekdayDescriptions: [
+          "Monday: 11:00 AM – 9:00 PM",
+          "Tuesday: 11:00 AM – 9:00 PM",
+        ],
+      },
+      photos: [{ name: "places/abc/photos/1" }, { name: "places/abc/photos/2" }],
+    },
+    {
+      displayName: { text: "Vegano" },
+      formattedAddress: "Götgatan 15, 116 46 Stockholm, Sweden",
+      rating: 4.3,
+      userRatingCount: 156,
+      websiteUri: "https://example.com/vegano",
+      googleMapsUri: "https://maps.google.com/?cid=789012",
+      reviews: [
+        { text: { text: "Great vegan pizza and pasta options" } },
+      ],
+      regularOpeningHours: {
+        weekdayDescriptions: ["Monday: 10:00 AM – 10:00 PM"],
+      },
+      photos: [{ name: "places/def/photos/1" }],
+    },
+  ],
+};
+
+/** Mock HTML page for fetch_webpage (restaurant menu page) */
+export const MOCK_WEBPAGE_HTML = `<!DOCTYPE html>
+<html><head><title>Green Garden Vegan - Menu</title></head>
+<body>
+<h1>Our Menu</h1>
+<h2>Starters</h2>
+<ul>
+  <li>Edamame with sea salt - 65 SEK</li>
+  <li>Crispy tofu bites with sriracha mayo - 79 SEK</li>
+</ul>
+<h2>Mains</h2>
+<ul>
+  <li>Beyond Burger with fries - 149 SEK (vegan)</li>
+  <li>Pad Thai with tofu - 139 SEK (vegan)</li>
+  <li>Mushroom risotto - 145 SEK (can be made vegan)</li>
+</ul>
+<h2>Desserts</h2>
+<ul>
+  <li>Oat milk chocolate mousse - 75 SEK (vegan)</li>
+</ul>
+<p><a href="/menu.pdf">Download full menu (PDF)</a></p>
+</body></html>`;
+
 /** Mock response for Google Sheets read (sheets_read) */
 export const GOOGLE_SHEETS_DATA = {
   range: "Sheet1!A1:D5",
