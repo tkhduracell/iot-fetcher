@@ -16,6 +16,7 @@ const TOOL_LABELS: Record<string, string> = {
   list_metric_labels: "Metric Labels",
   brave_search: "Web Search",
   google_places_search: "Places Search",
+  analyze_place_photos: "Analyze Photos",
   fetch_webpage: "Fetch Webpage",
   fetch_pdf: "Fetch PDF",
   sheets_list: "List Spreadsheets",

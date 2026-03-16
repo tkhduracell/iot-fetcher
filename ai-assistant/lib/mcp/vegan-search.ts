@@ -1,8 +1,11 @@
 import { FunctionTool } from "@google/adk";
+import { GoogleGenAI, createPartFromBase64 } from "@google/genai";
 import { z } from "zod";
 import { PDFParse } from "pdf-parse";
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY ?? "";
+const GEMINI_API_KEY =
+  process.env.GOOGLE_GENAI_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
 
 const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -286,6 +289,122 @@ export const veganSearchTools = [
       } catch (err) {
         return { error: String(err) };
       }
+    },
+  }),
+
+  new FunctionTool({
+    name: "analyze_place_photos",
+    description:
+      "Fetch photos from a Google Maps place and use AI vision to analyze them for menu items, food dishes, and vegan options. Pass photo names from google_places_search results.",
+    parameters: z.object({
+      photoNames: z
+        .array(z.string())
+        .describe(
+          'Photo name references from google_places_search results (e.g. ["places/abc/photos/1"])'
+        ),
+      restaurantName: z
+        .string()
+        .describe("Name of the restaurant for context"),
+      maxPhotos: z
+        .number()
+        .optional()
+        .describe("Maximum photos to analyze (default 5)"),
+    }),
+    execute: async ({ photoNames, restaurantName, maxPhotos }) => {
+      if (!GOOGLE_MAPS_API_KEY) {
+        return { error: "GOOGLE_MAPS_API_KEY not configured" };
+      }
+      if (!GEMINI_API_KEY) {
+        return { error: "GEMINI_API_KEY not configured" };
+      }
+
+      const limit = maxPhotos ?? 5;
+      const names = photoNames.slice(0, limit);
+      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+      const results: { photoName: string; analysis: string }[] = [];
+
+      for (const name of names) {
+        try {
+          // Fetch photo from Places API
+          const photoUrl = `https://places.googleapis.com/v1/${name}/media?maxHeightPx=800&maxWidthPx=800&key=${GOOGLE_MAPS_API_KEY}&skipHttpRedirect=true`;
+
+          const metaRes = await fetch(photoUrl, {
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!metaRes.ok) {
+            results.push({
+              photoName: name,
+              analysis: `Failed to fetch photo metadata: HTTP ${metaRes.status}`,
+            });
+            continue;
+          }
+
+          const meta = await metaRes.json();
+          const imageUri = meta.photoUri;
+          if (!imageUri) {
+            results.push({
+              photoName: name,
+              analysis: "No photo URI returned",
+            });
+            continue;
+          }
+
+          // Download the actual image
+          const imageRes = await fetch(imageUri, {
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!imageRes.ok) {
+            results.push({
+              photoName: name,
+              analysis: `Failed to download image: HTTP ${imageRes.status}`,
+            });
+            continue;
+          }
+
+          const contentType = imageRes.headers.get("content-type") ?? "image/jpeg";
+          const mimeType = contentType.split(";")[0].trim();
+          const arrayBuffer = await imageRes.arrayBuffer();
+          const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+          // Analyze with Gemini vision
+          const response = await ai.models.generateContent({
+            model: "gemini-2.0-flash",
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  createPartFromBase64(base64, mimeType),
+                  {
+                    text: `You are analyzing a photo from the restaurant "${restaurantName}" on Google Maps.
+
+Describe what you see in the photo. Focus on:
+1. Is this a menu board, printed menu, or food photo?
+2. If it shows a menu: list ALL readable menu items with prices if visible
+3. If it shows food: describe the dish and estimate if it could be vegan
+4. Note any items explicitly marked as vegan, vegetarian, or plant-based
+5. Note any symbols or labels (V, VG, leaf icons, etc.)
+
+Be specific and thorough. If text is partially readable, include what you can read.`,
+                  },
+                ],
+              },
+            ],
+          });
+
+          results.push({
+            photoName: name,
+            analysis: response.text ?? "No analysis generated",
+          });
+        } catch (err) {
+          results.push({
+            photoName: name,
+            analysis: `Error: ${String(err)}`,
+          });
+        }
+      }
+
+      return { restaurantName, photosAnalyzed: results.length, results };
     },
   }),
 ];

@@ -2,6 +2,7 @@ import { test, expect } from "../helpers";
 import { enqueueGeminiResponse, resetMockServer } from "../helpers/mock-api";
 import {
   PLACES_SEARCH_TOOL_CALL,
+  ANALYZE_PHOTOS_TOOL_CALL,
   FETCH_WEBPAGE_TOOL_CALL,
   FETCH_PDF_TOOL_CALL,
 } from "../fixtures/gemini-responses";
@@ -51,6 +52,30 @@ test.describe("Vegan Researcher Persona", () => {
 
     // Verify the follow-up text
     await expect(page.locator(".prose", { hasText: "Green Garden Vegan" })).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("displays analyze_place_photos tool call", async ({
+    authenticatedPage: page,
+  }) => {
+    await safeEnqueue({ toolCalls: ANALYZE_PHOTOS_TOOL_CALL.toolCalls });
+    await safeEnqueue({ text: ANALYZE_PHOTOS_TOOL_CALL.followUpText });
+
+    await page.goto("/");
+    await page.getByText("Vegan Researcher").click();
+    await page.waitForURL(/\/chat\/[a-f0-9-]+/);
+
+    await sendMessage(page, "Check photos from Green Garden Vegan for menu items");
+
+    // Wait for tool call UI
+    const toolCallButton = page.locator("button", { hasText: "Analyze Photos" });
+    await expect(toolCallButton).toBeVisible({ timeout: 15_000 });
+
+    // Wait for success
+    const successIcon = toolCallButton.locator('svg path[d="M8 12l3 3 5-5"]');
+    await expect(successIcon).toBeVisible({ timeout: 15_000 });
+
+    // Verify follow-up text
+    await expect(page.locator(".prose", { hasText: "menu board" })).toBeVisible({ timeout: 15_000 });
   });
 
   test("displays fetch_webpage tool call", async ({

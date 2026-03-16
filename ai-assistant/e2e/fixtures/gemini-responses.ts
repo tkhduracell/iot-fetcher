@@ -72,6 +72,21 @@ export const FETCH_WEBPAGE_TOOL_CALL = {
     "The Green Garden Vegan menu includes: Beyond Burger (149 SEK), Pad Thai with tofu (139 SEK), and an oat milk chocolate mousse (75 SEK). All clearly marked as vegan.",
 };
 
+/** Response that triggers analyze_place_photos tool call */
+export const ANALYZE_PHOTOS_TOOL_CALL = {
+  toolCalls: [
+    {
+      name: "analyze_place_photos",
+      args: {
+        photoNames: ["places/abc/photos/1", "places/abc/photos/2"],
+        restaurantName: "Green Garden Vegan",
+      },
+    },
+  ],
+  followUpText:
+    "I analyzed 2 photos from Green Garden Vegan. Photo 1 shows a menu board listing a Beyond Burger (149 SEK) and Pad Thai with tofu (139 SEK), both marked with a leaf icon as vegan. Photo 2 shows a colorful poke bowl with tofu.",
+};
+
 /** Response that triggers fetch_pdf tool call */
 export const FETCH_PDF_TOOL_CALL = {
   toolCalls: [

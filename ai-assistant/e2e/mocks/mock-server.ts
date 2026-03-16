@@ -271,6 +271,32 @@ export function createMockServer(): http.Server {
       return;
     }
 
+    // ── Google Places Photos API (analyze_place_photos) ──
+    // Metadata request with skipHttpRedirect=true returns a photoUri
+    if (url.includes("/photos/") && url.includes("/media")) {
+      jsonResponse(res, {
+        photoUri: `http://localhost:${(res.socket?.localPort ?? 9876)}/__mock/photo.jpg`,
+      });
+      return;
+    }
+
+    // Serve a tiny 1x1 JPEG for the photo URI
+    if (url === "/__mock/photo.jpg") {
+      // Minimal valid JPEG (1x1 pixel, red)
+      const jpeg = Buffer.from(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoH" +
+        "BwYIDAoMCwsKCwsNCw0OEA8QDQsRERMTFBQVFRgYGBobGxscHBwcHBz/2wBDAQME" +
+        "BAUEBQkFBQkcDwsPHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc" +
+        "HBwcHBwcHBwcHBwcHBz/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEA" +
+        "AAAAAAAAAAECAwQFBgcICQoL/8QAFRABAAAAAAAAAAAAAAAAAAAAAf/EABQBAQAAAAAA" +
+        "AAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwC/AB//2Q==",
+        "base64"
+      );
+      res.writeHead(200, { "Content-Type": "image/jpeg", "Content-Length": String(jpeg.length) });
+      res.end(jpeg);
+      return;
+    }
+
     // ── Mock PDF for fetch_pdf tool ──────────────────────
     if (url.endsWith(".pdf")) {
       // Return a minimal valid PDF

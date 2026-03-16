@@ -15,6 +15,8 @@ const REDIRECT_HOSTS = [
   "api.search.brave.com",
   "sheets.googleapis.com",
   "www.googleapis.com",
+  "places.googleapis.com",
+  "example.com",
 ];
 
 const originalFetch = globalThis.fetch;
