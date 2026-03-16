@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-import httpx
+import requests
 from ngenicpy import Ngenic
 from ngenicpy.models.node import NodeType, Node, NodeStatus
 from ngenicpy.models.measurement import Measurement, MeasurementType
@@ -18,7 +18,7 @@ ngenic_token = os.environ.get('NGENIC_TOKEN', '')
 influx_host = os.environ.get('INFLUX_HOST', '')
 influx_token = os.environ.get('INFLUX_TOKEN', '')
 
-logging.getLogger("httpx").setLevel(level=logging.WARNING)
+logging.getLogger("urllib3").setLevel(level=logging.WARNING)
 
 BACKFILL_MAX_DAYS = 30
 BACKFILL_GAP_THRESHOLD_MINUTES = 10
@@ -32,7 +32,7 @@ def ngenic():
         return
     try:
         _ngenic()
-    except:
+    except Exception:
         logger.exception("[ngenic] Failed to execute ngenice module")
 
 
@@ -42,32 +42,42 @@ def ngenic_backfill():
         return
     try:
         _ngenic_backfill()
-    except:
+    except Exception:
         logger.exception("[ngenic] Failed to execute ngenic backfill")
 
 
 def _get_last_ngenic_timestamp() -> Optional[datetime]:
     if not influx_host or not influx_token:
         return None
+    base_url = influx_host if influx_host.startswith("http") else f"https://{influx_host}"
     try:
-        resp = httpx.get(
-            f"{influx_host}/api/v1/query",
+        resp = requests.get(
+            f"{base_url}/api/v1/query",
             params={"query": "timestamp(last_over_time(ngenic_node_sensor_measurement_value_temperature_C[30d]))"},
             headers={"Authorization": f"Bearer {influx_token}"},
             timeout=10,
         )
+        resp.raise_for_status()
         data = resp.json()
         results = data.get("data", {}).get("result", [])
         if not results:
             return None
-        ts = float(results[0]["value"][1])
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
-    except Exception as e:
-        logger.warning("[ngenic] Failed to query last timestamp: %s", e)
-        return None
+        max_ts = max(float(r["value"][1]) for r in results)
+        return datetime.fromtimestamp(max_ts, tz=timezone.utc)
+    except requests.HTTPError as e:
+        logger.error("[ngenic] Failed to query last timestamp, HTTP %s: %s",
+                     e.response.status_code if e.response is not None else "unknown", e)
+        raise
+    except requests.RequestException as e:
+        logger.error("[ngenic] Failed to query last timestamp, request error: %s", e)
+        raise
 
 
 def _ngenic_backfill():
+    if not influx_host or not influx_token:
+        logger.warning("[ngenic] INFLUX_HOST/INFLUX_TOKEN not set, skipping backfill")
+        return
+
     last_ts = _get_last_ngenic_timestamp()
     now = datetime.now(timezone.utc)
 
@@ -97,6 +107,7 @@ def _ngenic_backfill():
 
             measurement_types = node.measurement_types()
             for mtype in measurement_types:
+                all_points: List[Point] = []
                 chunk_start = backfill_from
                 while chunk_start < now:
                     chunk_end = min(chunk_start + timedelta(days=1), now)
@@ -120,13 +131,17 @@ def _ngenic_backfill():
                     if not isinstance(measurements, list):
                         measurements = [measurements]
 
-                    points: List[Point] = []
                     for m in measurements:
                         if not m.get("hasValue", False):
                             continue
-                        time_str = m["time"]  # "2026-03-07T18:38:43 Etc/UTC"
-                        ts = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S %Z").replace(tzinfo=timezone.utc)
-                        points.append(
+                        time_str = str(m["time"])  # e.g. "2026-03-07T18:38:43 Etc/UTC"
+                        time_no_tz = time_str.split()[0]
+                        try:
+                            ts = datetime.strptime(time_no_tz, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                        except ValueError:
+                            logger.warning("[ngenic] Skipping measurement with unparseable timestamp: %r", time_str)
+                            continue
+                        all_points.append(
                             Point("ngenic_node_sensor_measurement_value")
                             .tag("node", node.uuid())
                             .tag("node_type", node_type.name)
@@ -134,12 +149,12 @@ def _ngenic_backfill():
                             .time(int(ts.timestamp()))
                         )
 
-                    if points:
-                        logger.info("[ngenic] Backfill: %d points for %s node %s (%s)",
-                                    len(points), mtype.value, node.uuid()[:8], from_str[:10])
-                        write_influx(points)
-
                     chunk_start = chunk_end
+
+                if all_points:
+                    logger.info("[ngenic] Backfill: %d points for %s node %s",
+                                len(all_points), mtype.value, node.uuid()[:8])
+                    write_influx(all_points)
 
     logger.info("[ngenic] Backfill complete")
 

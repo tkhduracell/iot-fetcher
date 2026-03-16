@@ -56,7 +56,7 @@ def main():
         return
 
     logging.info("Running ngenic backfill check...")
-    ngenic_backfill()
+    with_timeout(ngenic_backfill, timeout_seconds=300)()
 
     logging.info("Starting the scheduler...")
     schedule.every(1).minutes.do(with_timeout(aqualink))
