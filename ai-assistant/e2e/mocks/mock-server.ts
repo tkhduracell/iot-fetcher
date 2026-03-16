@@ -271,20 +271,20 @@ export function createMockServer(): http.Server {
       return;
     }
 
-    // ── Mock webpage for fetch_webpage tool ──────────────
-    // Any request to example.com paths (redirected via fetch interceptor)
-    if (url.match(/^\/(greengarden|vegano|menu)/)) {
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(MOCK_WEBPAGE_HTML);
-      return;
-    }
-
     // ── Mock PDF for fetch_pdf tool ──────────────────────
     if (url.endsWith(".pdf")) {
       // Return a minimal valid PDF
       const pdfContent = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R/Contents 4 0 R>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 100 700 Td (Vegan Menu) Tj ET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000206 00000 n \ntrailer<</Size 5/Root 1 0 R>>\nstartxref\n300\n%%EOF";
       res.writeHead(200, { "Content-Type": "application/pdf" });
       res.end(pdfContent);
+      return;
+    }
+
+    // ── Mock webpage for fetch_webpage tool ──────────────
+    // Any request to example.com paths (redirected via fetch interceptor)
+    if (url.match(/^\/(greengarden|vegano|menu)/)) {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(MOCK_WEBPAGE_HTML);
       return;
     }
 
