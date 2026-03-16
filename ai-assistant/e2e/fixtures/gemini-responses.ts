@@ -48,6 +48,30 @@ export const LIST_METRICS_TOOL_CALL = {
     "Here are the available metrics: sigenergy_battery_soc, tapo_device_power, sigenergy_pv_power.",
 };
 
+/** Response that triggers google_places_search tool call */
+export const PLACES_SEARCH_TOOL_CALL = {
+  toolCalls: [
+    {
+      name: "google_places_search",
+      args: { query: "vegan restaurants", location: "Södermalm, Stockholm" },
+    },
+  ],
+  followUpText:
+    "I found 2 vegan restaurants in Södermalm: Green Garden Vegan (4.6 stars) at Hornsgatan 42, and Vegano (4.3 stars) at Götgatan 15. Both have great reviews for their plant-based menus.",
+};
+
+/** Response that triggers fetch_webpage tool call */
+export const FETCH_WEBPAGE_TOOL_CALL = {
+  toolCalls: [
+    {
+      name: "fetch_webpage",
+      args: { url: "https://example.com/greengarden" },
+    },
+  ],
+  followUpText:
+    "The Green Garden Vegan menu includes: Beyond Burger (149 SEK), Pad Thai with tofu (139 SEK), and an oat milk chocolate mousse (75 SEK). All clearly marked as vegan.",
+};
+
 /** A multi-turn conversation scenario: first response */
 export const MULTI_TURN_FIRST = {
   text: "I can help you with that! What room would you like to control?",

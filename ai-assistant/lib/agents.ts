@@ -1,8 +1,9 @@
-import { LlmAgent, InMemoryRunner } from "@google/adk";
+import { LlmAgent, InMemoryRunner, GOOGLE_SEARCH } from "@google/adk";
 import type { PersonaConfig } from "./personas";
 import { homeAutomationTools } from "./mcp/home-automation";
 import { braveSearchTools } from "./mcp/brave-search";
 import { googleSheetsTools } from "./mcp/google-sheets";
+import { veganSearchTools } from "./mcp/vegan-search";
 
 // ADK reads GOOGLE_GENAI_API_KEY or GEMINI_API_KEY
 if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_GENAI_API_KEY) {
@@ -17,6 +18,8 @@ if (process.env.NODE_ENV === "test" && process.env.MOCK_SERVER_PORT) {
     "api.search.brave.com",
     "sheets.googleapis.com",
     "www.googleapis.com",
+    "places.googleapis.com",
+    "example.com",
   ];
   const _originalFetch = globalThis.fetch;
   globalThis.fetch = async function testFetchInterceptor(
@@ -86,6 +89,9 @@ function getToolsForPersona(persona: PersonaConfig) {
       case "google-sheets":
         tools.push(...googleSheetsTools);
         break;
+      case "vegan-search":
+        tools.push(...veganSearchTools);
+        break;
     }
   }
   return tools;
@@ -104,11 +110,30 @@ export function getRunner(
     return cached.runner;
   }
 
+  // For the vegan researcher, add a Google Search sub-agent that the LLM
+  // can delegate to for broad web/maps queries with Gemini grounding.
+  // GOOGLE_SEARCH must be the sole tool in its agent (ADK limitation).
+  const subAgents =
+    persona.id === "vegan-researcher" && GOOGLE_SEARCH
+      ? [
+          new LlmAgent({
+            name: "google_search_agent",
+            model,
+            description:
+              "Delegates to Google Search for broad web queries, news, and real-time information. Use when brave_search is insufficient or you need Google-grounded results.",
+            instruction:
+              "You are a Google Search assistant. Answer the user's query using Google Search. Return the results with sources.",
+            tools: [GOOGLE_SEARCH],
+          }),
+        ]
+      : undefined;
+
   const agent = new LlmAgent({
     name: persona.id.replace(/-/g, "_"),
     model,
     instruction: persona.systemPrompt,
     tools: getToolsForPersona(persona),
+    subAgents,
   });
 
   const runner = new InMemoryRunner({
