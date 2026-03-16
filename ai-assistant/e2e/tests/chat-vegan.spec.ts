@@ -3,6 +3,7 @@ import { enqueueGeminiResponse, resetMockServer } from "../helpers/mock-api";
 import {
   PLACES_SEARCH_TOOL_CALL,
   FETCH_WEBPAGE_TOOL_CALL,
+  FETCH_PDF_TOOL_CALL,
 } from "../fixtures/gemini-responses";
 
 async function safeResetMock() {
@@ -74,5 +75,29 @@ test.describe("Vegan Researcher Persona", () => {
 
     // Verify follow-up text
     await expect(page.locator(".prose", { hasText: "Beyond Burger" })).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("displays fetch_pdf tool call", async ({
+    authenticatedPage: page,
+  }) => {
+    await safeEnqueue({ toolCalls: FETCH_PDF_TOOL_CALL.toolCalls });
+    await safeEnqueue({ text: FETCH_PDF_TOOL_CALL.followUpText });
+
+    await page.goto("/");
+    await page.getByText("Vegan Researcher").click();
+    await page.waitForURL(/\/chat\/[a-f0-9-]+/);
+
+    await sendMessage(page, "Download the PDF menu from Green Garden");
+
+    // Wait for tool call UI
+    const toolCallButton = page.locator("button", { hasText: "Fetch PDF" });
+    await expect(toolCallButton).toBeVisible({ timeout: 15_000 });
+
+    // Wait for success
+    const successIcon = toolCallButton.locator('svg path[d="M8 12l3 3 5-5"]');
+    await expect(successIcon).toBeVisible({ timeout: 15_000 });
+
+    // Verify follow-up text
+    await expect(page.locator(".prose", { hasText: "Vegan Menu" })).toBeVisible({ timeout: 15_000 });
   });
 });

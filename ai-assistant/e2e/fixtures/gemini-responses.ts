@@ -72,6 +72,18 @@ export const FETCH_WEBPAGE_TOOL_CALL = {
     "The Green Garden Vegan menu includes: Beyond Burger (149 SEK), Pad Thai with tofu (139 SEK), and an oat milk chocolate mousse (75 SEK). All clearly marked as vegan.",
 };
 
+/** Response that triggers fetch_pdf tool call */
+export const FETCH_PDF_TOOL_CALL = {
+  toolCalls: [
+    {
+      name: "fetch_pdf",
+      args: { url: "https://example.com/menu.pdf" },
+    },
+  ],
+  followUpText:
+    "I downloaded the PDF menu. The restaurant offers several vegan dishes including a Vegan Menu section with plant-based options.",
+};
+
 /** A multi-turn conversation scenario: first response */
 export const MULTI_TURN_FIRST = {
   text: "I can help you with that! What room would you like to control?",

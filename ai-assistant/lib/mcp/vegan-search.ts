@@ -4,11 +4,64 @@ import { PDFParse } from "pdf-parse";
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY ?? "";
 
+const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Validate a URL for SSRF protection.
+ * Only allows http/https, blocks private/internal IPs, and restricts ports.
+ */
+function validateUrl(raw: string): { ok: true } | { ok: false; error: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { ok: false, error: "Invalid URL" };
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: `Blocked protocol: ${parsed.protocol}` };
+  }
+
+  // Block non-standard ports
+  if (parsed.port && parsed.port !== "80" && parsed.port !== "443") {
+    return { ok: false, error: `Blocked port: ${parsed.port}` };
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Block localhost variants
+  if (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    hostname === "0.0.0.0"
+  ) {
+    return { ok: false, error: "Blocked: localhost" };
+  }
+
+  // Block private/internal IP ranges
+  const ipMatch = hostname.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipMatch) {
+    const [, a, b] = ipMatch.map(Number);
+    if (
+      a === 127 || // 127.0.0.0/8
+      a === 10 || // 10.0.0.0/8
+      (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12
+      (a === 192 && b === 168) || // 192.168.0.0/16
+      (a === 169 && b === 254) || // 169.254.0.0/16 (link-local)
+      a === 0 // 0.0.0.0/8
+    ) {
+      return { ok: false, error: "Blocked: private/internal IP" };
+    }
+  }
+
+  return { ok: true };
+}
+
 export const veganSearchTools = [
   new FunctionTool({
     name: "google_places_search",
     description:
-      "Search Google Maps/Places for restaurants by name or type in a location. Returns ratings, reviews, websites, opening hours, and photo references.",
+      "Search Google Maps/Places for restaurants by name or type in a location. Returns ratings, reviews, websites, opening hours, and photo names.",
     parameters: z.object({
       query: z
         .string()
@@ -19,27 +72,16 @@ export const veganSearchTools = [
         .string()
         .optional()
         .describe(
-          'Location bias, e.g. "Södermalm, Stockholm" or "Maioris Décima, Mallorca"'
+          'Location to include in the search, e.g. "Södermalm, Stockholm" or "Maioris Décima, Mallorca"'
         ),
-      radius: z
-        .number()
-        .optional()
-        .describe("Search radius in meters (default 5000)"),
     }),
-    execute: async ({ query, location, radius }) => {
+    execute: async ({ query, location }) => {
       if (!GOOGLE_MAPS_API_KEY) {
         return { error: "GOOGLE_MAPS_API_KEY not configured" };
       }
 
       const textQuery = location ? `${query} in ${location}` : query;
       const body: Record<string, unknown> = { textQuery };
-      if (location) {
-        body.locationBias = {
-          circle: {
-            radius: radius ?? 5000,
-          },
-        };
-      }
 
       try {
         const controller = new AbortController();
@@ -91,7 +133,9 @@ export const veganSearchTools = [
                 .slice(0, 3)
                 .map((r) => r.text?.text ?? ""),
               openingHours: p.regularOpeningHours?.weekdayDescriptions ?? [],
-              photoCount: (p.photos ?? []).length,
+              photos: (p.photos ?? [])
+                .slice(0, 3)
+                .map((ph) => ph.name ?? ""),
             })
           );
 
@@ -108,15 +152,20 @@ export const veganSearchTools = [
       "Fetch a URL and extract readable text content. Use this to read restaurant websites and find menu pages.",
     parameters: z.object({
       url: z.string().url().describe("The URL to fetch"),
-      max_length: z
+      maxLength: z
         .number()
         .optional()
         .describe(
           "Maximum characters to return (default 10000)"
         ),
     }),
-    execute: async ({ url, max_length }) => {
-      const maxLen = max_length ?? 10_000;
+    execute: async ({ url, maxLength }) => {
+      const validation = validateUrl(url);
+      if (!validation.ok) {
+        return { error: validation.error };
+      }
+
+      const maxLen = maxLength ?? 10_000;
 
       try {
         const controller = new AbortController();
@@ -172,15 +221,20 @@ export const veganSearchTools = [
       "Download a PDF from a URL and extract its text content. Use this for restaurant PDF menus.",
     parameters: z.object({
       url: z.string().url().describe("The PDF URL to fetch"),
-      max_length: z
+      maxLength: z
         .number()
         .optional()
         .describe(
           "Maximum characters to return (default 15000)"
         ),
     }),
-    execute: async ({ url, max_length }) => {
-      const maxLen = max_length ?? 15_000;
+    execute: async ({ url, maxLength }) => {
+      const validation = validateUrl(url);
+      if (!validation.ok) {
+        return { error: validation.error };
+      }
+
+      const maxLen = maxLength ?? 15_000;
 
       try {
         const controller = new AbortController();
@@ -211,7 +265,17 @@ export const veganSearchTools = [
           };
         }
 
+        // Check Content-Length before downloading
+        const contentLength = res.headers.get("content-length");
+        if (contentLength && parseInt(contentLength, 10) > MAX_PDF_SIZE) {
+          return { error: `PDF too large: ${contentLength} bytes (max ${MAX_PDF_SIZE})` };
+        }
+
         const arrayBuffer = await res.arrayBuffer();
+        if (arrayBuffer.byteLength > MAX_PDF_SIZE) {
+          return { error: `PDF too large: ${arrayBuffer.byteLength} bytes (max ${MAX_PDF_SIZE})` };
+        }
+
         const pdf = new PDFParse({ data: new Uint8Array(arrayBuffer) });
         const textResult = await pdf.getText();
         await pdf.destroy();
