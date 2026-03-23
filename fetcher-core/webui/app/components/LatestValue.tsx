@@ -21,7 +21,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
   return (
     <div className="p-1 rounded bg-blue-100 dark:bg-blue-900 shadow-sm ring-1 ring-blue-100 dark:ring-blue-800 hover:ring-blue-300/60 transition-colors flex flex-col items-center justify-center h-full relative overflow-hidden">
       {sparkline && historyData.length > 0 && (
-        <div className="absolute inset-0 z-0">
+        <div className="absolute inset-0 z-0 pointer-events-none" aria-hidden="true">
           <SparklineChart data={historyData} fixedMin={sparklineMin} fixedMax={sparklineMax} />
         </div>
       )}
