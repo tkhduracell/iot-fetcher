@@ -8,7 +8,7 @@ type LatestValueProps = ConfigValue & LatestValueQueryParams
 
 const LatestValue: React.FC<LatestValueProps> = (props) => {
   const { initialLoading, loading, error, result } = useLatestValueQuery(props);
-  const { decimals = 1, title, field, unit, sparkline } = props;
+  const { decimals = 1, title, field, unit, sparkline, sparklineMin, sparklineMax } = props;
   const value = result.length > 0 ? result[0]._value : null;
 
   const historyData = useHistoryQuery({
@@ -22,7 +22,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
     <div className="p-1 rounded bg-blue-100 dark:bg-blue-900 shadow-sm ring-1 ring-blue-100 dark:ring-blue-800 hover:ring-blue-300/60 transition-colors flex flex-col items-center justify-center h-full relative overflow-hidden">
       {sparkline && historyData.length > 0 && (
         <div className="absolute inset-0 z-0">
-          <SparklineChart data={historyData} />
+          <SparklineChart data={historyData} fixedMin={sparklineMin} fixedMax={sparklineMax} />
         </div>
       )}
       <h2 className="text-sm md:text-base font-medium mb-0 leading-tight text-blue-800 dark:text-blue-100/90 truncate text-center w-full relative z-10">

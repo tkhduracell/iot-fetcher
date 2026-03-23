@@ -11,6 +11,8 @@ export type ConfigValue = {
   decimals?: number;
   reload?: number;
   sparkline?: string;
+  sparklineMin?: number;
+  sparklineMax?: number;
 };
 
 export type SonosZone = {
