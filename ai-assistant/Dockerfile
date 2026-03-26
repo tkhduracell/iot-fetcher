@@ -7,10 +7,8 @@ WORKDIR /app
 # Install build tools for native modules (better-sqlite3)
 RUN apk add --no-cache python3 make g++
 
-COPY package.json ./
-# Skip lockfile — npm ci with a macOS-generated lockfile misses
-# platform-specific optional deps (lightningcss, @next/swc) on Alpine
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 
 # Build the application
 FROM base AS builder
