@@ -2,7 +2,7 @@
 FROM node:22 AS frontend-build
 WORKDIR /app
 COPY webui/package*.json ./
-RUN npm ci || npm install
+RUN npm ci
 COPY webui/ .
 RUN npm run build
 

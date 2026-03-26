@@ -8,7 +8,7 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
 COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+RUN npm ci
 
 # Build the application
 FROM base AS builder

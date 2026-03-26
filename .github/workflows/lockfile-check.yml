@@ -1,0 +1,20 @@
+name: Lock file check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-lockfiles:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [fetcher-core/webui, grafana, ai-assistant]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Verify lock file is up to date
+        working-directory: ${{ matrix.dir }}
+        run: npm install --package-lock-only && git diff --exit-code package-lock.json
