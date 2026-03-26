@@ -76,18 +76,23 @@ def _ngenic():
 
                 if node_status:
                     battery = node_status.battery_percentage()
-                    points.append(Point("ngenic_node_battery")
-                                  .tag("node", node.uuid())
-                                  .tag("node_type", type.name)
-                                  .field("value", int(battery))
-                                  )
-
                     radio_signal = node_status.radio_signal_percentage()
-                    points.append(Point("ngenic_node_radio_signal")
-                                  .tag("node", node.uuid())
-                                  .tag("node_type", type.name)
-                                  .field("value", int(radio_signal))
-                                  )
+
+                    # Skip when node is unreachable (both 0)
+                    if battery == 0 and radio_signal == 0:
+                        logger.warning("[ngenic] Node %s appears unreachable (battery=0, signal=0), skipping", node.uuid())
+                    else:
+                        points.append(Point("ngenic_node_battery")
+                                      .tag("node", node.uuid())
+                                      .tag("node_type", type.name)
+                                      .field("value", int(battery))
+                                      )
+
+                        points.append(Point("ngenic_node_radio_signal")
+                                      .tag("node", node.uuid())
+                                      .tag("node_type", type.name)
+                                      .field("value", int(radio_signal))
+                                      )
 
                 try:
                     measurements: List[Measurement] = node.measurements()
