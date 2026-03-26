@@ -9,8 +9,8 @@ export const values: Config = [
         { measurement: 'air_quality', field: 'aqi', title: '😶‍🌫️ Luftkvalitet', unit: 'AQI⁺', window: '60m', range: '-1h', sparkline: '24h', sparklineMin: 0, sparklineMax: 150 },
     ],
     [
-        { measurement: 'aqua_temp', field: 'temp_incoming', title: '➡️ Pool Ingående', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 30 },
-        { measurement: 'aqua_temp', field: 'temp_outgoing', title: '⬅️ Pool Utgående', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 30 },
+        { measurement: 'spa_climate', field: 'current_temperature_value', title: '🛁 Spa Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 45 },
+        { measurement: 'pool_temperature', field: 'value', title: '🏊 Pool Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 30 },
         { measurement: 'pool_iqpump_motordata', field: 'speed', title: '💦 Poolpump', unit: 'RPM', sparkline: '24h', sparklineMin: 0, sparklineMax: 3000 },
     ],
     [
