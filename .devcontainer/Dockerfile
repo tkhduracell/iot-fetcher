@@ -15,8 +15,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && node --version && npm --version
 
 
-COPY python/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+COPY python/pyproject.toml python/uv.lock ./python/
+RUN uv pip install --system --no-cache -r python/pyproject.toml
 
 COPY webui/package.json ./webui/package.json
 COPY webui/package-lock.json ./webui/package-lock.json
