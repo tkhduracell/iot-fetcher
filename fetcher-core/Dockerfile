@@ -1,7 +1,8 @@
 # Stage 1: Build Next.js app
 FROM node:22 AS frontend-build
 WORKDIR /app
-COPY webui/package*.json ./
+COPY webui/package.json ./
+COPY webui/package-lock.json ./
 RUN npm ci
 COPY webui/ .
 RUN npm run build
