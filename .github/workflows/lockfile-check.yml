@@ -17,4 +17,4 @@ jobs:
           node-version: 22
       - name: Verify lock file is up to date
         working-directory: ${{ matrix.dir }}
-        run: npm install --package-lock-only && git diff --exit-code package-lock.json
+        run: npm ci
