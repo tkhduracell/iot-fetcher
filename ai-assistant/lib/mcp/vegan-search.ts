@@ -1,7 +1,7 @@
 import { FunctionTool } from "@google/adk";
 import { GoogleGenAI, createPartFromBase64 } from "@google/genai";
 import { z } from "zod";
-import { PDFParse } from "pdf-parse";
+
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY ?? "";
 const GEMINI_API_KEY =
@@ -279,6 +279,7 @@ export const veganSearchTools = [
           return { error: `PDF too large: ${arrayBuffer.byteLength} bytes (max ${MAX_PDF_SIZE})` };
         }
 
+        const { PDFParse } = await import("pdf-parse");
         const pdf = new PDFParse({ data: new Uint8Array(arrayBuffer) });
         const textResult = await pdf.getText();
         await pdf.destroy();
