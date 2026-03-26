@@ -22,21 +22,24 @@ RUN curl -s https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor 
     apt-get update && apt-get install -y influxdb2-client && \
     apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Python deps for scheduler
-COPY python/requirements.txt python/
-RUN pip install --no-cache-dir -r python/requirements.txt
+COPY python/pyproject.toml python/uv.lock python/
+RUN uv pip install --system --no-cache -r python/pyproject.toml
 
 ARG PYDEBUGGER=0
 RUN if [ "$PYDEBUGGER" = "1" ]; then \
-        pip install debugpy; \
+        uv pip install --system debugpy; \
     fi
 
 # Copy Python scheduler
 COPY python/ ./python
 
 # Python deps for roborock sidecar
-COPY roborock-sidecar/requirements.txt roborock-sidecar/
-RUN pip install --no-cache-dir -r roborock-sidecar/requirements.txt
+COPY roborock-sidecar/pyproject.toml roborock-sidecar/uv.lock roborock-sidecar/
+RUN uv pip install --system --no-cache -r roborock-sidecar/pyproject.toml
 
 # Copy roborock sidecar
 COPY roborock-sidecar/ ./roborock-sidecar

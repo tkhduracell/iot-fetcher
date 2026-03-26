@@ -12,15 +12,30 @@ jobs:
         include:
           - dir: fetcher-core/webui
             node: 22
+            type: node
           - dir: grafana
             node: 25
+            type: node
           - dir: ai-assistant
             node: 22
+            type: node
+          - dir: fetcher-core/python
+            type: python
+          - dir: fetcher-core/roborock-sidecar
+            type: python
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
+        if: matrix.type == 'node'
         with:
           node-version: ${{ matrix.node }}
-      - name: Verify lock file is up to date
+      - name: Verify npm lock file
+        if: matrix.type == 'node'
         working-directory: ${{ matrix.dir }}
         run: npm ci
+      - uses: astral-sh/setup-uv@v6
+        if: matrix.type == 'python'
+      - name: Verify uv lock file
+        if: matrix.type == 'python'
+        working-directory: ${{ matrix.dir }}
+        run: uv lock --check
