@@ -58,13 +58,15 @@ const RoborockCleanButton: React.FC = () => {
     return acc;
   }, {} as Record<string, RoborockZone[]>);
 
+  if (error) return null;
+
   return (
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={isCleaning || isLoading}
         title="Start Roborock cleaning"
-        className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-3 py-1 rounded-full shadow text-sm font-semibold cursor-pointer transition-colors"
+        className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-1.5 rounded-full shadow text-sm font-semibold cursor-pointer transition-colors"
       >
         {isCleaning ? 'Starting...' : 'Clean'}
       </button>

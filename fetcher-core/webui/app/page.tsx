@@ -3,10 +3,10 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import LatestValue from './components/LatestValue';
-import HealthBadge from './components/HealthBadge';
 import RefreshBadge from './components/RefreshBadge';
 import RoborockCleanButton from './components/RoborockCleanButton';
 import PomodoroButton from './components/PomodoroButton';
+import SpeakersButton from './components/SpeakersButton';
 import useAutoReload from './hooks/useAutoReload';
 import EnergyPriceBar from './components/EnergyPriceBar';
 import SonosWidget from './components/SonosWidget';
@@ -40,12 +40,12 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1">
       <div className="flex items-center gap-2 mx-1 my-2">
-        <h1 className="text-2xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
-        <div className='flex flex-grow-1 gap-1 justify-end'>
+        <h1 className="text-3xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
+        <div className='flex flex-grow-1 gap-1.5 justify-end'>
+          <SpeakersButton />
           <PomodoroButton />
           <RoborockCleanButton />
           <RefreshBadge />
-          <HealthBadge />
         </div>
       </div>
       <div className="w-full py-0 flex flex-col gap-1.5">
