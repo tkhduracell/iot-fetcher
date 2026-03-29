@@ -17,6 +17,7 @@
 - Query a metric: `curl -s "https://$INFLUXDB_V3_URL/api/v1/query?query=<metric_name>" -H "Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN"`
 
 # Deployment (rpi5)
+- The remote directory on rpi5 is `~/iot-fetcher` (hyphen, NOT underscore). The local directory uses an underscore but the remote uses a hyphen — never create `~/iot_fetcher` on rpi5.
 - On rpi5, always use `sudo` and both compose files: `sudo docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
 - Get IP: `ssh rpi5 'hostname -I'`
 - VM (authed): port 8427
