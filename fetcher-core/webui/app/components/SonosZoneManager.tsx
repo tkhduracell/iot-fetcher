@@ -247,7 +247,7 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           </div>
         </div>
         {/* Volume slider — styled as a thin bar */}
-        <div className="mt-1.5 relative h-2">
+        <div className="mt-1.5 relative h-8 rounded-full">
           <div className="absolute inset-0 bg-gray-600 rounded-full overflow-hidden pointer-events-none">
             <div
               className="h-full bg-indigo-500 rounded-full transition-all"
