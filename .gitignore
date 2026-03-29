@@ -9,6 +9,7 @@ pinout.png
 **/node_modules
 **/.next
 **/next-env.d.ts
+**/dev.log
 
 /backup/
 *.tar
