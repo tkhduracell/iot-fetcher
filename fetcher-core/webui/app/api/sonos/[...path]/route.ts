@@ -19,7 +19,8 @@ async function handleRequest(
     return NextResponse.json({});
   }
 
-  const url = `http://${sonosHost}/${pathStr}`;
+  const base = /^https?:\/\//.test(sonosHost) ? sonosHost : `http://${sonosHost}`;
+  const url = `${base}/${pathStr}`;
 
   try {
     const headers: Record<string, string> = {};
