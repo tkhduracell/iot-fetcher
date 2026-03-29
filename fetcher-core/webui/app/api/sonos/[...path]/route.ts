@@ -36,11 +36,15 @@ async function handleRequest(
       method: request.method,
       headers,
       body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.arrayBuffer() : undefined,
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
       cache: 'no-store',
     });
 
     const body = await resp.arrayBuffer();
+    if (!resp.ok) {
+      const text = new TextDecoder().decode(body);
+      console.error(`Sonos API ${resp.status} for ${fullUrl}: ${text}`);
+    }
     const responseHeaders = new Headers();
     resp.headers.forEach((value, key) => {
       if (!EXCLUDED_HEADERS.has(key.toLowerCase())) {

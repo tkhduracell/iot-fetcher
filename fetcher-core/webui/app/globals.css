@@ -21,3 +21,19 @@
 .animate-fade-in {
     animation: fade-in 0.3s ease-out;
 }
+
+@keyframes speaker-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 0 var(--pulse-spread, 6px) rgba(99, 102, 241, var(--pulse-opacity, 0.25));
+        transform: scale(var(--pulse-scale, 1.03));
+    }
+}
+
+.speaker-playing {
+    /* 8 beats at 128 BPM = 8 × 0.469s ≈ 3.75s full cycle */
+    animation: speaker-pulse 3.75s ease-in-out infinite;
+}

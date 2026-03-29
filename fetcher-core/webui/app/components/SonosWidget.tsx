@@ -72,9 +72,12 @@ const SonosZoneCard: React.FC<SonosZoneCardProps> = ({ zone, onPlayPause, onNext
           />
         ) : null}
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm text-gray-900 dark:text-gray-100 mb-1">
+          <a
+            href="#speakers"
+            className="font-medium text-sm text-gray-900 dark:text-gray-100 hover:text-indigo-400 mb-1 block transition-colors"
+          >
             {displayRoomName}
-          </div>
+          </a>
           <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
             {trackInfo}
           </div>
