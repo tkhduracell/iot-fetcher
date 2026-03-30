@@ -33,7 +33,7 @@ jobs:
         if: matrix.type == 'node'
         working-directory: ${{ matrix.dir }}
         run: npm ci
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         if: matrix.type == 'python'
       - name: Verify uv lock file
         if: matrix.type == 'python'
