@@ -104,7 +104,7 @@ services:
       - TZ=Europe/Stockholm
 
   sonos-http-api:
-    image: chrisns/docker-node-sonos-http-api:latest
+    image: ghcr.io/tkhduracell/sonos-http-api:master
     hostname: sonos-http-api
     restart: unless-stopped
     network_mode: host
