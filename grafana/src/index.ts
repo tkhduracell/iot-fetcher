@@ -7,6 +7,7 @@ import { spaPanels } from './panels/spa.ts';
 import { energyPanels } from './panels/energy.ts';
 import { eufyPanels } from './panels/eufy.ts';
 import { lightingPanels } from './panels/lighting.ts';
+import { volvoPanels } from './panels/volvo.ts';
 
 function buildDashboard() {
   const builder = new DashboardBuilder('Irisgatan')
@@ -46,15 +47,21 @@ function buildDashboard() {
     builder.withPanel(panel);
   }
 
+  // Volvo XC40 row
+  builder.withRow(new RowBuilder('Volvo XC40').gridPos({ h: 1, w: 24, x: 0, y: 76 }));
+  for (const panel of volvoPanels()) {
+    builder.withPanel(panel);
+  }
+
   // Eufy Cameras row (collapsed)
-  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 76 });
+  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 85 });
   for (const panel of eufyPanels()) {
     eufyRow.withPanel(panel);
   }
   builder.withRow(eufyRow);
 
   // Tapo row
-  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 77 }));
+  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 86 }));
   for (const panel of tapoPanels()) {
     builder.withPanel(panel);
   }
