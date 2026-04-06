@@ -3,7 +3,7 @@ name = "iot-fetcher"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "requests==2.33.0",
+    "requests==2.33.1",
     "pybalboa==1.1.4",
     "pytz>=2024.2",
     "influxdb3-python==0.18.0",
