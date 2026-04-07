@@ -7,13 +7,11 @@ import SparklineChart from './SparklineChart';
 function valueSizeClass(colCount: number) {
   if (colCount <= 1) return 'text-7xl md:text-8xl';
   if (colCount === 2) return 'text-6xl md:text-7xl';
-  if (colCount === 3) return 'text-5xl md:text-6xl';
   return 'text-5xl md:text-6xl';
 }
 
 function titleSizeClass(colCount: number) {
   if (colCount <= 1) return 'text-base md:text-lg';
-  if (colCount <= 3) return 'text-sm md:text-base';
   return 'text-sm md:text-base';
 }
 
