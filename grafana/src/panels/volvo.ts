@@ -29,10 +29,10 @@ export function volvoPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('target_soc', 'Mål-SoC', 'purple'),
       overrideDisplayAndColor('target_charge', 'Mål laddnivå', 'yellow'),
     ])
-    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_battery[$__interval])', 'battery'))
+    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_battery_value[$__interval])', 'battery'))
     .withTarget(vmExpr('B', 'last_over_time(ha_xc40_state_of_charge[$__interval])', 'soc'))
     .withTarget(vmExpr('C', 'last_over_time(ha_xc40_target_state_of_charge[$__interval])', 'target_soc'))
-    .withTarget(vmExpr('D', 'last_over_time(ha_volvo_xc40_target_battery_charge_level[$__interval])', 'target_charge'))
+    .withTarget(vmExpr('D', 'last_over_time(ha_volvo_xc40_target_battery_charge_level_value[$__interval])', 'target_charge'))
     .gridPos({ h: 8, w: 12, x: 0, y: 77 });
 
   // ⚡ XC40 Laddeffekt (timeseries) - charging power
@@ -46,7 +46,7 @@ export function volvoPanels(): cog.Builder<dashboard.Panel>[] {
     .legend(legendBottom(false))
     .tooltip(tooltipMulti())
     .insertNulls(SPAN_NULLS_MS)
-    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_charging_power[$__interval])', 'Laddeffekt'))
+    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_charging_power_value[$__interval])', 'Laddeffekt'))
     .gridPos({ h: 8, w: 6, x: 12, y: 77 });
 
   // 🛣️ Räckvidd (stat) - distance to empty battery
@@ -61,7 +61,7 @@ export function volvoPanels(): cog.Builder<dashboard.Panel>[] {
       { color: 'yellow', value: 50 },
       { color: 'green', value: 100 },
     ]))
-    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_distance_to_empty_battery[$__interval])', 'Räckvidd'))
+    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_distance_to_empty_battery_value[$__interval])', 'Räckvidd'))
     .gridPos({ h: 8, w: 3, x: 18, y: 77 });
 
   // 🔧 Service (stat) - time to service
@@ -75,7 +75,7 @@ export function volvoPanels(): cog.Builder<dashboard.Panel>[] {
       { color: 'yellow', value: 30 },
       { color: 'green', value: 90 },
     ]))
-    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_time_to_service[$__interval])', 'Service'))
+    .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_time_to_service_value[$__interval])', 'Service'))
     .gridPos({ h: 8, w: 3, x: 21, y: 77 });
 
   return [batteryTs, chargingTs, distanceStat, serviceStat];
