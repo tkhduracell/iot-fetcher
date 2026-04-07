@@ -22,7 +22,7 @@ export const values: Config = [
     [
         { measurement: 'sigenergy_pv_power', field: 'power_kw', title: '☀️ Solceller Produktion', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 3 },
         { measurement: 'sigenergy_grid_power', field: 'net_power_kw', title: '⚡️ Nät Inköp', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: -5, sparklineMax: 10 },
-        { measurement: 'sigenergy_battery', field: 'power_to_battery_kw', title: '🪫 Batteri Urladdning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: -10, sparklineMax: 10 },
         { measurement: 'sigenergy_battery', field: 'soc_percent', title: '🔋 Batteri SOC', unit: '%', decimals: 0, reload: 60000, sparkline: '24h', sparklineMin: 0, sparklineMax: 100 },
+        { measurement: 'sigenergy_battery', field: 'power_to_battery_kw', title: '🪫 Batteri Urladdning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: -10, sparklineMax: 10 },
     ],
 ];
