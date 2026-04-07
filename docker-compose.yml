@@ -4,6 +4,7 @@ volumes:
   victoria-metrics:
   garmin-tokens:
   home-assistant-config:
+  caddy-data:
 
 services:
   database:
@@ -41,6 +42,8 @@ services:
     ports:
       - "443:443"
       - "80:80"
+    volumes:
+      - caddy-data:/data
     depends_on:
       - iot-fetcher
       - database-auth
