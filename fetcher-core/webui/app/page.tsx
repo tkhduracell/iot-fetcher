@@ -17,7 +17,7 @@ const Row: React.FC<{row: ConfigRow; rowIdx: number; onOpen: (row: number, col: 
   <div className="flex flex-row gap-1 min-h-[13.8vh]">
     {row.map((item, colIdx) => (
       <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}-${item.filter ? JSON.stringify(item.filter) : ''}`} onClick={() => onOpen(rowIdx, colIdx)}>
-        <LatestValue {...item} />
+        <LatestValue {...item} colCount={row.length} />
       </div>
     ))}
   </div>

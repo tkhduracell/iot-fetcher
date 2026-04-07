@@ -4,11 +4,24 @@ import useHistoryQuery from '../hooks/useHistoryQuery';
 import { ConfigValue } from '../lib/types';
 import SparklineChart from './SparklineChart';
 
-type LatestValueProps = ConfigValue & LatestValueQueryParams
+function valueSizeClass(colCount: number) {
+  if (colCount <= 1) return 'text-7xl md:text-8xl';
+  if (colCount === 2) return 'text-6xl md:text-7xl';
+  if (colCount === 3) return 'text-5xl md:text-6xl';
+  return 'text-4xl md:text-5xl';
+}
+
+function titleSizeClass(colCount: number) {
+  if (colCount <= 1) return 'text-base md:text-lg';
+  if (colCount <= 3) return 'text-sm md:text-base';
+  return 'text-xs md:text-sm';
+}
+
+type LatestValueProps = ConfigValue & LatestValueQueryParams & { colCount?: number }
 
 const LatestValue: React.FC<LatestValueProps> = (props) => {
   const { initialLoading, loading, error, result } = useLatestValueQuery(props);
-  const { decimals = 1, title, field, unit, sparkline, sparklineMin, sparklineMax } = props;
+  const { decimals = 1, title, field, unit, sparkline, sparklineMin, sparklineMax, colCount = 3 } = props;
   const value = result.length > 0 ? result[0]._value : null;
 
   const historyData = useHistoryQuery({
@@ -25,7 +38,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
           <SparklineChart data={historyData} fixedMin={sparklineMin} fixedMax={sparklineMax} />
         </div>
       )}
-      <h2 className="text-sm md:text-base font-medium mb-0 leading-tight text-blue-800 dark:text-blue-100/90 truncate text-center w-full relative z-10">
+      <h2 className={`${titleSizeClass(colCount)} font-medium mb-0 leading-tight text-blue-800 dark:text-blue-100/90 truncate text-center w-full relative z-10`}>
         {title || field}
       </h2>
       <div className="flex items-baseline gap-0.5 leading-none relative z-10">
@@ -34,7 +47,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
         ) : (
           <>
             <span className={
-              `font-semibold ${loading ? 'text-gray-500 dark:text-gray-400' : 'text-blue-700 dark:text-blue-200'} text-5xl md:text-6xl tracking-[-0.01em]`
+              `font-semibold ${loading ? 'text-gray-500 dark:text-gray-400' : 'text-blue-700 dark:text-blue-200'} ${valueSizeClass(colCount)} tracking-[-0.01em]`
             }>
               {value?.toFixed(decimals).replace(/\.0$/, '')}
             </span>
