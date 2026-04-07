@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { DashboardBuilder, RowBuilder } from '@grafana/grafana-foundation-sdk/dashboard';
+import { DashboardBuilder, RowBuilder, TimePickerBuilder, TimeOptionBuilder } from '@grafana/grafana-foundation-sdk/dashboard';
 import { housePanels, tapoPanels } from './panels/house.ts';
 import { poolPanels } from './panels/pool.ts';
 import { spaPanels } from './panels/spa.ts';
@@ -18,7 +18,17 @@ function buildDashboard() {
     .time({ from: 'now-12h', to: 'now' })
     .refresh('10s')
     .editable()
-    .liveNow(true);
+    .liveNow(true)
+    .timepicker(
+      new TimePickerBuilder().quickRanges([
+        new TimeOptionBuilder().display('24h').from('now-24h').to('now'),
+        new TimeOptionBuilder().display('48h').from('now-48h').to('now'),
+        new TimeOptionBuilder().display('7 days').from('now-7d').to('now'),
+        new TimeOptionBuilder().display('14 days').from('now-14d').to('now'),
+        new TimeOptionBuilder().display('30 days').from('now-30d').to('now'),
+        new TimeOptionBuilder().display('90 days').from('now-90d').to('now'),
+      ])
+    );
 
   // Huset row
   builder.withRow(new RowBuilder('Huset'));
