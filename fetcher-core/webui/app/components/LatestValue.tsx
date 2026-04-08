@@ -47,7 +47,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
             <span className={
               `font-semibold ${loading ? 'text-gray-500 dark:text-gray-400' : 'text-blue-700 dark:text-blue-200'} ${valueSizeClass(colCount)} tracking-[-0.01em]`
             }>
-              {value?.toFixed(decimals).replace(/\.0$/, '')}
+              {value?.toFixed(decimals)}
             </span>
             <span className="text-sm md:text-base text-blue-700/80 dark:text-blue-200/80">
               {unit}
