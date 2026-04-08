@@ -68,10 +68,10 @@ const EnergyPriceBar: React.FC = () => {
               return (
                 <div className='flex flex-1 flex-col justify-end' key={point._time}>
                   <div className={
-                    `${colorClass} rounded p-0 flex
+                    `${colorClass} rounded p-0 flex h-8
                     text-center text-gray-600 justify-center items-center
-                    dark:text-gray-300 ${isNow ? 'h-8 text-sm font-semibold' : 'h-3 text-[10px]'}`}>
-                      { isNow && `${value?.toFixed(0)}` }
+                    dark:text-gray-300 ${isNow ? 'text-sm font-semibold ring-inset ring-2 ring-gray-500' : 'text-[10px]'}`}>
+                      {value?.toFixed(0)}
                   </div>
                 </div>
               );
