@@ -593,7 +593,7 @@ requires-dist = [
     { name = "requests", specifier = "==2.33.0" },
     { name = "schedule", specifier = "==1.2.2" },
     { name = "sigenapi", specifier = "==1.0.0" },
-    { name = "tplinkrouterc6u", specifier = "==5.16.0" },
+    { name = "tplinkrouterc6u", specifier = "==5.18.0" },
     { name = "tuya-connector-python", specifier = "==0.1.2" },
 ]
 
@@ -1035,16 +1035,16 @@ wheels = [
 
 [[package]]
 name = "tplinkrouterc6u"
-version = "5.16.0"
+version = "5.18.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "macaddress" },
     { name = "pycryptodome" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ac/41/c83e83a7febcb44770c596f60b77f52408991ceff8dd822b3ea59d0610ab/tplinkrouterc6u-5.16.0.tar.gz", hash = "sha256:7e855570b2bec3922cc21e58355ed61b8b06265a90e6295072988f384100c3e3", size = 121888, upload-time = "2026-02-20T11:29:35.686Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a8/78/474bb0320482ef6918514c44e90c858c712bc40d4863d1097b82a972b3ab/tplinkrouterc6u-5.18.0.tar.gz", hash = "sha256:13a8ff2e241d0eb94d56515da96aca842bdec0ef6ff284509fc601980cf6b5b3", size = 126279, upload-time = "2026-04-09T10:35:27.063Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/b5/9ceff03e0f8da19fa6ab0efd352baf6a88e4185ffe1f74aa9b10db7f0181/tplinkrouterc6u-5.16.0-py3-none-any.whl", hash = "sha256:47bbc165aacdbd8870b1a8ea671d8f05df47c1f5a0c3b030ae4396e367941de1", size = 142461, upload-time = "2026-02-20T11:29:34.374Z" },
+    { url = "https://files.pythonhosted.org/packages/60/38/dfdd8a70bde32652faece6dbcfaed6e15157fb3e34dd03b36adc7ed2e8d2/tplinkrouterc6u-5.18.0-py3-none-any.whl", hash = "sha256:0038c60e76a0f449166ba50431906bcea060576d1c89ef7d16a3592f7012939f", size = 146494, upload-time = "2026-04-09T10:35:25.623Z" },
 ]
 
 [[package]]
