@@ -10,6 +10,7 @@ pinout.png
 **/.next
 **/next-env.d.ts
 **/dev.log
+**/*.tsbuildinfo
 
 /backup/
 *.tar
