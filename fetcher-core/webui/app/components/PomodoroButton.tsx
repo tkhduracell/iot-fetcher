@@ -102,7 +102,7 @@ const PomodoroButton: React.FC = () => {
   };
 
   const getButtonStyle = () => {
-    const baseStyle = 'px-3 py-1 rounded-full shadow text-sm font-semibold cursor-pointer transition-colors duration-200';
+    const baseStyle = 'px-4 py-1.5 rounded-full shadow text-sm font-semibold cursor-pointer transition-colors duration-200';
 
     if (state === 'idle') {
       return `${baseStyle} bg-purple-600 hover:bg-purple-700 text-white`;
@@ -121,7 +121,7 @@ const PomodoroButton: React.FC = () => {
 
   const getButtonText = () => {
     if (state === 'idle') {
-      return 'Pomodoro';
+      return '🍅 Pomodoro';
     }
 
     const timeStr = formatTime(timeRemaining);

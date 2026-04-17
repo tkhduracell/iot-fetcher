@@ -5,8 +5,8 @@ import sys
 import time
 import schedule
 
-from balboa import balboa
-# from balboa import balboa_control  # Disabled SPA control
+# from balboa import balboa  # Disabled - now handled by Home Assistant
+# from balboa import balboa_control  # Disabled - now handled by Home Assistant
 from deco import deco
 from elpris import elpris
 from ngenic import ngenic
@@ -46,10 +46,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['balboa', 'deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [balboa, deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()

@@ -4,6 +4,7 @@ volumes:
   victoria-metrics:
   garmin-tokens:
   home-assistant-config:
+  caddy-data:
 
 services:
   database:
@@ -41,17 +42,19 @@ services:
     ports:
       - "443:443"
       - "80:80"
+    volumes:
+      - caddy-data:/data
     depends_on:
       - iot-fetcher
       - database-auth
-      - claude-chat
+      - ai-assistant
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
 
-  claude-chat:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/claude-chat:latest
-    hostname: claude-chat
+  ai-assistant:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-assistant:latest
+    hostname: ai-assistant
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"

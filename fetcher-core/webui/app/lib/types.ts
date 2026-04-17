@@ -10,6 +10,9 @@ export type ConfigValue = {
   range?: "-15m" | "-1h" ;
   decimals?: number;
   reload?: number;
+  sparkline?: string;
+  sparklineMin?: number;
+  sparklineMax?: number;
 };
 
 export type SonosZone = {

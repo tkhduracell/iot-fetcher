@@ -11,6 +11,7 @@ type UseSonosQueryResult = {
 
 const useSonosQuery = (): UseSonosQueryResult & {
   updateZoneMute: (zoneUuid: string, muted: boolean) => void;
+  refetch: () => Promise<void>;
 } => {
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -84,6 +85,7 @@ const useSonosQuery = (): UseSonosQueryResult & {
     error,
     result,
     updateZoneMute,
+    refetch: fetchSonosZones,
   };
 };
 

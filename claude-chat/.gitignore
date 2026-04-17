@@ -1,8 +1,0 @@
-node_modules/
-.next/
-.env
-
-# Playwright
-test-results/
-playwright-report/
-e2e/.test-data/

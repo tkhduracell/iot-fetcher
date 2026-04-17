@@ -6,9 +6,9 @@
 # Build Instructions
 - Use "make build" to build the main (iot-fetcher) docker image
 - Build Docker images locally and push to registry — don't build on rpi5
-- You can run ssh commands like "echo "uptime; exit;" | balena device ssh 192.168.68.93 database"
 
 # VictoriaMetrics
+- Tokens and credentials (InfluxDB/VictoriaMetrics, Grafana, etc.) are in `fetcher-core/python/.env`
 - The metrics backend is VictoriaMetrics, accessible at `https://$INFLUXDB_V3_URL`
 - Auth: `Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN`
 - List all metric names: `curl -s "https://$INFLUXDB_V3_URL/api/v1/label/__name__/values" -H "Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN"`
@@ -17,7 +17,10 @@
 - Query a metric: `curl -s "https://$INFLUXDB_V3_URL/api/v1/query?query=<metric_name>" -H "Authorization: Bearer $INFLUXDB_V3_ACCESS_TOKEN"`
 
 # Deployment (rpi5)
+- The remote directory on rpi5 is `~/iot-fetcher` (hyphen, NOT underscore). The local directory uses an underscore but the remote uses a hyphen — never create `~/iot_fetcher` on rpi5.
 - On rpi5, always use `sudo` and both compose files: `sudo docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
+- Get IP: `ssh rpi5 'hostname -I'`
+- VM (authed): port 8427
 
 # Grafana
 - In Grafana dashboards, use `$__interval` with `spanNulls` instead of hardcoded lookback windows

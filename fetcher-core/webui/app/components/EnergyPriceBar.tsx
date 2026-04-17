@@ -56,18 +56,8 @@ const EnergyPriceBar: React.FC = () => {
     }
   };
 
-  const startStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  const endStr = end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-
-  const dateStr = start.toLocaleDateString([], { weekday:'long', month: 'long', day: 'numeric' });
-
       return (
         <Wrapper>
-          <div className="w-full flex flex-row justify-between text-sm md:text-base text-gray-600 dark:text-gray-300">
-            <div>{startStr}</div>
-            <div>{dateStr}</div>
-            <div>{endStr}</div>
-          </div>
           <div className="w-full flex gap-1 flex-wrap">
             {result.map((point: Point) => {
               const value = point.value;
@@ -78,10 +68,10 @@ const EnergyPriceBar: React.FC = () => {
               return (
                 <div className='flex flex-1 flex-col justify-end' key={point._time}>
                   <div className={
-                    `${colorClass} rounded p-0 text-[10px] flex
+                    `${colorClass} rounded p-0 flex h-8
                     text-center text-gray-600 justify-center items-center
-                    dark:text-gray-300 ${isNow ? 'h-5' : 'h-1.5'}`}>
-                      { isNow && `${value?.toFixed(0)}` }
+                    dark:text-gray-300 ${isNow ? 'text-sm font-semibold ring-inset ring-2 ring-gray-500' : 'text-[10px]'}`}>
+                      {value?.toFixed(0)}
                   </div>
                 </div>
               );

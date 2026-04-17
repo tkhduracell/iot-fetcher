@@ -4,5 +4,5 @@ services:
   https-proxy:
     build: ./https-proxy
 
-  claude-chat:
-    build: ./claude-chat
+  ai-assistant:
+    build: ./ai-assistant

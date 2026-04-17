@@ -1,4 +1,5 @@
 .env
+.env.local
 .vscode
 
 esp32-*/
@@ -8,6 +9,7 @@ pinout.png
 **/node_modules
 **/.next
 **/next-env.d.ts
+**/dev.log
 
 /backup/
 *.tar
@@ -22,3 +24,4 @@ victoria-metrics/auth.yml
 sonos-http-api/settings.json
 
 .context/
+.claude/worktrees/
