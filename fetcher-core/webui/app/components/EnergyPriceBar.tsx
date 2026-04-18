@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import usePromQLQuery from '../hooks/usePromQLQuery';
-import { startOfDay, endOfDay, differenceInMinutes, addDays } from 'date-fns';
+import { startOfDay, endOfDay, addDays } from 'date-fns';
 
 type Point = {
   _time: string;
@@ -83,27 +83,36 @@ const EnergyPriceBar: React.FC = () => {
     return <Wrapper>Inga energipriser tillgängliga.</Wrapper>;
   }
 
-  const renderCells = (points: Point[], highlightNow: boolean) => (
-    <div className="w-1/2 flex gap-1">
-      {points.map((point) => {
-        const value = point.value;
-        const colorClass = getBucketColorClass(value);
-        const time = new Date(point._time);
-        const diff = differenceInMinutes(time, Date.now());
-        const isNow = highlightNow && diff < 59 && diff > 0;
-        return (
-          <div className='flex flex-1 flex-col justify-end' key={point._time}>
-            <div className={
-              `${colorClass} rounded p-0 flex h-8
-              text-center text-gray-600 justify-center items-center
-              dark:text-gray-300 ${isNow ? 'text-sm font-semibold ring-inset ring-2 ring-gray-500' : 'text-[10px]'}`}>
-                {value?.toFixed(0)}
+  const currentHour = now.getHours();
+
+  const renderCells = (points: Point[], dayStart: Date, highlightNow: boolean) => {
+    const byHour: (Point | undefined)[] = new Array(24).fill(undefined);
+    const dayStartMs = dayStart.getTime();
+    for (const p of points) {
+      const hour = Math.round((new Date(p._time).getTime() - dayStartMs) / 3_600_000);
+      if (hour >= 0 && hour < 24) byHour[hour] = p;
+    }
+
+    return (
+      <div className="w-1/2 flex gap-1">
+        {byHour.map((point, hour) => {
+          const value = point?.value;
+          const colorClass = getBucketColorClass(value ?? null);
+          const isNow = highlightNow && hour === currentHour && point !== undefined;
+          return (
+            <div className='flex flex-1 flex-col justify-end' key={hour}>
+              <div className={
+                `${colorClass} rounded p-0 flex h-8
+                text-center text-gray-600 justify-center items-center
+                dark:text-gray-300 ${isNow ? 'text-sm font-semibold ring-inset ring-2 ring-gray-500' : 'text-[10px]'}`}>
+                  {value != null ? value.toFixed(0) : ''}
+              </div>
             </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <Wrapper>
@@ -113,8 +122,8 @@ const EnergyPriceBar: React.FC = () => {
             className="flex w-[200%] transition-transform duration-300 ease-out"
             style={{ transform: view === 'today' ? 'translateX(0)' : 'translateX(-50%)' }}
           >
-            {renderCells(todayPoints, true)}
-            {renderCells(tomorrowPoints, false)}
+            {renderCells(todayPoints, todayStart, true)}
+            {renderCells(tomorrowPoints, tomorrowStart, false)}
           </div>
         </div>
         {hasTomorrow && (
