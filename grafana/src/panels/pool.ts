@@ -4,8 +4,8 @@ import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
-  greenRedThresholds, thresholds, paletteColor,
-  legendBottom, tooltipSingle,
+  greenRedThresholds, greenThreshold, thresholds, paletteColor,
+  legendBottom, tooltipSingle, tooltipMulti,
   overrideDisplayAndColor,
   SPAN_NULLS_MS,
 } from '../helpers.ts';
@@ -88,5 +88,24 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmMetric('B', 'pool_iqpump_motordata', 'speed'))
     .gridPos({ h: 7, w: 7, x: 17, y: 37 });
 
-  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs];
+  // Poolpump plan (timeseries) — 24h MILP schedule from pool-pump-planner
+  const pumpPlan = new TimeseriesBuilder()
+    .title('Poolpump plan (24h)')
+    .datasource(VM_DS)
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .insertNulls(SPAN_NULLS_MS)
+    .overrides([
+      overrideDisplayAndColor('on', 'Pump på', 'blue'),
+      overrideDisplayAndColor('price_sek_per_kwh', 'Spotpris (SEK/kWh)', 'yellow'),
+      overrideDisplayAndColor('solar_kwh', 'Solprognos (kWh)', 'orange'),
+    ])
+    .withTarget(vmExpr('A', 'last_over_time(pool_iqpump_plan_on[$__interval])', 'on'))
+    .withTarget(vmExpr('B', 'last_over_time(pool_iqpump_plan_price_sek_per_kwh[$__interval])', 'price_sek_per_kwh'))
+    .withTarget(vmExpr('C', 'last_over_time(pool_iqpump_plan_solar_kwh[$__interval])', 'solar_kwh'))
+    .gridPos({ h: 8, w: 24, x: 0, y: 52 });
+
+  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, pumpPlan];
 }

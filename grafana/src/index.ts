@@ -52,26 +52,26 @@ function buildDashboard() {
   }
 
   // Energi row
-  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 52 }));
+  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 60 }));
   for (const panel of energyPanels()) {
     builder.withPanel(panel);
   }
 
   // Volvo XC40 row
-  builder.withRow(new RowBuilder('Volvo XC40').gridPos({ h: 1, w: 24, x: 0, y: 76 }));
+  builder.withRow(new RowBuilder('Volvo XC40').gridPos({ h: 1, w: 24, x: 0, y: 84 }));
   for (const panel of volvoPanels()) {
     builder.withPanel(panel);
   }
 
   // Eufy Cameras row (collapsed)
-  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 85 });
+  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 93 });
   for (const panel of eufyPanels()) {
     eufyRow.withPanel(panel);
   }
   builder.withRow(eufyRow);
 
   // Tapo row
-  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 86 }));
+  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 94 }));
   for (const panel of tapoPanels()) {
     builder.withPanel(panel);
   }
