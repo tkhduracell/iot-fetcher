@@ -1,5 +1,5 @@
 # Stage 1: build the Go binary
-FROM golang:1.22-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download
