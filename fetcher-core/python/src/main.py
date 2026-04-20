@@ -74,9 +74,9 @@ def main():
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
 
     # Replan daily after 14:00 when tomorrow's Nordpool spot prices publish;
-    # actuator checks every minute and snaps to the current 15-min slot.
+    # reconciler runs every 5 min and snaps to the current 15-min plan slot.
     schedule.every().day.at('14:05').do(with_timeout(pool_pump_planner))
-    schedule.every(1).minutes.do(with_timeout(pool_pump_actuator))
+    schedule.every(5).minutes.do(with_timeout(pool_pump_actuator))
 
     logging.info("Starting the scheduler, running all...")
     schedule.run_all(delay_seconds=10)
