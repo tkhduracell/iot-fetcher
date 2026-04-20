@@ -3,9 +3,12 @@ import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import pulp
 import requests
+
+SITE_TZ = ZoneInfo(os.environ.get('POOL_TIMEZONE', 'Europe/Stockholm'))
 
 from influx import (
     Point,
@@ -118,8 +121,8 @@ def _fallback_schedule(slots: List[datetime]) -> List[int]:
     """Deterministic 4h-night + 4h-afternoon schedule in site-local time."""
     night = set(POOL_FALLBACK_NIGHT_HOURS)
     afternoon = set(POOL_FALLBACK_AFTERNOON_HOURS)
-    return [1 if slot.astimezone().hour in night or slot.astimezone().hour in afternoon else 0
-            for slot in slots]
+    on_hours = night | afternoon
+    return [1 if slot.astimezone(SITE_TZ).hour in on_hours else 0 for slot in slots]
 
 
 def _fallback_stats(schedule: List[int], prices: List[Optional[float]], solar: List[float]) -> Dict:
@@ -171,9 +174,8 @@ def _fetch_solar_forecast(slots: List[datetime]) -> List[float]:
         logger.exception("[pool_pump_planner] forecast.solar lookup failed")
         return [0.0] * len(slots)
 
-    # forecast.solar returns local-time keys 'YYYY-MM-DD HH:MM:SS' → Wh for that period.
-    # We align by hour-of-date in the API's local tz (lat/lon based). Simplification:
-    # bucket by "date hour" string in both keys.
+    # forecast.solar keys are naive site-local timestamps ('YYYY-MM-DD HH:MM:SS').
+    # Bucket by site-local date-hour, and match slots in the same tz.
     by_key: Dict[str, float] = {}
     for k, wh in raw.items():
         try:
@@ -183,12 +185,9 @@ def _fetch_solar_forecast(slots: List[datetime]) -> List[float]:
         except Exception:
             continue
 
-    # Match slot timestamps in local time (forecast.solar uses site-local tz; we compare
-    # on an hourly basis in UTC which is close enough for high-latitude scheduling).
     out = []
     for s in slots:
-        local = s.astimezone()
-        key = local.strftime('%Y-%m-%d %H')
+        key = s.astimezone(SITE_TZ).strftime('%Y-%m-%d %H')
         out.append(by_key.get(key, 0.0))
     return out
 
@@ -233,7 +232,7 @@ def _solve(
         if prices[t] is None:
             blocked.add(t)
             continue
-        local_hour = slots[t].astimezone().hour
+        local_hour = slots[t].astimezone(SITE_TZ).hour
         if local_hour in POOL_BLOCKED_HOURS:
             blocked.add(t)
 
