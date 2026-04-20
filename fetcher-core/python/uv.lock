@@ -570,6 +570,7 @@ dependencies = [
     { name = "influxdb3-python" },
     { name = "ngenicpy" },
     { name = "plugp100" },
+    { name = "pulp" },
     { name = "pybalboa" },
     { name = "pymodbustcp" },
     { name = "pytz" },
@@ -587,6 +588,7 @@ requires-dist = [
     { name = "influxdb3-python", specifier = "==0.18.0" },
     { name = "ngenicpy", specifier = "==0.5.2" },
     { name = "plugp100", specifier = "==5.1.7" },
+    { name = "pulp", specifier = "==2.9.0" },
     { name = "pybalboa", specifier = "==1.1.4" },
     { name = "pymodbustcp", specifier = "==0.3.0" },
     { name = "pytz", specifier = ">=2024.2" },
@@ -824,6 +826,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9b/ca/25afc144934014700c52e05103c2421997482d561f3101ff352e1292fb81/protobuf-6.33.6-cp39-abi3-manylinux2014_s390x.whl", hash = "sha256:c96c37eec15086b79762ed265d59ab204dabc53056e3443e702d2681f4b39ce3", size = 339381, upload-time = "2026-03-18T19:04:54.616Z" },
     { url = "https://files.pythonhosted.org/packages/16/92/d1e32e3e0d894fe00b15ce28ad4944ab692713f2e7f0a99787405e43533a/protobuf-6.33.6-cp39-abi3-manylinux2014_x86_64.whl", hash = "sha256:e9db7e292e0ab79dd108d7f1a94fe31601ce1ee3f7b79e0692043423020b0593", size = 323436, upload-time = "2026-03-18T19:04:55.768Z" },
     { url = "https://files.pythonhosted.org/packages/c4/72/02445137af02769918a93807b2b7890047c32bfb9f90371cbc12688819eb/protobuf-6.33.6-py3-none-any.whl", hash = "sha256:77179e006c476e69bf8e8ce866640091ec42e1beb80b213c3900006ecfba6901", size = 170656, upload-time = "2026-03-18T19:04:59.826Z" },
+]
+
+[[package]]
+name = "pulp"
+version = "2.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/d5/7cb148b56f3603be3663498db3a63054d7d519eab32ef9c39f93faf6b7a9/pulp-2.9.0.tar.gz", hash = "sha256:2e30e6c0ef2c0edac185220e3e53faca62eb786a9bd68465208f05bc63e850f3", size = 17610175, upload-time = "2024-07-12T08:56:32.238Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/10/704c18b5960b3f9b10efcc859e11881ad90f1e44008e181d2b10cd305a63/PuLP-2.9.0-py3-none-any.whl", hash = "sha256:ad6a9b566d8458f4d05f4bfe2cea59e32885dd1da6929a361be579222107987c", size = 17678417, upload-time = "2024-07-12T08:56:26.125Z" },
 ]
 
 [[package]]
