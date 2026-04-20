@@ -258,25 +258,29 @@ func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float6
 		waterC = waterTemp
 	}
 
+	// missing_inputs is a tag (not a field) because VictoriaMetrics drops
+	// string fields from InfluxDB line protocol. Values are low-cardinality:
+	// "none", "prices", "water_temp", "prices,water_temp", "infeasible".
+	missingTag := missing
+	if missingTag == "" {
+		missingTag = "none"
+	}
+
 	summary := NewPoint("pool_iqpump_plan_summary").
 		Tag("horizon", "24h").
 		Tag("mode", mode).
+		Tag("missing_inputs", missingTag).
 		Field("planned_hours", stats.plannedHours).
 		Field("target_hours", targetHours).
 		Field("slot_minutes", cfg.SlotMinutes).
 		Field("expected_cost_sek", stats.expectedCostSEK).
 		Field("slack_hours", stats.slackHours).
 		Field("water_temp_c", waterC).
-		Field("missing_inputs", missing).
 		At(slots[0])
 	points = append(points, summary)
 
 	if err := cfg.WritePoints(points); err != nil {
 		return err
-	}
-	missingTag := missing
-	if missingTag == "" {
-		missingTag = "-"
 	}
 	log.Printf("[planner] plan written (mode=%s, slot=%dm): %.2f/%d hours, cost=%.2f SEK (slack=%.2f missing=%s)",
 		mode, cfg.SlotMinutes, stats.plannedHours, targetHours, stats.expectedCostSEK, stats.slackHours, missingTag)
