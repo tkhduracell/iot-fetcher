@@ -38,6 +38,14 @@ POOL_BLOCKED_HOURS = [
     int(h) for h in os.environ.get('POOL_BLOCKED_HOURS', '7,8,17,18,19,20').split(',') if h.strip()
 ]
 
+# Safe-mode schedule used when any required input is missing.
+POOL_FALLBACK_NIGHT_HOURS = [
+    int(h) for h in os.environ.get('POOL_FALLBACK_NIGHT_HOURS', '1,2,3,4').split(',') if h.strip()
+]
+POOL_FALLBACK_AFTERNOON_HOURS = [
+    int(h) for h in os.environ.get('POOL_FALLBACK_AFTERNOON_HOURS', '12,13,14,15').split(',') if h.strip()
+]
+
 # Temperature-driven target-hours override (optional)
 POOL_TARGET_TEMP_C = float(os.environ.get('POOL_TARGET_TEMP_C', '29'))
 POOL_HEATING_RATE_C_PER_HOUR = float(os.environ.get('POOL_HEATING_RATE_C_PER_HOUR', '0'))
@@ -59,12 +67,21 @@ def _plan():
     slots = [now + timedelta(hours=i) for i in range(HORIZON_HOURS)]
 
     prices = _fetch_prices(slots)
-    if not prices or all(p is None for p in prices):
-        logger.warning("[pool_pump_planner] No prices available for horizon, aborting")
-        return
-
     solar = _fetch_solar_forecast(slots)
     water_temp = _fetch_water_temp()
+
+    missing = _missing_inputs(prices, water_temp)
+    if missing:
+        logger.warning("[pool_pump_planner] Missing inputs %s, using fallback schedule", missing)
+        schedule = _fallback_schedule(slots)
+        stats = _fallback_stats(schedule, prices, solar)
+        _write_plan(
+            slots, schedule, prices, solar, stats, water_temp,
+            target_hours=len(POOL_FALLBACK_NIGHT_HOURS) + len(POOL_FALLBACK_AFTERNOON_HOURS),
+            mode='fallback', missing=missing,
+        )
+        return
+
     target_hours = _compute_target_hours(water_temp)
 
     logger.info(
@@ -74,10 +91,53 @@ def _plan():
 
     schedule, stats = _solve(prices, solar, target_hours, slots)
     if schedule is None:
-        logger.warning("[pool_pump_planner] MILP infeasible, no plan written")
+        logger.warning("[pool_pump_planner] MILP infeasible, using fallback schedule")
+        schedule = _fallback_schedule(slots)
+        stats = _fallback_stats(schedule, prices, solar)
+        _write_plan(
+            slots, schedule, prices, solar, stats, water_temp,
+            target_hours=len(POOL_FALLBACK_NIGHT_HOURS) + len(POOL_FALLBACK_AFTERNOON_HOURS),
+            mode='fallback', missing='infeasible',
+        )
         return
 
-    _write_plan(slots, schedule, prices, solar, stats, water_temp, target_hours)
+    _write_plan(slots, schedule, prices, solar, stats, water_temp,
+                target_hours=target_hours, mode='optimal', missing='')
+
+
+def _missing_inputs(prices: List[Optional[float]], water_temp: Optional[float]) -> str:
+    missing = []
+    if not prices or sum(1 for p in prices if p is not None) < HORIZON_HOURS:
+        missing.append('prices')
+    if water_temp is None:
+        missing.append('water_temp')
+    return ','.join(missing)
+
+
+def _fallback_schedule(slots: List[datetime]) -> List[int]:
+    """Deterministic 4h-night + 4h-afternoon schedule in site-local time."""
+    night = set(POOL_FALLBACK_NIGHT_HOURS)
+    afternoon = set(POOL_FALLBACK_AFTERNOON_HOURS)
+    return [1 if slot.astimezone().hour in night or slot.astimezone().hour in afternoon else 0
+            for slot in slots]
+
+
+def _fallback_stats(schedule: List[int], prices: List[Optional[float]], solar: List[float]) -> Dict:
+    cost_per_hour: List[float] = []
+    total = 0.0
+    for t in range(HORIZON_HOURS):
+        p = prices[t] if prices and prices[t] is not None else 0.0
+        grid_kwh = max(0.0, POOL_PUMP_KW - (solar[t] if solar else 0.0))
+        c = POOL_PUMP_KW * p + grid_kwh * POOL_GRID_FEE_SEK_PER_KWH
+        cost_per_hour.append(c)
+        if schedule[t]:
+            total += c
+    return {
+        'planned_hours': sum(schedule),
+        'expected_cost_sek': total,
+        'slack': 0.0,
+        'cost_per_hour': cost_per_hour,
+    }
 
 
 def _fetch_prices(slots: List[datetime]) -> List[Optional[float]]:
@@ -226,30 +286,34 @@ def _solve(
     return schedule, stats
 
 
-def _write_plan(slots, schedule, prices, solar, stats, water_temp, target_hours):
+def _write_plan(slots, schedule, prices, solar, stats, water_temp, target_hours,
+                mode: str = 'optimal', missing: str = ''):
     points: List[Point] = []
     for t, slot in enumerate(slots):
         p = Point("pool_iqpump_plan") \
             .tag("horizon", f"{HORIZON_HOURS}h") \
+            .tag("mode", mode) \
             .field("on", int(schedule[t])) \
             .field("cost_sek", float(stats['cost_per_hour'][t])) \
-            .field("price_sek_per_kwh", float(prices[t]) if prices[t] is not None else 0.0) \
-            .field("solar_kwh", float(solar[t])) \
+            .field("price_sek_per_kwh", float(prices[t]) if prices and prices[t] is not None else 0.0) \
+            .field("solar_kwh", float(solar[t]) if solar else 0.0) \
             .time(slot.isoformat())
         points.append(p)
 
     summary = Point("pool_iqpump_plan_summary") \
         .tag("horizon", f"{HORIZON_HOURS}h") \
+        .tag("mode", mode) \
         .field("planned_hours", int(stats['planned_hours'])) \
         .field("target_hours", int(target_hours)) \
         .field("expected_cost_sek", float(stats['expected_cost_sek'])) \
         .field("slack_hours", float(stats['slack'])) \
         .field("water_temp_c", float(water_temp) if water_temp is not None else 0.0) \
+        .field("missing_inputs", missing) \
         .time(slots[0].isoformat())
     points.append(summary)
 
     write_influx(points)
     logger.info(
-        "[pool_pump_planner] Plan written: %d/%d hours, cost=%.2f SEK (slack=%.1f)",
-        stats['planned_hours'], target_hours, stats['expected_cost_sek'], stats['slack'],
+        "[pool_pump_planner] Plan written (mode=%s): %d/%d hours, cost=%.2f SEK (slack=%.1f missing=%s)",
+        mode, stats['planned_hours'], target_hours, stats['expected_cost_sek'], stats['slack'], missing or '-',
     )
