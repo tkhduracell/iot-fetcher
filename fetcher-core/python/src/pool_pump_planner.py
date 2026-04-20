@@ -56,6 +56,10 @@ POOL_HEATING_RATE_C_PER_HOUR = float(os.environ.get('POOL_HEATING_RATE_C_PER_HOU
 PRICE_AREA = os.environ.get('POOL_PRICE_AREA', 'SE4')
 
 HORIZON_HOURS = 24
+SLOT_MINUTES = int(os.environ.get('POOL_SLOT_MINUTES', '15'))
+SLOTS_PER_HOUR = 60 // SLOT_MINUTES
+HORIZON_SLOTS = HORIZON_HOURS * SLOTS_PER_HOUR
+SLOT_HOURS = SLOT_MINUTES / 60.0  # fraction of an hour per slot
 
 
 def pool_pump_planner():
@@ -67,7 +71,7 @@ def pool_pump_planner():
 
 def _plan():
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    slots = [now + timedelta(hours=i) for i in range(HORIZON_HOURS)]
+    slots = [now + timedelta(minutes=i * SLOT_MINUTES) for i in range(HORIZON_SLOTS)]
 
     prices = _fetch_prices(slots)
     solar = _fetch_solar_forecast(slots)
@@ -110,7 +114,7 @@ def _plan():
 
 def _missing_inputs(prices: List[Optional[float]], water_temp: Optional[float]) -> str:
     missing = []
-    if not prices or sum(1 for p in prices if p is not None) < HORIZON_HOURS:
+    if not prices or sum(1 for p in prices if p is not None) < HORIZON_SLOTS:
         missing.append('prices')
     if water_temp is None:
         missing.append('water_temp')
@@ -126,34 +130,35 @@ def _fallback_schedule(slots: List[datetime]) -> List[int]:
 
 
 def _fallback_stats(schedule: List[int], prices: List[Optional[float]], solar: List[float]) -> Dict:
-    cost_per_hour: List[float] = []
+    cost_per_slot: List[float] = []
+    slot_energy = POOL_PUMP_KW * SLOT_HOURS
     total = 0.0
-    for t in range(HORIZON_HOURS):
+    for t in range(HORIZON_SLOTS):
         p = prices[t] if prices and prices[t] is not None else 0.0
-        grid_kwh = max(0.0, POOL_PUMP_KW - (solar[t] if solar else 0.0))
-        c = POOL_PUMP_KW * p + grid_kwh * POOL_GRID_FEE_SEK_PER_KWH
-        cost_per_hour.append(c)
+        grid_kwh = max(0.0, slot_energy - (solar[t] if solar else 0.0))
+        c = slot_energy * p + grid_kwh * POOL_GRID_FEE_SEK_PER_KWH
+        cost_per_slot.append(c)
         if schedule[t]:
             total += c
     return {
-        'planned_hours': sum(schedule),
+        'planned_hours': sum(schedule) * SLOT_HOURS,
         'expected_cost_sek': total,
         'slack': 0.0,
-        'cost_per_hour': cost_per_hour,
+        'cost_per_hour': cost_per_slot,  # name kept for field compatibility; unit is per-slot
     }
 
 
 def _fetch_prices(slots: List[datetime]) -> List[Optional[float]]:
+    """Fetch hourly prices and broadcast each to the slots inside that hour."""
     start = slots[0].timestamp()
     end = slots[-1].timestamp()
     promql = f'energy_price_SEK_per_kWh{{area="{PRICE_AREA}"}}'
     result = query_prom_range(promql, start=start, end=end, step=3600)
     if not result:
-        # Field-name convention may vary; fall back to the base metric
         result = query_prom_range(f'energy_price{{area="{PRICE_AREA}"}}', start=start, end=end, step=3600)
     series = first_series_values(result)
     by_hour: Dict[int, float] = {int(ts) // 3600 * 3600: v for ts, v in series}
-    return [by_hour.get(int(s.timestamp())) for s in slots]
+    return [by_hour.get(int(s.timestamp()) // 3600 * 3600) for s in slots]
 
 
 def _fetch_solar_forecast(slots: List[datetime]) -> List[float]:
@@ -188,7 +193,8 @@ def _fetch_solar_forecast(slots: List[datetime]) -> List[float]:
     out = []
     for s in slots:
         key = s.astimezone(SITE_TZ).strftime('%Y-%m-%d %H')
-        out.append(by_key.get(key, 0.0))
+        hourly_kwh = by_key.get(key, 0.0)
+        out.append(hourly_kwh / SLOTS_PER_HOUR)  # distribute hourly Wh evenly across slots
     return out
 
 
@@ -216,17 +222,18 @@ def _solve(
     target_hours: int,
     slots: List[datetime],
 ):
-    T = list(range(HORIZON_HOURS))
+    T = list(range(HORIZON_SLOTS))
+    slot_energy = POOL_PUMP_KW * SLOT_HOURS  # kWh consumed per slot if pump on
 
-    # Cost per hour if the pump runs:
-    #   opportunity spot cost for full pump draw + grid fee only for the grid portion
+    # Cost per slot: opportunity spot cost for the full pump draw + grid fee for the
+    # portion we actually pull from the grid (after subtracting free solar).
     cost = []
     for t in T:
         p = prices[t] if prices[t] is not None else 0.0
-        grid_kwh = max(0.0, POOL_PUMP_KW - solar[t])
-        cost.append(POOL_PUMP_KW * p + grid_kwh * POOL_GRID_FEE_SEK_PER_KWH)
+        grid_kwh = max(0.0, slot_energy - solar[t])
+        cost.append(slot_energy * p + grid_kwh * POOL_GRID_FEE_SEK_PER_KWH)
 
-    # Hours unavailable: missing price, or blocked by clock-hour in site-local tz.
+    # Slots unavailable: missing price, or blocked by clock-hour in Europe/Stockholm.
     blocked = set()
     for t in T:
         if prices[t] is None:
@@ -236,11 +243,15 @@ def _solve(
         if local_hour in POOL_BLOCKED_HOURS:
             blocked.add(t)
 
+    min_slots = POOL_MIN_HOURS * SLOTS_PER_HOUR
+    target_slots = target_hours * SLOTS_PER_HOUR
+    max_slots = POOL_MAX_HOURS * SLOTS_PER_HOUR
+
     available = [t for t in T if t not in blocked]
-    if len(available) < POOL_MIN_HOURS:
+    if len(available) < min_slots:
         logger.warning(
-            "[pool_pump_planner] Only %d available hours after blocking (need >= %d)",
-            len(available), POOL_MIN_HOURS,
+            "[pool_pump_planner] Only %d available slots after blocking (need >= %d)",
+            len(available), min_slots,
         )
         return None, {}
 
@@ -249,8 +260,6 @@ def _solve(
     y = pulp.LpVariable.dicts("start", T, cat=pulp.LpBinary)  # start indicator
     slack = pulp.LpVariable("slack", lowBound=0)
 
-    # Penalty per missed hour must exceed the worst single-hour cost so the solver only
-    # falls back when it's truly infeasible within the hard floor.
     big_m = max(cost) * 10 + 100
 
     prob += pulp.lpSum(cost[t] * x[t] for t in T) + big_m * slack
@@ -258,11 +267,10 @@ def _solve(
     for t in blocked:
         prob += x[t] == 0
 
-    prob += pulp.lpSum(x[t] for t in T) >= POOL_MIN_HOURS
-    prob += pulp.lpSum(x[t] for t in T) + slack >= target_hours
-    prob += pulp.lpSum(x[t] for t in T) <= min(POOL_MAX_HOURS, len(available))
+    prob += pulp.lpSum(x[t] for t in T) >= min_slots
+    prob += pulp.lpSum(x[t] for t in T) + slack >= target_slots
+    prob += pulp.lpSum(x[t] for t in T) <= min(max_slots, len(available))
 
-    # Start-indicator linking: y_t >= x_t - x_{t-1}
     for t in T:
         prev = x[t - 1] if t > 0 else 0
         prob += y[t] >= x[t] - prev
@@ -274,13 +282,12 @@ def _solve(
         return None, {}
 
     schedule = [int(round(pulp.value(x[t]))) for t in T]
-    planned_hours = sum(schedule)
     expected_cost = sum(cost[t] for t in T if schedule[t])
     stats = {
-        'planned_hours': planned_hours,
+        'planned_hours': sum(schedule) * SLOT_HOURS,
         'expected_cost_sek': expected_cost,
-        'slack': float(pulp.value(slack) or 0),
-        'cost_per_hour': cost,
+        'slack': float(pulp.value(slack) or 0) * SLOT_HOURS,
+        'cost_per_hour': cost,  # per-slot; name kept for write compatibility
     }
     return schedule, stats
 
@@ -302,8 +309,9 @@ def _write_plan(slots, schedule, prices, solar, stats, water_temp, target_hours,
     summary = Point("pool_iqpump_plan_summary") \
         .tag("horizon", f"{HORIZON_HOURS}h") \
         .tag("mode", mode) \
-        .field("planned_hours", int(stats['planned_hours'])) \
+        .field("planned_hours", float(stats['planned_hours'])) \
         .field("target_hours", int(target_hours)) \
+        .field("slot_minutes", int(SLOT_MINUTES)) \
         .field("expected_cost_sek", float(stats['expected_cost_sek'])) \
         .field("slack_hours", float(stats['slack'])) \
         .field("water_temp_c", float(water_temp) if water_temp is not None else 0.0) \
@@ -313,6 +321,7 @@ def _write_plan(slots, schedule, prices, solar, stats, water_temp, target_hours,
 
     write_influx(points)
     logger.info(
-        "[pool_pump_planner] Plan written (mode=%s): %d/%d hours, cost=%.2f SEK (slack=%.1f missing=%s)",
-        mode, stats['planned_hours'], target_hours, stats['expected_cost_sek'], stats['slack'], missing or '-',
+        "[pool_pump_planner] Plan written (mode=%s, slot=%dm): %.2f/%d hours, cost=%.2f SEK (slack=%.2f missing=%s)",
+        mode, SLOT_MINUTES, stats['planned_hours'], target_hours,
+        stats['expected_cost_sek'], stats['slack'], missing or '-',
     )

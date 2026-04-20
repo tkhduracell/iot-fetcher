@@ -50,15 +50,23 @@ def _vm_base_url() -> str:
     return ''
 
 
-def query_prom_instant(promql: str) -> List[Dict]:
-    """Execute a PromQL instant query against VictoriaMetrics. Returns the 'result' list."""
+def query_prom_instant(promql: str, lookback_delta: Optional[str] = None) -> List[Dict]:
+    """Execute a PromQL instant query against VictoriaMetrics. Returns the 'result' list.
+
+    lookback_delta is a VictoriaMetrics extension that lets the query look back
+    further than the default 5m staleness window — needed when samples are
+    written at intervals >5m (e.g. 15-min plan slots).
+    """
     base = _vm_base_url()
     if not base:
         logging.error("VictoriaMetrics query URL not configured (INFLUXDB_V3_URL)")
         return []
+    params = {'query': promql}
+    if lookback_delta:
+        params['lookback_delta'] = lookback_delta
     resp = requests.get(
         f"{base}/api/v1/query",
-        params={'query': promql},
+        params=params,
         headers={'Authorization': f'Bearer {vm_query_token}'} if vm_query_token else {},
         timeout=15,
     )

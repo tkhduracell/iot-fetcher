@@ -19,11 +19,15 @@ def pool_pump_actuator():
 
 
 def _act():
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_utc = datetime.now(timezone.utc)
+    # Align to the current quarter-hour slot so the audit row timestamps match plan rows.
+    slot_minutes = 15
+    minute_bucket = (now_utc.minute // slot_minutes) * slot_minutes
+    slot = now_utc.replace(minute=minute_bucket, second=0, microsecond=0)
 
-    desired = _fetch_current_plan_value(now)
+    desired = _fetch_current_plan_value(slot)
     if desired is None:
-        logger.info("[pool_pump_actuator] No plan for %s, skipping", now.isoformat())
+        logger.info("[pool_pump_actuator] No plan for %s, skipping", slot.isoformat())
         return
 
     current_on = _fetch_current_pump_on()
@@ -44,14 +48,15 @@ def _act():
         .field("desired_on", int(desired)) \
         .field("current_on", int(current_on) if current_on is not None else -1) \
         .field("executed", int(executed)) \
-        .time(now.isoformat())
+        .time(slot.isoformat())
     write_influx([point])
 
 
 def _fetch_current_plan_value(now: datetime) -> Optional[int]:
-    result = query_prom_instant('pool_iqpump_plan_on')
+    # Plan samples are 15 min apart, so default 5m staleness is too tight.
+    result = query_prom_instant('pool_iqpump_plan_on', lookback_delta='20m')
     if not result:
-        result = query_prom_instant('pool_iqpump_plan')
+        result = query_prom_instant('pool_iqpump_plan', lookback_delta='20m')
     if not result:
         return None
     try:
