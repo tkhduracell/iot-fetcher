@@ -219,10 +219,21 @@ export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
     .tooltip(tooltipMulti())
     .insertNulls(SPAN_NULLS_MS)
     .withTarget(
-      vmExpr('A', 'last_over_time(tapo_cloud_device_device_count[$__interval])', '{{device_alias}}'),
+      vmExpr(
+        'A',
+        'sum(tapo_cloud_device_device_count{device_type="HOMEWIFISYSTEM"}[$__interval]) by (device_model)',
+        'WiFi: {{device_model}}',
+      ),
+    )
+    .withTarget(
+      vmExpr(
+        'B',
+        'sum(tapo_cloud_device_device_count{device_type!="HOMEWIFISYSTEM"}[$__interval]) by (device_type)',
+        'Other: {{device_type}}',
+      ),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 87 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 104 });
 
   return [tapoOnline];
 }
