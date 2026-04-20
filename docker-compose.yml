@@ -80,6 +80,15 @@ services:
       - "wud.watch=true"
       - "wud.watch.digest=true"
 
+  pool-pump-planner:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/pool-pump-planner:latest
+    restart: unless-stopped
+    depends_on:
+      - database-auth
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
   tibber-influx-bridge:
     image: tkhduracell/tibber-influxdb-bridge:latest
     restart: unless-stopped

@@ -23,6 +23,10 @@ services:
       - ./fetcher-core/python/.env
       - ./fetcher-core/webui/.env
 
+  pool-pump-planner:
+    container_name: pool-pump-planner
+    env_file: ./fetcher-core/python/.env
+
   tibber-influx-bridge:
     container_name: tibber-influxdb-bridge
     env_file: ./tibber-influx-bridge/.env
