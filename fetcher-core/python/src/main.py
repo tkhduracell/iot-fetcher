@@ -18,6 +18,8 @@ from tapo import tapo
 from sonos import sonos
 from backup_influx import backup_influx
 from eufy import eufy, eufy_snapshot
+from pool_pump_planner import pool_pump_planner
+from pool_pump_actuator import pool_pump_actuator
 
 logging.basicConfig(level=logging.INFO,
                     format='%(levelname)s %(message)s')
@@ -46,10 +48,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot', 'pool_pump_planner', 'pool_pump_actuator']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot, pool_pump_planner, pool_pump_actuator]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -70,6 +72,10 @@ def main():
     schedule.every(1).hours.at(':05').do(with_timeout(airquality))
     # schedule.every(1).hours.at(':10').do(with_timeout(balboa_control))  # Disabled SPA module
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
+
+    # Replan daily after tomorrow's spot prices have landed; actuator checks every minute.
+    schedule.every().day.at('13:20').do(with_timeout(pool_pump_planner))
+    schedule.every(1).minutes.do(with_timeout(pool_pump_actuator))
 
     logging.info("Starting the scheduler, running all...")
     schedule.run_all(delay_seconds=10)

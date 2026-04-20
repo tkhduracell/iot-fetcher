@@ -16,4 +16,5 @@ dependencies = [
     "iaqualink==0.6.0",
     "plugp100==5.1.7",
     "tplinkrouterc6u==5.18.1",
+    "pulp==2.9.0",
 ]
