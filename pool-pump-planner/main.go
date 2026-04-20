@@ -2,8 +2,10 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -39,33 +41,23 @@ func main() {
 }
 
 func parseHHMM(s string) (int, int, error) {
-	parts := strings.SplitN(s, ":", 2)
+	parts := strings.Split(s, ":")
 	if len(parts) != 2 {
-		return 0, 0, errInvalidTime
+		return 0, 0, fmt.Errorf("expected HH:MM, got %q", s)
 	}
-	hh, err1 := atoi(parts[0])
-	mm, err2 := atoi(parts[1])
-	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
-		return 0, 0, errInvalidTime
+	// strconv.Atoi rejects empty strings, so ":05" / "14:" / "::" all error out.
+	hh, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid hour %q: %w", parts[0], err)
+	}
+	mm, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid minute %q: %w", parts[1], err)
+	}
+	if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return 0, 0, fmt.Errorf("out of range HH:MM in %q", s)
 	}
 	return hh, mm, nil
-}
-
-var errInvalidTime = &timeParseErr{}
-
-type timeParseErr struct{}
-
-func (e *timeParseErr) Error() string { return "expected HH:MM" }
-
-func atoi(s string) (int, error) {
-	n := 0
-	for _, c := range strings.TrimSpace(s) {
-		if c < '0' || c > '9' {
-			return 0, errInvalidTime
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n, nil
 }
 
 func nextDailyRun(now time.Time, hh, mm int) time.Time {

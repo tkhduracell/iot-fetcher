@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -91,7 +93,22 @@ func loadConfig() *Config {
 		cfg.VMToken = cfg.InfluxToken
 	}
 
+	if err := cfg.validate(); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
 	return cfg
+}
+
+func (c *Config) validate() error {
+	// SlotMinutes must evenly tile a clock hour so SlotsPerHour() stays well-defined
+	// and plan timestamps align with Nord Pool's hourly pricing buckets.
+	if c.SlotMinutes <= 0 || 60%c.SlotMinutes != 0 {
+		return fmt.Errorf("POOL_SLOT_MINUTES must be a positive divisor of 60, got %d", c.SlotMinutes)
+	}
+	if c.MinHours < 0 || c.MaxHours < c.MinHours {
+		return fmt.Errorf("POOL_MIN_HOURS (%d) must be <= POOL_MAX_HOURS (%d)", c.MinHours, c.MaxHours)
+	}
+	return nil
 }
 
 func (c *Config) SlotsPerHour() int { return 60 / c.SlotMinutes }

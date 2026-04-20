@@ -13,7 +13,10 @@ import (
 )
 
 type promResponse struct {
-	Data struct {
+	Status    string `json:"status"`
+	ErrorType string `json:"errorType"`
+	Error     string `json:"error"`
+	Data      struct {
 		Result []struct {
 			Metric map[string]string `json:"metric"`
 			Value  []any             `json:"value"`
@@ -97,6 +100,12 @@ func (c *Config) promGet(u string, rangeQuery bool) ([]promResult, error) {
 	var pr promResponse
 	if err := json.Unmarshal(body, &pr); err != nil {
 		return nil, fmt.Errorf("parse vm response: %w", err)
+	}
+	// Prometheus-compatible APIs return 200 with status=error for query-side
+	// failures (bad PromQL, unknown metric, etc.) — surface those as errors
+	// instead of masking them as empty results.
+	if pr.Status != "" && pr.Status != "success" {
+		return nil, fmt.Errorf("vm query error (%s): %s", pr.ErrorType, pr.Error)
 	}
 	out := make([]promResult, 0, len(pr.Data.Result))
 	for _, r := range pr.Data.Result {
