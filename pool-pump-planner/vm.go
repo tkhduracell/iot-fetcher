@@ -43,12 +43,19 @@ func (c *Config) vmBaseURL() string {
 }
 
 func (c *Config) queryPromInstant(promql, lookbackDelta string) ([]promResult, error) {
+	return c.queryPromInstantAt(promql, time.Time{}, lookbackDelta)
+}
+
+func (c *Config) queryPromInstantAt(promql string, at time.Time, lookbackDelta string) ([]promResult, error) {
 	base := c.vmBaseURL()
 	if base == "" {
 		return nil, fmt.Errorf("VictoriaMetrics query URL not configured")
 	}
 	q := url.Values{}
 	q.Set("query", promql)
+	if !at.IsZero() {
+		q.Set("time", strconv.FormatInt(at.Unix(), 10))
+	}
 	if lookbackDelta != "" {
 		q.Set("lookback_delta", lookbackDelta)
 	}
@@ -198,8 +205,8 @@ func (c *Config) fetchHourlyPrices(slots []time.Time) []float64 {
 	return out
 }
 
-func (c *Config) fetchWaterTemp() (float64, bool) {
-	result, err := c.queryPromInstant("pool_temperature_value", "")
+func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
+	result, err := c.queryPromInstantAt("pool_temperature_value", at, "")
 	if err != nil {
 		log.Printf("[planner] water temp query failed: %v", err)
 		return 0, false
@@ -210,5 +217,6 @@ func (c *Config) fetchWaterTemp() (float64, bool) {
 	return result[0].Values[0].Value, true
 }
 
-// fetchWaterTempAt is a temporary stub (Task 2 will replace with a real point-in-time query).
-func (c *Config) fetchWaterTempAt(_ time.Time) (float64, bool) { return c.fetchWaterTemp() }
+func (c *Config) fetchWaterTemp() (float64, bool) {
+	return c.fetchWaterTempAt(time.Time{})
+}
