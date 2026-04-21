@@ -5,17 +5,18 @@ interface UseHistoryQueryParams {
   measurement: string;
   field: string;
   filter?: Record<string, string>;
+  expr?: string;
   sparkline: string; // e.g. "24h", "12h", "1h"
 }
 
-function useHistoryQuery({ measurement, field, filter = {}, sparkline }: UseHistoryQueryParams) {
+function useHistoryQuery({ measurement, field, filter = {}, expr, sparkline }: UseHistoryQueryParams) {
   const enabled = Boolean(sparkline);
 
-  const metricName = `${measurement}_${field}`;
   const labelParts = Object.entries(filter).map(([k, v]) => `${k}="${v}"`);
   const selector = labelParts.length > 0 ? `{${labelParts.join(',')}}` : '';
+  const inner = expr ?? `${measurement}_${field}${selector}`;
 
-  const query = enabled ? `avg_over_time(${metricName}${selector}[5m])` : 'up';
+  const query = enabled ? `avg_over_time(${inner}[5m])` : 'up';
 
   const { start, end, step } = useMemo(() => {
     if (!enabled) return { start: new Date().toISOString(), end: new Date().toISOString(), step: '5m' };

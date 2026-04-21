@@ -26,6 +26,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
     measurement: props.measurement,
     field: props.field,
     filter: props.filter as Record<string, string>,
+    expr: props.expr,
     sparkline: sparkline || '',
   });
 

@@ -22,6 +22,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
   measurement,
   title,
   field,
+  expr,
   unit,
   sparklineMin,
   sparklineMax,
@@ -31,11 +32,11 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
   const start = useMemo(() => subDays(now, 7), [now]);
 
   const promQuery = useMemo(() => {
-    const metricName = `${measurement}_${field}`;
     const labelParts = Object.entries(filter).map(([k, v]) => `${k}="${v}"`);
     const selector = labelParts.length > 0 ? `{${labelParts.join(',')}}` : '';
-    return `avg_over_time(${metricName}${selector}[15m])`;
-  }, [measurement, field, filter]);
+    const inner = expr ?? `${measurement}_${field}${selector}`;
+    return `avg_over_time(${inner}[15m])`;
+  }, [measurement, field, filter, expr]);
 
   const { initialLoading, error, result } = usePromQLQuery({
     query: promQuery,

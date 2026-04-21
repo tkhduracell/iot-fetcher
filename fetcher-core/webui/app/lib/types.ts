@@ -4,6 +4,9 @@ export type ConfigValue = {
   measurement: string;
   field: string;
   filter?: Record<string, any>;
+  // Optional PromQL selector expression. When set, overrides the default
+  // `${measurement}_${field}{filter}` selector wrapped by last_over_time / avg_over_time.
+  expr?: string;
   title: string;
   unit: string;
   window?: "5m" | "60m" ;
