@@ -125,15 +125,32 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
   const pumpPlanBackfill = new TimeseriesBuilder()
     .title('Poolpump plan (30 dagar backfill)')
     .datasource(VM_DS)
+    .unit('currencySEK')
     .colorScheme(paletteColor())
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipMulti())
     .insertNulls(SPAN_NULLS_MS)
     .overrides([
-      overrideDisplayAndColor('planned_hours', 'Planerade timmar', 'blue'),
+      {
+        matcher: { id: 'byName', options: 'planned_hours' },
+        properties: [
+          { id: 'displayName', value: 'Planerade timmar' },
+          { id: 'color', value: { fixedColor: 'blue', mode: 'fixed' } },
+          { id: 'custom.axisPlacement', value: 'right' },
+          { id: 'unit', value: 'h' },
+        ],
+      },
       overrideDisplayAndColor('expected_cost_sek', 'Förväntad kostnad (SEK)', 'yellow'),
-      overrideDisplayAndColor('slack_hours', 'Slack (h)', 'orange'),
+      {
+        matcher: { id: 'byName', options: 'slack_hours' },
+        properties: [
+          { id: 'displayName', value: 'Slack (h)' },
+          { id: 'color', value: { fixedColor: 'orange', mode: 'fixed' } },
+          { id: 'custom.axisPlacement', value: 'right' },
+          { id: 'unit', value: 'h' },
+        ],
+      },
     ])
     .withTarget(vmExpr('A', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_planned_hours{run="backfill"})', 'planned_hours'))
     .withTarget(vmExpr('B', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="backfill"})', 'expected_cost_sek'))
