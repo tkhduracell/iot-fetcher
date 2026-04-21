@@ -102,9 +102,9 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('price_sek_per_kwh', 'Spotpris (SEK/kWh)', 'yellow'),
       overrideDisplayAndColor('solar_kwh', 'Solprognos (kWh)', 'orange'),
     ])
-    .withTarget(vmExpr('A', 'last_over_time(pool_iqpump_plan_on[$__interval])', 'on'))
-    .withTarget(vmExpr('B', 'last_over_time(pool_iqpump_plan_price_sek_per_kwh[$__interval])', 'price_sek_per_kwh'))
-    .withTarget(vmExpr('C', 'last_over_time(pool_iqpump_plan_solar_kwh[$__interval])', 'solar_kwh'))
+    .withTarget(vmExpr('A', 'last_over_time(pool_iqpump_plan_on{run="live"}[$__interval])', 'on'))
+    .withTarget(vmExpr('B', 'last_over_time(pool_iqpump_plan_price_sek_per_kwh{run="live"}[$__interval])', 'price_sek_per_kwh'))
+    .withTarget(vmExpr('C', 'last_over_time(pool_iqpump_plan_solar_kwh{run="live"}[$__interval])', 'solar_kwh'))
     .gridPos({ h: 8, w: 24, x: 0, y: 52 });
 
   return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, pumpPlan];
