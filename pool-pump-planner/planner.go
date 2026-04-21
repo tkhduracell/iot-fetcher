@@ -39,7 +39,16 @@ func plan(cfg *Config) error {
 	solar := cfg.fetchSolarForecast(slots)
 	waterTemp, waterOK := cfg.fetchWaterTemp()
 
-	missing := missingInputs(prices, waterOK, horizonSlots)
+	if cfg.DryRun {
+		printInputs(cfg, slots, prices, solar, waterTemp, waterOK)
+	}
+
+	minSlots := cfg.MinHours * cfg.SlotsPerHour()
+	priceCount := countNonNaN(prices)
+	if priceCount < horizonSlots {
+		log.Printf("[planner] partial prices: %d/%d slots covered (NaN slots are blocked in MILP)", priceCount, horizonSlots)
+	}
+	missing := missingInputs(priceCount, waterOK, minSlots)
 	if missing != "" {
 		log.Printf("[planner] missing inputs %s, falling back to static schedule", missing)
 		sch := fallbackSchedule(cfg, slots)
@@ -63,25 +72,29 @@ func plan(cfg *Config) error {
 	return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, "optimal", "")
 }
 
-func missingInputs(prices []float64, waterOK bool, want int) string {
+// missingInputs returns a comma-separated list of inputs missing by enough
+// that we cannot produce an optimal plan. Prices only count as missing if
+// fewer than minSlots are priced — partial coverage is acceptable because the
+// MILP blocks NaN-priced slots (see solve()).
+func missingInputs(priceCount int, waterOK bool, minSlots int) string {
 	missing := []string{}
-	if len(prices) < want {
+	if priceCount < minSlots {
 		missing = append(missing, "prices")
-	} else {
-		have := 0
-		for _, p := range prices {
-			if !math.IsNaN(p) {
-				have++
-			}
-		}
-		if have < want {
-			missing = append(missing, "prices")
-		}
 	}
 	if !waterOK {
 		missing = append(missing, "water_temp")
 	}
 	return strings.Join(missing, ",")
+}
+
+func countNonNaN(xs []float64) int {
+	n := 0
+	for _, x := range xs {
+		if !math.IsNaN(x) {
+			n++
+		}
+	}
+	return n
 }
 
 func computeTargetHours(cfg *Config, waterTemp float64, waterOK bool) int {
@@ -279,10 +292,64 @@ func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float6
 		At(slots[0])
 	points = append(points, summary)
 
+	if cfg.DryRun {
+		printSchedule(cfg, slots, sch, prices, solar, stats.costPerSlot)
+		log.Printf("[planner] DRY RUN (mode=%s, slot=%dm): %.2f/%d hours, cost=%.2f SEK (slack=%.2f missing=%s) — skipping write",
+			mode, cfg.SlotMinutes, stats.plannedHours, targetHours, stats.expectedCostSEK, stats.slackHours, missingTag)
+		return nil
+	}
+
 	if err := cfg.WritePoints(points); err != nil {
 		return err
 	}
 	log.Printf("[planner] plan written (mode=%s, slot=%dm): %.2f/%d hours, cost=%.2f SEK (slack=%.2f missing=%s)",
 		mode, cfg.SlotMinutes, stats.plannedHours, targetHours, stats.expectedCostSEK, stats.slackHours, missingTag)
 	return nil
+}
+
+func printInputs(cfg *Config, slots []time.Time, prices, solar []float64, waterTemp float64, waterOK bool) {
+	fmt.Printf("\n=== INPUTS ===\n")
+	fmt.Printf("now=%s  timezone=%s  horizon=%d slots (%d min each)\n",
+		slots[0].In(cfg.Timezone).Format(time.RFC3339), cfg.Timezone, len(slots), cfg.SlotMinutes)
+	if waterOK {
+		fmt.Printf("water_temp=%.2f°C\n", waterTemp)
+	} else {
+		fmt.Printf("water_temp=<missing>\n")
+	}
+	priceCount, solarCount := 0, 0
+	for _, p := range prices {
+		if !math.IsNaN(p) {
+			priceCount++
+		}
+	}
+	for _, s := range solar {
+		if !math.IsNaN(s) && s != 0 {
+			solarCount++
+		}
+	}
+	fmt.Printf("prices: %d/%d slots covered\n", priceCount, len(prices))
+	fmt.Printf("solar:  %d/%d slots with forecast > 0\n\n", solarCount, len(solar))
+	fmt.Printf("  %-20s  %10s  %10s\n", "slot (local)", "price", "solar_kWh")
+	for t, slot := range slots {
+		price := "  nan"
+		if !math.IsNaN(prices[t]) {
+			price = fmt.Sprintf("%8.4f", prices[t])
+		}
+		fmt.Printf("  %-20s  %10s  %10.3f\n", slot.In(cfg.Timezone).Format("2006-01-02 15:04"), price, solar[t])
+	}
+	fmt.Println()
+}
+
+func printSchedule(cfg *Config, slots []time.Time, sch []int, prices, solar, costPerSlot []float64) {
+	fmt.Printf("\n=== SCHEDULE ===\n")
+	fmt.Printf("  %-20s  %3s  %10s  %10s  %10s\n", "slot (local)", "on", "price", "solar_kWh", "cost_sek")
+	for t, slot := range slots {
+		price := "  nan"
+		if !math.IsNaN(prices[t]) {
+			price = fmt.Sprintf("%8.4f", prices[t])
+		}
+		fmt.Printf("  %-20s  %3d  %10s  %10.3f  %10.4f\n",
+			slot.In(cfg.Timezone).Format("2006-01-02 15:04"), sch[t], price, solar[t], costPerSlot[t])
+	}
+	fmt.Println()
 }

@@ -14,11 +14,13 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.LUTC)
 
 	once := flag.Bool("once", false, "run planner once and exit")
+	dryRun := flag.Bool("dry-run", false, "fetch inputs and compute schedule, print everything, skip write to VictoriaMetrics")
 	flag.Parse()
 
 	cfg := loadConfig()
+	cfg.DryRun = *dryRun
 
-	if *once || (len(os.Args) > 1 && os.Args[1] == "once") {
+	if *once || *dryRun || (len(os.Args) > 1 && os.Args[1] == "once") {
 		runPlanner(cfg)
 		return
 	}
