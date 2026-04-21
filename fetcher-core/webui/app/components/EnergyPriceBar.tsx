@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import usePromQLQuery from '../hooks/usePromQLQuery';
-import { startOfDay, endOfDay, differenceInMinutes, addDays } from 'date-fns';
+import { startOfDay, addDays, addHours } from 'date-fns';
 
 type Point = {
   _time: string;
   value: number;
 }
+
+const HOUR_MS = 3_600_000;
 
 const Wrapper = (props: { children: React.ReactNode }) => {
   return (
@@ -36,7 +38,7 @@ const EnergyPriceBar: React.FC = () => {
   const now = new Date();
   const todayStart = startOfDay(now);
   const tomorrowStart = startOfDay(addDays(now, 1));
-  const rangeEnd = endOfDay(addDays(now, 1));
+  const dayAfterStart = startOfDay(addDays(now, 2));
 
   const [view, setView] = useState<'today' | 'tomorrow'>('today');
 
@@ -44,29 +46,35 @@ const EnergyPriceBar: React.FC = () => {
     return `avg_over_time(${measurement}_${field}{area="${filterTag}"}[1h])`;
   }, [measurement, field, filterTag]);
 
-  const { initialLoading, error, result } = usePromQLQuery({
+  // Each sample at time T aggregates `[T-1h, T]`, so a sample at dayStart+1h
+  // covers hour 0 of that day and a sample at nextDayStart covers hour 23.
+  // Starting the range at dayStart+1h (not dayStart) keeps the 1h window
+  // strictly inside the day — so a tomorrow query returns no rows until
+  // tomorrow's prices are actually published instead of picking up today's
+  // last hour as a phantom midnight sample.
+  const todayQuery = usePromQLQuery({
     query: promQuery,
     type: 'range',
-    start: todayStart.toISOString(),
-    end: rangeEnd.toISOString(),
+    start: addHours(todayStart, 1).toISOString(),
+    end: tomorrowStart.toISOString(),
+    step: '1h',
+  });
+  const tomorrowQuery = usePromQLQuery({
+    query: promQuery,
+    type: 'range',
+    start: addHours(tomorrowStart, 1).toISOString(),
+    end: dayAfterStart.toISOString(),
     step: '1h',
   });
 
-  const { todayPoints, tomorrowPoints } = useMemo(() => {
-    const todayP: Point[] = [];
-    const tomorrowP: Point[] = [];
-    const tomorrowStartMs = tomorrowStart.getTime();
-    for (const p of result) {
-      if (p.value === undefined || p.value === null || Number.isNaN(p.value)) continue;
-      const t = new Date(p._time).getTime();
-      if (t < tomorrowStartMs) {
-        todayP.push(p);
-      } else {
-        tomorrowP.push(p);
-      }
-    }
-    return { todayPoints: todayP, tomorrowPoints: tomorrowP };
-  }, [result, tomorrowStart]);
+  const todayPoints = useMemo(
+    () => todayQuery.result.filter(p => p.value != null && !Number.isNaN(p.value)),
+    [todayQuery.result],
+  );
+  const tomorrowPoints = useMemo(
+    () => tomorrowQuery.result.filter(p => p.value != null && !Number.isNaN(p.value)),
+    [tomorrowQuery.result],
+  );
 
   const hasTomorrow = tomorrowPoints.length > 0;
 
@@ -76,6 +84,9 @@ const EnergyPriceBar: React.FC = () => {
     }
   }, [view, hasTomorrow]);
 
+  const initialLoading = todayQuery.initialLoading || tomorrowQuery.initialLoading;
+  const error = todayQuery.error || tomorrowQuery.error;
+
   if (initialLoading && !error) return <Wrapper>Hämtar energipriser...</Wrapper>;
   if (error) return <Wrapper>Fel uppstod vid laddning: {error.message}</Wrapper>;
 
@@ -83,27 +94,38 @@ const EnergyPriceBar: React.FC = () => {
     return <Wrapper>Inga energipriser tillgängliga.</Wrapper>;
   }
 
-  const renderCells = (points: Point[], highlightNow: boolean) => (
-    <div className="w-1/2 flex gap-1">
-      {points.map((point) => {
-        const value = point.value;
-        const colorClass = getBucketColorClass(value);
-        const time = new Date(point._time);
-        const diff = differenceInMinutes(time, Date.now());
-        const isNow = highlightNow && diff < 59 && diff > 0;
-        return (
-          <div className='flex flex-1 flex-col justify-end' key={point._time}>
-            <div className={
-              `${colorClass} rounded p-0 flex h-8
-              text-center text-gray-600 justify-center items-center
-              dark:text-gray-300 ${isNow ? 'text-sm font-semibold ring-inset ring-2 ring-gray-500' : 'text-[10px]'}`}>
-                {value?.toFixed(0)}
+  const currentHour = now.getHours();
+
+  const renderCells = (points: Point[], dayStart: Date, highlightNow: boolean) => {
+    const byHour: (Point | undefined)[] = new Array(24).fill(undefined);
+    const dayStartMs = dayStart.getTime();
+    for (const p of points) {
+      // Sample at T aggregates hour [T-1h, T), so its hour-of-day index is
+      // (T - dayStart)/1h - 1.
+      const hour = Math.round((new Date(p._time).getTime() - dayStartMs) / HOUR_MS) - 1;
+      if (hour >= 0 && hour < 24) byHour[hour] = p;
+    }
+
+    return (
+      <div className="w-1/2 flex gap-1">
+        {byHour.map((point, hour) => {
+          const value = point?.value;
+          const colorClass = getBucketColorClass(value ?? null);
+          const isNow = highlightNow && hour === currentHour && point !== undefined;
+          return (
+            <div className='flex flex-1 flex-col justify-end' key={hour}>
+              <div className={
+                `${colorClass} rounded p-0 flex h-8
+                text-center text-gray-600 justify-center items-center
+                dark:text-gray-300 ${isNow ? 'text-sm font-semibold ring-inset ring-2 ring-gray-500' : 'text-[10px]'}`}>
+                  {value != null ? value.toFixed(0) : ''}
+              </div>
             </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <Wrapper>
@@ -113,8 +135,8 @@ const EnergyPriceBar: React.FC = () => {
             className="flex w-[200%] transition-transform duration-300 ease-out"
             style={{ transform: view === 'today' ? 'translateX(0)' : 'translateX(-50%)' }}
           >
-            {renderCells(todayPoints, true)}
-            {renderCells(tomorrowPoints, false)}
+            {renderCells(todayPoints, todayStart, true)}
+            {renderCells(tomorrowPoints, tomorrowStart, false)}
           </div>
         </div>
         {hasTomorrow && (
