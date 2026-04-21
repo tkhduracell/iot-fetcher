@@ -109,6 +109,11 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'max(last_over_time(pool_iqpump_plan_on{run!="backfill"}[$__interval]))', 'on'))
     .withTarget(vmExpr('B', 'max(last_over_time(pool_iqpump_plan_price_sek_per_kwh{run!="backfill"}[$__interval]))', 'price_sek_per_kwh'))
     .withTarget(vmExpr('C', 'max(last_over_time(pool_iqpump_plan_solar_kwh{run!="backfill"}[$__interval]))', 'solar_kwh'))
+    // Lock to a 48h window centred on now: timeFrom sets the window length and
+    // timeShift=-24h moves the window's end 24h into the future, so the panel
+    // always shows now-24h to now+24h regardless of the dashboard's global range.
+    .timeFrom('48h')
+    .timeShift('-24h')
     .gridPos({ h: 8, w: 12, x: 0, y: 52 });
 
   // Poolpump plan — 30-day backfill: per-day summary of planned hours + cost
