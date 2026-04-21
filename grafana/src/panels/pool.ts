@@ -141,7 +141,7 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
           { id: 'unit', value: 'h' },
         ],
       },
-      overrideDisplayAndColor('expected_cost_sek', 'Optimerad kostnad (SEK)', 'yellow'),
+      overrideDisplayAndColor('expected_cost_sek', 'Optimerad', 'yellow'),
       overrideDisplayAndColor('night_baseline_sek', 'Naiv 00-06', 'purple'),
       overrideDisplayAndColor('afternoon_baseline_sek', 'Naiv 12-18', 'red'),
       {
