@@ -22,8 +22,15 @@ export const values: Config = [
     [
         { measurement: 'sigenergy_pv_power', field: 'power_kw', title: '☀️ Solceller Produktion', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 3 },
         { measurement: 'sigenergy_grid_power', field: 'net_power_kw', title: '⚡️ Nät Inköp', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: -5, sparklineMax: 10 },
+        { measurement: 'sigenergy_home', field: 'load_kw',
+         expr: 'clamp_min(sigenergy_pv_power_power_kw{string="total"} + on(host) sigenergy_grid_power_net_power_kw + on(host) sigenergy_battery_power_from_battery_kw, 0)',
+         title: '🏠 Förbrukning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 5 },
         { measurement: 'sigenergy_battery', field: 'soc_percent', title: '🔋 Batteri SOC', unit: '%', decimals: 0, reload: 60000, sparkline: '24h', sparklineMin: 0, sparklineMax: 100 },
-        { measurement: 'sigenergy_battery', field: 'power_to_battery_kw', title: '🪫 Batteri Urladdning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: -10, sparklineMax: 10 },
-        { measurement: 'sigenergy_battery', field: 'power_from_battery_kw', title: '🔋 Batteri Laddning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 10 },
+        { measurement: 'sigenergy_battery', field: 'power_from_battery_kw',
+         expr: 'clamp_min(sigenergy_battery_power_from_battery_kw, 0)',
+         title: '🪫 Batteri Urladdning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 10 },
+        { measurement: 'sigenergy_battery', field: 'power_from_battery_kw',
+         expr: 'clamp_min(-sigenergy_battery_power_from_battery_kw, 0)',
+         title: '🔋 Batteri Laddning', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 10 },
     ],
 ];
