@@ -15,17 +15,29 @@ type planStats struct {
 	costPerSlot     []float64
 }
 
+// planReport is the outcome of one plan() invocation, used by the backfill
+// table. Empty/zero fields on error.
+type planReport struct {
+	Mode        string
+	Hours       float64
+	TargetHours int
+	CostSEK     float64
+	SlackHours  float64
+	Missing     string // "none" when nothing missing
+	OnHours     []int  // unique local clock hours where any slot was on
+}
+
 func nan() float64 { return math.NaN() }
 
 // runPlanner is the top-level entry. Any error is logged so the caller can
 // keep running on a schedule without crashing.
 func runPlanner(cfg *Config) {
-	if err := plan(cfg, time.Now().UTC(), map[string]string{"run": "live"}); err != nil {
+	if _, err := plan(cfg, time.Now().UTC(), map[string]string{"run": "live"}); err != nil {
 		log.Printf("[planner] run failed: %v", err)
 	}
 }
 
-func plan(cfg *Config, now time.Time, extraTags map[string]string) error {
+func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, error) {
 	slotMinutes := cfg.SlotMinutes
 	horizonSlots := cfg.HorizonSlots()
 
@@ -59,7 +71,18 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) error {
 		sch := fallbackSchedule(cfg, slots)
 		stats := fallbackStats(cfg, sch, prices, solar)
 		tgt := len(cfg.FallbackNightHours) + len(cfg.FallbackAfternoonHours)
-		return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", missing, extraTags)
+		if err := writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", missing, extraTags); err != nil {
+			return planReport{}, err
+		}
+		return planReport{
+			Mode:        "fallback",
+			Hours:       stats.plannedHours,
+			TargetHours: tgt,
+			CostSEK:     stats.expectedCostSEK,
+			SlackHours:  stats.slackHours,
+			Missing:     missing,
+			OnHours:     onHoursFromSchedule(sch, slots, cfg.Timezone),
+		}, nil
 	}
 
 	targetHours := computeTargetHours(cfg, waterTemp, waterOK)
@@ -72,9 +95,31 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) error {
 		sch = fallbackSchedule(cfg, slots)
 		stats = fallbackStats(cfg, sch, prices, solar)
 		tgt := len(cfg.FallbackNightHours) + len(cfg.FallbackAfternoonHours)
-		return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", "infeasible", extraTags)
+		if err := writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", "infeasible", extraTags); err != nil {
+			return planReport{}, err
+		}
+		return planReport{
+			Mode:        "fallback",
+			Hours:       stats.plannedHours,
+			TargetHours: tgt,
+			CostSEK:     stats.expectedCostSEK,
+			SlackHours:  stats.slackHours,
+			Missing:     "infeasible",
+			OnHours:     onHoursFromSchedule(sch, slots, cfg.Timezone),
+		}, nil
 	}
-	return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, "optimal", "", extraTags)
+	if err := writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, "optimal", "", extraTags); err != nil {
+		return planReport{}, err
+	}
+	return planReport{
+		Mode:        "optimal",
+		Hours:       stats.plannedHours,
+		TargetHours: targetHours,
+		CostSEK:     stats.expectedCostSEK,
+		SlackHours:  stats.slackHours,
+		Missing:     "none",
+		OnHours:     onHoursFromSchedule(sch, slots, cfg.Timezone),
+	}, nil
 }
 
 // missingInputs returns a comma-separated list of inputs missing by enough

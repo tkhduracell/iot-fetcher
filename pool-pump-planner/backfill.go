@@ -103,3 +103,67 @@ func onHoursFromSchedule(sch []int, slots []time.Time, tz *time.Location) []int 
 	sort.Ints(out)
 	return out
 }
+
+func runBackfill(cfg *Config, days int, end time.Time, dryRun bool) error {
+	if days <= 0 {
+		return fmt.Errorf("--days must be >= 1, got %d", days)
+	}
+	cfg.Backfill = true
+
+	planHH, planMM, err := parseHHMM(cfg.PlanTime)
+	if err != nil {
+		return fmt.Errorf("POOL_PLAN_TIME parse: %w", err)
+	}
+
+	dates := backfillDates(end, days, cfg.Timezone)
+	results := make([]backfillResult, 0, len(dates))
+
+	for _, d := range dates {
+		anchorLocal := time.Date(d.Year(), d.Month(), d.Day(), planHH, planMM, 0, 0, cfg.Timezone)
+		tags := map[string]string{
+			"run":         "backfill",
+			"anchor_date": d.Format("2006-01-02"),
+		}
+
+		origHost, origToken := "", ""
+		if dryRun {
+			// Blank out credentials so WritePoints no-ops (it checks both
+			// and logs-and-returns). Cheaper than threading a flag through.
+			origHost, origToken = cfg.InfluxHost, cfg.InfluxToken
+			cfg.InfluxHost, cfg.InfluxToken = "", ""
+		}
+		report, planErr := plan(cfg, anchorLocal.UTC(), tags)
+		if dryRun {
+			cfg.InfluxHost, cfg.InfluxToken = origHost, origToken
+		}
+
+		if planErr != nil {
+			results = append(results, backfillResult{Date: d, Mode: "ERR", Err: planErr})
+			continue
+		}
+		results = append(results, backfillResult{
+			Date:        d,
+			Mode:        report.Mode,
+			Hours:       report.Hours,
+			TargetHours: report.TargetHours,
+			CostSEK:     report.CostSEK,
+			SlackHours:  report.SlackHours,
+			Missing:     report.Missing,
+			OnHours:     report.OnHours,
+		})
+	}
+
+	fmt.Print(formatBackfillTable(results, end, cfg.Timezone, cfg.PlanTime))
+
+	anyOK := false
+	for _, r := range results {
+		if r.Err == nil {
+			anyOK = true
+			break
+		}
+	}
+	if !anyOK {
+		return fmt.Errorf("all %d backfill days failed", len(results))
+	}
+	return nil
+}
