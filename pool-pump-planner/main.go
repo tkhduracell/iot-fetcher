@@ -54,7 +54,7 @@ func main() {
 func backfillCLI(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("backfill", flag.ExitOnError)
 	days := fs.Int("days", 30, "number of calendar days to backfill")
-	endFlag := fs.String("end", "", "last day to plan (YYYY-MM-DD, site-local) — default: yesterday")
+	endFlag := fs.String("end", "", "last day to plan (YYYY-MM-DD, site-local) — default: day-before-yesterday, to keep the full 24h horizon in the past")
 	dryRun := fs.Bool("dry-run", false, "compute + print the table, skip VM writes")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -62,8 +62,14 @@ func backfillCLI(cfg *Config, args []string) error {
 
 	var end time.Time
 	if *endFlag == "" {
+		// Anchor at POOL_PLAN_TIME (default 14:05) plans 24h forward. With end
+		// = yesterday, the most-recent plan's horizon runs up to *today* ~14:00
+		// local, which means backfill writes slot points that fall inside today
+		// — muddying any today-visible live panels. Defaulting to the day
+		// before yesterday guarantees every backfill plan's 24h horizon ends
+		// strictly before today 00:00 local.
 		now := time.Now().In(cfg.Timezone)
-		end = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cfg.Timezone).AddDate(0, 0, -1)
+		end = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cfg.Timezone).AddDate(0, 0, -2)
 	} else {
 		d, err := time.ParseInLocation("2006-01-02", *endFlag, cfg.Timezone)
 		if err != nil {
