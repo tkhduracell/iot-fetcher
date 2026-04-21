@@ -21,8 +21,6 @@ jobs:
             type: node
           - dir: fetcher-core/python
             type: python
-          - dir: fetcher-core/roborock-sidecar
-            type: python
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
