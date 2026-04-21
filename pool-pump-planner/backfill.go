@@ -9,15 +9,17 @@ import (
 
 // backfillResult is one row in the stdout summary table.
 type backfillResult struct {
-	Date        time.Time // site-local midnight of the anchor day
-	Mode        string    // "optimal" / "fallback" / "ERR"
-	Hours       float64
-	TargetHours int
-	CostSEK     float64
-	SlackHours  float64
-	Missing     string // "none" if everything was present
-	OnHours     []int  // unique local clock hours where any slot was on
-	Err         error  // non-nil for a day that completely failed
+	Date              time.Time // site-local midnight of the anchor day
+	Mode              string    // "optimal" / "fallback" / "ERR"
+	Hours             float64
+	TargetHours       int
+	CostSEK           float64
+	SlackHours        float64
+	Missing           string // "none" if everything was present
+	OnHours           []int  // unique local clock hours where any slot was on
+	NightBaselineSEK  float64
+	AfternoonBaseSEK  float64
+	Err               error // non-nil for a day that completely failed
 }
 
 // backfillDates returns `days` calendar-day midnights in the given tz, oldest
@@ -41,8 +43,8 @@ func formatBackfillTable(results []backfillResult, end time.Time, tz *time.Locat
 	var b strings.Builder
 	fmt.Fprintf(&b, "Pool pump backfill — %d days ending %s (anchor %s %s)\n\n",
 		len(results), end.In(tz).Format("2006-01-02"), planTime, tz.String())
-	fmt.Fprintf(&b, "  %-10s  %-9s  %5s  %3s  %10s  %5s  %-12s  ON_HOURS (local)\n",
-		"DATE", "MODE", "HRS", "TGT", "COST(SEK)", "SLACK", "MISSING")
+	fmt.Fprintf(&b, "  %-10s  %-9s  %5s  %3s  %10s  %10s  %10s  %5s  %-12s  ON_HOURS (local)\n",
+		"DATE", "MODE", "HRS", "TGT", "OPT(SEK)", "NIGHT(SEK)", "AFTNN(SEK)", "SLACK", "MISSING")
 
 	sorted := make([]backfillResult, len(results))
 	copy(sorted, results)
@@ -51,6 +53,8 @@ func formatBackfillTable(results []backfillResult, end time.Time, tz *time.Locat
 	totHours := 0.0
 	totTgt := 0
 	totCost := 0.0
+	totNight := 0.0
+	totAftnn := 0.0
 	failures := 0
 	for _, r := range sorted {
 		date := r.Date.Format("2006-01-02")
@@ -63,21 +67,35 @@ func formatBackfillTable(results []backfillResult, end time.Time, tz *time.Locat
 		for _, h := range r.OnHours {
 			on = append(on, fmt.Sprintf("%02d", h))
 		}
-		fmt.Fprintf(&b, "  %-10s  %-9s  %5.1f  %3d  %10.2f  %5.1f  %-12s  %s\n",
-			date, r.Mode, r.Hours, r.TargetHours, r.CostSEK, r.SlackHours,
-			ifEmpty(r.Missing, "-"), strings.Join(on, " "))
+		fmt.Fprintf(&b, "  %-10s  %-9s  %5.1f  %3d  %10.2f  %10.2f  %10.2f  %5.1f  %-12s  %s\n",
+			date, r.Mode, r.Hours, r.TargetHours, r.CostSEK,
+			r.NightBaselineSEK, r.AfternoonBaseSEK,
+			r.SlackHours, ifEmpty(r.Missing, "-"), strings.Join(on, " "))
 		totHours += r.Hours
 		totTgt += r.TargetHours
 		totCost += r.CostSEK
+		totNight += r.NightBaselineSEK
+		totAftnn += r.AfternoonBaseSEK
 	}
-	fmt.Fprintf(&b, "  %s\n", strings.Repeat("─", 90))
+	fmt.Fprintf(&b, "  %s\n", strings.Repeat("─", 115))
 	succ := len(results) - failures
 	if succ > 0 {
-		fmt.Fprintf(&b, "  %-10s  %-9s  %5.1f  %3d  %10.2f   avg/day %.2fh, %.2f SEK\n",
-			"Totals", "", totHours, totTgt, totCost, totHours/float64(succ), totCost/float64(succ))
+		fmt.Fprintf(&b, "  %-10s  %-9s  %5.1f  %3d  %10.2f  %10.2f  %10.2f   opt avg %.2f SEK/day\n",
+			"Totals", "", totHours, totTgt, totCost, totNight, totAftnn, totCost/float64(succ))
+		fmt.Fprintf(&b, "  Savings vs night-fixed:     %7.2f SEK (%5.1f%%)\n",
+			totNight-totCost, pct(totNight-totCost, totNight))
+		fmt.Fprintf(&b, "  Savings vs afternoon-fixed: %7.2f SEK (%5.1f%%)\n",
+			totAftnn-totCost, pct(totAftnn-totCost, totAftnn))
 	}
 	fmt.Fprintf(&b, "  Failures: %d\n", failures)
 	return b.String()
+}
+
+func pct(numer, denom float64) float64 {
+	if denom == 0 {
+		return 0
+	}
+	return 100 * numer / denom
 }
 
 func ifEmpty(s, def string) string {
@@ -85,6 +103,52 @@ func ifEmpty(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// fixedWindowSchedule returns a schedule of the same length as slots where
+// slot i is 1 iff slots[i]'s local-clock hour is in windowHours.
+func fixedWindowSchedule(slots []time.Time, windowHours []int, tz *time.Location) []int {
+	set := map[int]bool{}
+	for _, h := range windowHours {
+		set[h] = true
+	}
+	out := make([]int, len(slots))
+	for i, s := range slots {
+		if set[s.In(tz).Hour()] {
+			out[i] = 1
+		}
+	}
+	return out
+}
+
+// runBaselines computes and writes two fixed-schedule "what if" baselines
+// for comparison against the MILP optimum: a night window and an afternoon
+// window. Uses the same slotCost function as the optimizer so costs are
+// directly comparable. Emits under distinct run tags so Grafana can plot
+// all three side by side. Returns (nightCost, afternoonCost) for the table.
+func runBaselines(cfg *Config, in planInputs, anchorDate string, dryRun bool) (float64, float64) {
+	night := writeBaseline(cfg, in, cfg.BaselineNightHours, "baseline_night", anchorDate, dryRun)
+	afternoon := writeBaseline(cfg, in, cfg.BaselineAfternoonHours, "baseline_afternoon", anchorDate, dryRun)
+	return night, afternoon
+}
+
+func writeBaseline(cfg *Config, in planInputs, windowHours []int, runTag, anchorDate string, dryRun bool) float64 {
+	sch := fixedWindowSchedule(in.Slots, windowHours, cfg.Timezone)
+	stats := fallbackStats(cfg, sch, in.Prices, in.Solar)
+	tags := map[string]string{"run": runTag, "anchor_date": anchorDate}
+
+	if dryRun {
+		// Dry-run: skip VM writes but still return the computed cost for the
+		// stdout table. writePlan respects cfg.DryRun to no-op, but also
+		// prints the schedule which is noisy for baselines; skip it entirely.
+		return stats.expectedCostSEK
+	}
+	if err := writePlan(cfg, in.Slots, sch, in.Prices, in.Solar, stats,
+		in.WaterTemp, in.WaterOK, len(windowHours), "baseline", "none", tags); err != nil {
+		// Non-fatal: baselines are comparison only, don't fail the day.
+		fmt.Printf("[backfill] baseline %s write failed: %v\n", runTag, err)
+	}
+	return stats.expectedCostSEK
 }
 
 // onHoursFromSchedule returns the sorted unique local clock hours in which at
@@ -132,7 +196,7 @@ func runBackfill(cfg *Config, days int, end time.Time, dryRun bool) error {
 			origHost, origToken = cfg.InfluxHost, cfg.InfluxToken
 			cfg.InfluxHost, cfg.InfluxToken = "", ""
 		}
-		report, planErr := plan(cfg, anchorLocal.UTC(), tags)
+		report, inputs, planErr := plan(cfg, anchorLocal.UTC(), tags)
 		if dryRun {
 			cfg.InfluxHost, cfg.InfluxToken = origHost, origToken
 		}
@@ -141,15 +205,20 @@ func runBackfill(cfg *Config, days int, end time.Time, dryRun bool) error {
 			results = append(results, backfillResult{Date: d, Mode: "ERR", Err: planErr})
 			continue
 		}
+
+		nightCost, afternoonCost := runBaselines(cfg, inputs, tags["anchor_date"], dryRun)
+
 		results = append(results, backfillResult{
-			Date:        d,
-			Mode:        report.Mode,
-			Hours:       report.Hours,
-			TargetHours: report.TargetHours,
-			CostSEK:     report.CostSEK,
-			SlackHours:  report.SlackHours,
-			Missing:     report.Missing,
-			OnHours:     report.OnHours,
+			Date:              d,
+			Mode:              report.Mode,
+			Hours:             report.Hours,
+			TargetHours:       report.TargetHours,
+			CostSEK:           report.CostSEK,
+			SlackHours:        report.SlackHours,
+			Missing:           report.Missing,
+			OnHours:           report.OnHours,
+			NightBaselineSEK:  nightCost,
+			AfternoonBaseSEK:  afternoonCost,
 		})
 	}
 

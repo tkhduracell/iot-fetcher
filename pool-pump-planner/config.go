@@ -43,6 +43,13 @@ type Config struct {
 	FallbackNightHours     []int
 	FallbackAfternoonHours []int
 
+	// Baseline comparison windows: emitted by the backfill subcommand as
+	// alternative "what if" schedules (always run during these local hours)
+	// so the optimizer's cost can be compared against simple fixed schedules.
+	// Defaults are each 6h long so they match the 6h default target hours.
+	BaselineNightHours     []int
+	BaselineAfternoonHours []int
+
 	// Temperature driven target override
 	TargetTempC          float64
 	HeatingRateCPerHour  float64
@@ -96,6 +103,9 @@ func loadConfig() *Config {
 
 		FallbackNightHours:     getenvIntList("POOL_FALLBACK_NIGHT_HOURS", []int{1, 2, 3, 4}),
 		FallbackAfternoonHours: getenvIntList("POOL_FALLBACK_AFTERNOON_HOURS", []int{12, 13, 14, 15}),
+
+		BaselineNightHours:     getenvIntList("POOL_BASELINE_NIGHT_HOURS", []int{0, 1, 2, 3, 4, 5}),
+		BaselineAfternoonHours: getenvIntList("POOL_BASELINE_AFTERNOON_HOURS", []int{12, 13, 14, 15, 16, 17}),
 
 		TargetTempC:         getenvFloat("POOL_TARGET_TEMP_C", 29),
 		HeatingRateCPerHour: getenvFloat("POOL_HEATING_RATE_C_PER_HOUR", 0),

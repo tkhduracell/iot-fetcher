@@ -34,6 +34,39 @@ func TestBackfillDatesZeroDays(t *testing.T) {
 	}
 }
 
+func TestFixedWindowSchedule(t *testing.T) {
+	tz, _ := time.LoadLocation("Europe/Stockholm")
+	// 96 slots of 15m starting at 2026-04-20 00:00 UTC = 02:00 local (DST).
+	start := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
+	slots := make([]time.Time, 96)
+	for i := range slots {
+		slots[i] = start.Add(time.Duration(i*15) * time.Minute)
+	}
+	// Window = local hours [12,13]. That's 2 hours = 8 slots. In UTC that's
+	// 10:00-12:00 (CEST=UTC+2), starting at slots[40].
+	got := fixedWindowSchedule(slots, []int{12, 13}, tz)
+	if len(got) != 96 {
+		t.Fatalf("expected 96 slots, got %d", len(got))
+	}
+	ones := 0
+	for i, v := range got {
+		if v != 0 && v != 1 {
+			t.Errorf("slot %d has non-binary value %d", i, v)
+		}
+		ones += v
+	}
+	if ones != 8 {
+		t.Errorf("expected 8 on-slots for window [12,13], got %d", ones)
+	}
+	// Slots 40..47 (10:00-12:00 UTC = 12:00-14:00 local) should all be 1.
+	for i := 40; i < 48; i++ {
+		if got[i] != 1 {
+			t.Errorf("expected slot %d (local %02dh) = 1, got 0",
+				i, slots[i].In(tz).Hour())
+		}
+	}
+}
+
 func TestFormatBackfillTable(t *testing.T) {
 	tz, _ := time.LoadLocation("Europe/Stockholm")
 	end := time.Date(2026, 4, 20, 0, 0, 0, 0, tz)

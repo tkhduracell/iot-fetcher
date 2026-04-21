@@ -141,7 +141,9 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
           { id: 'unit', value: 'h' },
         ],
       },
-      overrideDisplayAndColor('expected_cost_sek', 'Förväntad kostnad (SEK)', 'yellow'),
+      overrideDisplayAndColor('expected_cost_sek', 'Optimerad kostnad (SEK)', 'yellow'),
+      overrideDisplayAndColor('night_baseline_sek', 'Natt 00-06 (SEK)', 'purple'),
+      overrideDisplayAndColor('afternoon_baseline_sek', 'Eftermiddag 12-18 (SEK)', 'red'),
       {
         matcher: { id: 'byName', options: 'slack_hours' },
         properties: [
@@ -154,6 +156,12 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     ])
     .withTarget(vmExpr('A', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_planned_hours{run="backfill"})', 'planned_hours'))
     .withTarget(vmExpr('B', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="backfill"})', 'expected_cost_sek'))
+    // Night/afternoon fixed-schedule baselines emitted by `backfill` alongside
+    // the MILP-optimal plan. Plotting all three on the same panel makes the
+    // optimizer's value directly visible: the gap between yellow and the
+    // baselines is SEK the planner saved vs a naive always-at-this-time rule.
+    .withTarget(vmExpr('D', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_night"})', 'night_baseline_sek'))
+    .withTarget(vmExpr('E', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_afternoon"})', 'afternoon_baseline_sek'))
     .withTarget(vmExpr('C', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_slack_hours{run="backfill"})', 'slack_hours'))
     .timeFrom('now-30d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
