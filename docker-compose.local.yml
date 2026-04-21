@@ -25,7 +25,7 @@ services:
 
   pool-pump-planner:
     container_name: pool-pump-planner
-    env_file: ./fetcher-core/python/.env
+    env_file: ./pool-pump-planner/.env
 
   tibber-influx-bridge:
     container_name: tibber-influxdb-bridge
