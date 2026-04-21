@@ -132,6 +132,24 @@ func fallbackSchedule(cfg *Config, slots []time.Time) []int {
 	return out
 }
 
+// slotCost is the marginal SEK cost of running the pump for one slot.
+// Spot price is charged on full consumption (opportunity cost of self-consumed
+// solar — the pump could otherwise be off and the energy used/sold elsewhere).
+// Transfer fee and energy tax are charged only on grid-imported kWh. VAT is
+// applied to the entire bill (Sweden charges moms on the energiskatt too).
+//
+// TODO: sell-back revenue. The real opportunity cost of self-consumed solar
+// is the nätnytta export credit (~12.48 öre/kWh on the user's invoice), not
+// full spot. Charging spot here overstates the cost of solar runs.
+func slotCost(cfg *Config, slotEnergy, p, solarKWh float64) float64 {
+	grid := slotEnergy - solarKWh
+	if grid < 0 {
+		grid = 0
+	}
+	pre := slotEnergy*p + grid*(cfg.TransferFeeSEKPerKWh+cfg.EnergyTaxSEKPerKWh)
+	return pre * (1 + cfg.VATFraction)
+}
+
 func fallbackStats(cfg *Config, sch []int, prices []float64, solar []float64) planStats {
 	slotEnergy := cfg.PumpKW * cfg.SlotHours()
 	cps := make([]float64, len(sch))
@@ -145,11 +163,7 @@ func fallbackStats(cfg *Config, sch []int, prices []float64, solar []float64) pl
 		if len(solar) > t {
 			s = solar[t]
 		}
-		gridKWh := slotEnergy - s
-		if gridKWh < 0 {
-			gridKWh = 0
-		}
-		c := slotEnergy*p + gridKWh*cfg.GridFeeSEKPerKWh
+		c := slotCost(cfg, slotEnergy, p, s)
 		cps[t] = c
 		if sch[t] == 1 {
 			total += c
@@ -185,11 +199,7 @@ func solve(cfg *Config, slots []time.Time, prices, solar []float64, targetHours 
 			blocked[t] = true
 			continue
 		}
-		grid := slotEnergy - solar[t]
-		if grid < 0 {
-			grid = 0
-		}
-		costs[t] = slotEnergy*p + grid*cfg.GridFeeSEKPerKWh
+		costs[t] = slotCost(cfg, slotEnergy, p, solar[t])
 
 		if blockedHourSet[slots[t].In(cfg.Timezone).Hour()] {
 			blocked[t] = true

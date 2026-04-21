@@ -24,8 +24,14 @@ type Config struct {
 	PVKWp         float64
 
 	// Pump
-	PumpKW            float64
-	GridFeeSEKPerKWh  float64
+	PumpKW float64
+
+	// Swedish electricity costs. Transfer fee and energy tax are billed only
+	// on grid-imported energy; VAT is applied on top of the whole bill
+	// (including the energy tax, per Skatteverket's "skatt på skatt" rule).
+	TransferFeeSEKPerKWh float64 // elöverföring, per-kWh variable transfer fee, excl VAT
+	EnergyTaxSEKPerKWh   float64 // energiskatt, excl VAT
+	VATFraction          float64 // moms, e.g. 0.25 for 25%
 
 	// Scheduling
 	MinHours     int
@@ -65,8 +71,12 @@ func loadConfig() *Config {
 		PVAzimuth:     getenvFloat("POOL_PV_AZIMUTH", 0),
 		PVKWp:         getenvFloat("POOL_PV_KWP", 3.0),
 
-		PumpKW:           getenvFloat("POOL_PUMP_KW", 4.0),
-		GridFeeSEKPerKWh: getenvFloat("POOL_GRID_FEE_SEK_PER_KWH", 0.80),
+		PumpKW: getenvFloat("POOL_PUMP_KW", 4.0),
+
+		// Defaults calibrated to user's March 2026 E.ON invoice (SE4/MMO Malmö).
+		TransferFeeSEKPerKWh: getenvFloat("POOL_TRANSFER_FEE_SEK_PER_KWH", 0.2584),
+		EnergyTaxSEKPerKWh:   getenvFloat("POOL_ENERGY_TAX_SEK_PER_KWH", 0.36),
+		VATFraction:          getenvFloat("POOL_VAT_FRACTION", 0.25),
 
 		MinHours:     getenvInt("POOL_MIN_HOURS", 4),
 		TargetHours:  getenvInt("POOL_TARGET_HOURS", 6),
