@@ -3,6 +3,12 @@ name: Lock file check
 on:
   pull_request:
     branches: [main]
+    paths:
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+      - '.github/workflows/lockfile-check.yml'
 
 jobs:
   check-lockfiles:
@@ -29,12 +35,17 @@ jobs:
         if: matrix.type == 'node'
         with:
           node-version: ${{ matrix.node }}
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
       - name: Verify npm lock file
         if: matrix.type == 'node'
         working-directory: ${{ matrix.dir }}
         run: npm ci
       - uses: astral-sh/setup-uv@v7
         if: matrix.type == 'python'
+        with:
+          enable-cache: true
+          cache-dependency-glob: ${{ matrix.dir }}/uv.lock
       - name: Verify uv lock file
         if: matrix.type == 'python'
         working-directory: ${{ matrix.dir }}
