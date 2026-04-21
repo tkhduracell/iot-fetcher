@@ -133,6 +133,43 @@ func (c *Config) promGet(u string, rangeQuery bool) ([]promResult, error) {
 	return out, nil
 }
 
+// deleteSeries calls VictoriaMetrics' admin delete_series endpoint with a
+// Prometheus label matcher. When start is non-zero, the delete is scoped to
+// samples with timestamp >= start (VM supports Prom's start param on this
+// endpoint). Uses Bearer auth via VMToken, same as promGet. Idempotent —
+// selectors matching no series return 204.
+func (c *Config) deleteSeries(matcher string, start time.Time) error {
+	base := c.vmBaseURL()
+	if base == "" {
+		return fmt.Errorf("VictoriaMetrics delete URL not configured")
+	}
+	q := url.Values{}
+	q.Add("match[]", matcher)
+	if !start.IsZero() {
+		q.Add("start", strconv.FormatInt(start.Unix(), 10))
+	}
+	req, err := http.NewRequest("POST", base+"/api/v1/admin/tsdb/delete_series",
+		strings.NewReader(q.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if c.VMToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.VMToken)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("vm delete_series %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 func parseSample(v []any) (promSample, bool) {
 	if len(v) != 2 {
 		return promSample{}, false

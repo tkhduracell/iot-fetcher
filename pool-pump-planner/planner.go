@@ -386,6 +386,18 @@ func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float6
 		return nil
 	}
 
+	// Clean snapshot for live runs: delete previous {run="live"} samples within
+	// this plan's horizon (slots[0] forward). Forward-only scoping preserves
+	// live-plan records from earlier days. Backfill/baseline paths are untouched
+	// because they use run="backfill"/"baseline_*". Log-and-continue on error —
+	// a delete failure is no worse than the pre-fix duplicate state.
+	if extraTags["run"] == "live" && len(slots) > 0 {
+		sel := `{__name__=~"pool_iqpump_plan.*",run="live"}`
+		if err := cfg.deleteSeries(sel, slots[0]); err != nil {
+			log.Printf("[planner] delete_series failed (continuing): %v", err)
+		}
+	}
+
 	if err := cfg.WritePoints(points); err != nil {
 		return err
 	}
