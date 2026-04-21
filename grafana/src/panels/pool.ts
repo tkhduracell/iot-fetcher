@@ -110,12 +110,12 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'max(last_over_time(pool_iqpump_plan_on{run="live"}[$__interval]))', 'on'))
     .withTarget(vmExpr('B', 'max(last_over_time(pool_iqpump_plan_price_sek_per_kwh{run="live"}[$__interval]))', 'price_sek_per_kwh'))
     .withTarget(vmExpr('C', 'max(last_over_time(pool_iqpump_plan_solar_kwh{run="live"}[$__interval]))', 'solar_kwh'))
-    // Lock the panel to a fixed calendar-day window: today 00:00 -> 24:00.
-    // Grafana rejects negative timeShift, so a rolling now-24h..now+24h window
-    // isn't reachable at the panel level. This calendar-day form is the
-    // documented workaround and still exposes the fresh 24h forecast.
-    .timeFrom('now/d')
-    .timeShift('0d/d')
+    // Show the full ISO week (Mon 00:00 -> Sun 23:59:59) so the 24h forecast
+    // sits in context of the rest of the week. Grafana rejects negative
+    // timeShift, so this week-anchored form is the documented workaround for
+    // including future slots in a panel with a bounded window.
+    .timeFrom('now/w')
+    .timeShift('0w/w')
     .gridPos({ h: 8, w: 12, x: 0, y: 52 });
 
   // Poolpump plan — 30-day backfill: per-day summary of planned hours + cost
