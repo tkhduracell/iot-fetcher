@@ -109,6 +109,9 @@ func loadConfig() *Config {
 	if cfg.VMToken == "" {
 		cfg.VMToken = cfg.InfluxToken
 	}
+	if cfg.VMURL == "" {
+		cfg.VMURL = cfg.InfluxHost
+	}
 
 	if err := cfg.validate(); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
