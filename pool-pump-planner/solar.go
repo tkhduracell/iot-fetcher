@@ -75,8 +75,50 @@ func (c *Config) fetchSolarForecast(slots []time.Time) []float64 {
 	return out
 }
 
-// fetchSolarHistoricalKWh is a temporary stub (Task 3 will replace with a real VM query).
-func (c *Config) fetchSolarHistoricalKWh(slots []time.Time) []float64 { return make([]float64, len(slots)) }
+// fetchSolarHistoricalKWh returns PV production (kWh) per slot, derived from
+// the inverter's historical power metric. Used in backfill mode where
+// forecast.solar has no historical endpoint.
+func (c *Config) fetchSolarHistoricalKWh(slots []time.Time) []float64 {
+	out := make([]float64, len(slots))
+	if len(slots) < 2 {
+		return out
+	}
+	slotSeconds := slots[1].Unix() - slots[0].Unix()
+	if slotSeconds <= 0 {
+		slotSeconds = 900
+	}
+	slotRange := fmt.Sprintf("%ds", slotSeconds)
+	promql := `avg_over_time(sigenergy_pv_power_power_kw{string="total"}[` + slotRange + `])`
+	start := slots[0]
+	end := slots[len(slots)-1]
+	result, err := c.queryPromRange(promql, start, end, int(slotSeconds))
+	if err != nil {
+		log.Printf("[planner] historical solar query failed: %v", err)
+		return out
+	}
+	if len(result) == 0 {
+		return out
+	}
+	slotMinutes := int(slotSeconds / 60)
+	return samplesToKWhPerSlot(result[0].Values, slots, slotMinutes)
+}
+
+// samplesToKWhPerSlot buckets kW samples onto slot start-times and converts
+// to kWh assuming each sample represents the avg kW over one slot.
+func samplesToKWhPerSlot(samples []promSample, slots []time.Time, slotMinutes int) []float64 {
+	out := make([]float64, len(slots))
+	slotHours := float64(slotMinutes) / 60.0
+	byTs := make(map[int64]float64, len(samples))
+	for _, s := range samples {
+		byTs[int64(s.Timestamp)] = s.Value
+	}
+	for i, slot := range slots {
+		if v, ok := byTs[slot.Unix()]; ok {
+			out[i] = v * slotHours
+		}
+	}
+	return out
+}
 
 func toFloat(v any) (float64, bool) {
 	switch x := v.(type) {
