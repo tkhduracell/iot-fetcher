@@ -103,15 +103,18 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('solar_kwh', 'Solprognos (kWh)', 'orange'),
     ])
     // run!="backfill" matches both untagged legacy writes and the new run="live"
-    // tag — so the panel keeps working during the rpi5 redeploy window.
-    .withTarget(vmExpr('A', 'last_over_time(pool_iqpump_plan_on{run!="backfill"}[$__interval])', 'on'))
-    .withTarget(vmExpr('B', 'last_over_time(pool_iqpump_plan_price_sek_per_kwh{run!="backfill"}[$__interval])', 'price_sek_per_kwh'))
-    .withTarget(vmExpr('C', 'last_over_time(pool_iqpump_plan_solar_kwh{run!="backfill"}[$__interval])', 'solar_kwh'))
-    .gridPos({ h: 8, w: 24, x: 0, y: 52 });
+    // tag. max() wrapper collapses multiple series that differ on mode/run
+    // (e.g. an optimal series from today and a fallback series from an older
+    // day) into one line on the plot.
+    .withTarget(vmExpr('A', 'max(last_over_time(pool_iqpump_plan_on{run!="backfill"}[$__interval]))', 'on'))
+    .withTarget(vmExpr('B', 'max(last_over_time(pool_iqpump_plan_price_sek_per_kwh{run!="backfill"}[$__interval]))', 'price_sek_per_kwh'))
+    .withTarget(vmExpr('C', 'max(last_over_time(pool_iqpump_plan_solar_kwh{run!="backfill"}[$__interval]))', 'solar_kwh'))
+    .gridPos({ h: 8, w: 12, x: 0, y: 52 });
 
   // Poolpump plan — 30-day backfill: per-day summary of planned hours + cost
-  // emitted by `pool-pump-planner backfill`. One summary point per anchor day,
-  // so step=1d gives one sample per day on the time axis.
+  // emitted by `pool-pump-planner backfill`. Each anchor_date is its own VM
+  // series (different tag) with one point per day; sum without(anchor_date)
+  // collapses them so the panel draws a single line with 30 points.
   const pumpPlanBackfill = new TimeseriesBuilder()
     .title('Poolpump plan (30 dagar backfill)')
     .datasource(VM_DS)
@@ -125,11 +128,11 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('expected_cost_sek', 'Förväntad kostnad (SEK)', 'yellow'),
       overrideDisplayAndColor('slack_hours', 'Slack (h)', 'orange'),
     ])
-    .withTarget(vmExpr('A', 'last_over_time(pool_iqpump_plan_summary_planned_hours{run="backfill"}[$__interval])', 'planned_hours'))
-    .withTarget(vmExpr('B', 'last_over_time(pool_iqpump_plan_summary_expected_cost_sek{run="backfill"}[$__interval])', 'expected_cost_sek'))
-    .withTarget(vmExpr('C', 'last_over_time(pool_iqpump_plan_summary_slack_hours{run="backfill"}[$__interval])', 'slack_hours'))
+    .withTarget(vmExpr('A', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_planned_hours{run="backfill"})', 'planned_hours'))
+    .withTarget(vmExpr('B', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="backfill"})', 'expected_cost_sek'))
+    .withTarget(vmExpr('C', 'sum without(anchor_date, mode, missing_inputs) (pool_iqpump_plan_summary_slack_hours{run="backfill"})', 'slack_hours'))
     .timeFrom('now-30d')
-    .gridPos({ h: 8, w: 24, x: 0, y: 60 });
+    .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
   return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, pumpPlan, pumpPlanBackfill];
 }
