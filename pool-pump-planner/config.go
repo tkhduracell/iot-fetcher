@@ -56,6 +56,10 @@ type Config struct {
 
 	// Runtime flags
 	DryRun bool // print inputs/schedule, skip VictoriaMetrics writes
+
+	// Backfill selects the historical data fetchers (historical solar via VM
+	// instead of forecast.solar). Set only by the backfill subcommand.
+	Backfill bool
 }
 
 func loadConfig() *Config {

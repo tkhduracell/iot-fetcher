@@ -75,6 +75,9 @@ func (c *Config) fetchSolarForecast(slots []time.Time) []float64 {
 	return out
 }
 
+// fetchSolarHistoricalKWh is a temporary stub (Task 3 will replace with a real VM query).
+func (c *Config) fetchSolarHistoricalKWh(slots []time.Time) []float64 { return make([]float64, len(slots)) }
+
 func toFloat(v any) (float64, bool) {
 	switch x := v.(type) {
 	case float64:

@@ -20,24 +20,29 @@ func nan() float64 { return math.NaN() }
 // runPlanner is the top-level entry. Any error is logged so the caller can
 // keep running on a schedule without crashing.
 func runPlanner(cfg *Config) {
-	if err := plan(cfg); err != nil {
+	if err := plan(cfg, time.Now().UTC(), map[string]string{"run": "live"}); err != nil {
 		log.Printf("[planner] run failed: %v", err)
 	}
 }
 
-func plan(cfg *Config) error {
+func plan(cfg *Config, now time.Time, extraTags map[string]string) error {
 	slotMinutes := cfg.SlotMinutes
 	horizonSlots := cfg.HorizonSlots()
 
-	now := time.Now().UTC().Truncate(time.Hour)
+	now = now.UTC().Truncate(time.Hour)
 	slots := make([]time.Time, horizonSlots)
 	for i := 0; i < horizonSlots; i++ {
 		slots[i] = now.Add(time.Duration(i*slotMinutes) * time.Minute)
 	}
 
 	prices := cfg.fetchHourlyPrices(slots)
-	solar := cfg.fetchSolarForecast(slots)
-	waterTemp, waterOK := cfg.fetchWaterTemp()
+	var solar []float64
+	if cfg.Backfill {
+		solar = cfg.fetchSolarHistoricalKWh(slots)
+	} else {
+		solar = cfg.fetchSolarForecast(slots)
+	}
+	waterTemp, waterOK := cfg.fetchWaterTempAt(now)
 
 	if cfg.DryRun {
 		printInputs(cfg, slots, prices, solar, waterTemp, waterOK)
@@ -54,7 +59,7 @@ func plan(cfg *Config) error {
 		sch := fallbackSchedule(cfg, slots)
 		stats := fallbackStats(cfg, sch, prices, solar)
 		tgt := len(cfg.FallbackNightHours) + len(cfg.FallbackAfternoonHours)
-		return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", missing)
+		return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", missing, extraTags)
 	}
 
 	targetHours := computeTargetHours(cfg, waterTemp, waterOK)
@@ -67,9 +72,9 @@ func plan(cfg *Config) error {
 		sch = fallbackSchedule(cfg, slots)
 		stats = fallbackStats(cfg, sch, prices, solar)
 		tgt := len(cfg.FallbackNightHours) + len(cfg.FallbackAfternoonHours)
-		return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", "infeasible")
+		return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", "infeasible", extraTags)
 	}
-	return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, "optimal", "")
+	return writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, "optimal", "", extraTags)
 }
 
 // missingInputs returns a comma-separated list of inputs missing by enough
@@ -254,12 +259,19 @@ func solve(cfg *Config, slots []time.Time, prices, solar []float64, targetHours 
 }
 
 func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float64, stats planStats,
-	waterTemp float64, waterOK bool, targetHours int, mode, missing string) error {
+	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) error {
+	applyTags := func(p *Point) *Point {
+		for k, v := range extraTags {
+			p.Tag(k, v)
+		}
+		return p
+	}
+
 	points := make([]*Point, 0, len(slots)+1)
 	for t, slot := range slots {
-		p := NewPoint("pool_iqpump_plan").
+		p := applyTags(NewPoint("pool_iqpump_plan").
 			Tag("horizon", "24h").
-			Tag("mode", mode).
+			Tag("mode", mode)).
 			Field("on", sch[t]).
 			Field("cost_sek", stats.costPerSlot[t]).
 			At(slot)
@@ -289,10 +301,10 @@ func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float6
 		missingTag = "none"
 	}
 
-	summary := NewPoint("pool_iqpump_plan_summary").
+	summary := applyTags(NewPoint("pool_iqpump_plan_summary").
 		Tag("horizon", "24h").
 		Tag("mode", mode).
-		Tag("missing_inputs", missingTag).
+		Tag("missing_inputs", missingTag)).
 		Field("planned_hours", stats.plannedHours).
 		Field("target_hours", targetHours).
 		Field("slot_minutes", cfg.SlotMinutes).

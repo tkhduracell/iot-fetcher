@@ -209,3 +209,6 @@ func (c *Config) fetchWaterTemp() (float64, bool) {
 	}
 	return result[0].Values[0].Value, true
 }
+
+// fetchWaterTempAt is a temporary stub (Task 2 will replace with a real point-in-time query).
+func (c *Config) fetchWaterTempAt(_ time.Time) (float64, bool) { return c.fetchWaterTemp() }
