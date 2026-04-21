@@ -86,7 +86,13 @@ func loadConfig() *Config {
 		TargetHours:  getenvInt("POOL_TARGET_HOURS", 6),
 		MaxHours:     getenvInt("POOL_MAX_HOURS", 10),
 		MaxStarts:    getenvInt("POOL_MAX_STARTS", 2),
-		BlockedHours: getenvIntList("POOL_BLOCKED_HOURS", []int{7, 8, 17, 18, 19, 20}),
+		// Default: no blocked hours. 30-day backfill showed the spot-price
+		// signal already avoids peak consumption windows 63% of the time on
+		// its own, and on the other 37% the hard block forces a more expensive
+		// pick — including one infeasible day where 17h was both blocked and
+		// the cheapest hour of the day. Still overridable via env var for
+		// non-economic reasons (noise, effekttariff) if they ever apply.
+		BlockedHours: getenvIntList("POOL_BLOCKED_HOURS", nil),
 
 		FallbackNightHours:     getenvIntList("POOL_FALLBACK_NIGHT_HOURS", []int{1, 2, 3, 4}),
 		FallbackAfternoonHours: getenvIntList("POOL_FALLBACK_AFTERNOON_HOURS", []int{12, 13, 14, 15}),
