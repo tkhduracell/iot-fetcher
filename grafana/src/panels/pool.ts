@@ -142,8 +142,8 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
         ],
       },
       overrideDisplayAndColor('expected_cost_sek', 'Optimerad kostnad (SEK)', 'yellow'),
-      overrideDisplayAndColor('night_baseline_sek', 'Natt 00-06 (SEK)', 'purple'),
-      overrideDisplayAndColor('afternoon_baseline_sek', 'Eftermiddag 12-18 (SEK)', 'red'),
+      overrideDisplayAndColor('night_baseline_sek', 'Naiv 00-06', 'purple'),
+      overrideDisplayAndColor('afternoon_baseline_sek', 'Naiv 12-18', 'red'),
       {
         matcher: { id: 'byName', options: 'slack_hours' },
         properties: [
