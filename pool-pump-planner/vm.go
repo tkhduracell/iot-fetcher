@@ -199,7 +199,7 @@ func (c *Config) fetchHourlyPrices(slots []time.Time) []float64 {
 }
 
 func (c *Config) fetchWaterTemp() (float64, bool) {
-	result, err := c.queryPromInstant("pool_temperatur_value", "")
+	result, err := c.queryPromInstant("pool_temperature_value", "")
 	if err != nil {
 		log.Printf("[planner] water temp query failed: %v", err)
 		return 0, false
