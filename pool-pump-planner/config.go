@@ -47,6 +47,9 @@ type Config struct {
 
 	// Scheduling
 	PlanTime string // HH:MM, site-local
+
+	// Runtime flags
+	DryRun bool // print inputs/schedule, skip VictoriaMetrics writes
 }
 
 func loadConfig() *Config {
