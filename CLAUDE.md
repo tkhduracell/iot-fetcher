@@ -8,13 +8,11 @@
 - Build Docker images locally and push to registry — don't build on rpi5
 
 # VictoriaMetrics
-- Credentials live in `fetcher-core/python/.env.local` — `INFLUX_HOST` (full URL incl. scheme, e.g. `http://host:port`) and `INFLUX_TOKEN`.
-- Auth header: `Authorization: Bearer $INFLUX_TOKEN`
-- List all metric names: `curl -s "$INFLUX_HOST/api/v1/label/__name__/values" -H "Authorization: Bearer $INFLUX_TOKEN"`
-- List label names: `curl -s "$INFLUX_HOST/api/v1/labels" -H "Authorization: Bearer $INFLUX_TOKEN"`
-- List values for a label: `curl -s "$INFLUX_HOST/api/v1/label/<label>/values" -H "Authorization: Bearer $INFLUX_TOKEN"`
-- Query a metric: `curl -s "$INFLUX_HOST/api/v1/query?query=<metric_name>" -H "Authorization: Bearer $INFLUX_TOKEN"`
-- For a per-metric shape summary (label keys + cardinality + latest sample), run `scripts/vm-shape.sh [pattern]` — resolves the repo root (worktree-safe), reads `.env.local`, and prints a Markdown table to stdout.
+**When you need to know what metrics exist or what shape they have, run `scripts/vm-shape.sh [pattern]` first — don't hand-write curl.** It resolves the repo root (worktree-safe), loads creds from `fetcher-core/python/.env.local`, and prints a Markdown table of metric names, label keys with cardinality, and the latest sample value/timestamp. Use a substring filter (e.g. `scripts/vm-shape.sh tibber`) to keep the output small.
+
+**For PromQL queries (instant or range), use `scripts/vm-query.sh`** — `vm-query.sh metrics|labels|label <name>|query <promql>|range <promql>`. Don't reinvent these with curl.
+
+Raw API is only for things the scripts above don't cover. Credentials: `INFLUX_HOST` (full URL incl. scheme) and `INFLUX_TOKEN` in `fetcher-core/python/.env.local`; auth header `Authorization: Bearer $INFLUX_TOKEN`. Endpoints: `/api/v1/label/__name__/values`, `/api/v1/labels`, `/api/v1/label/<name>/values`, `/api/v1/query`, `/api/v1/query_range`.
 
 # Deployment (rpi5)
 - The remote directory on rpi5 is `~/iot-fetcher` (hyphen, NOT underscore). The local directory uses an underscore but the remote uses a hyphen — never create `~/iot_fetcher` on rpi5.
