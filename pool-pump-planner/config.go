@@ -56,6 +56,10 @@ type Config struct {
 
 	// Runtime flags
 	DryRun bool // print inputs/schedule, skip VictoriaMetrics writes
+
+	// Backfill selects the historical data fetchers (historical solar via VM
+	// instead of forecast.solar). Set only by the backfill subcommand.
+	Backfill bool
 }
 
 func loadConfig() *Config {
@@ -104,6 +108,9 @@ func loadConfig() *Config {
 
 	if cfg.VMToken == "" {
 		cfg.VMToken = cfg.InfluxToken
+	}
+	if cfg.VMURL == "" {
+		cfg.VMURL = cfg.InfluxHost
 	}
 
 	if err := cfg.validate(); err != nil {
