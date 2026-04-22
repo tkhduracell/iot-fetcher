@@ -10,7 +10,6 @@ import schedule
 from deco import deco
 from elpris import elpris
 from ngenic import ngenic
-from sigenergy import sigenergy
 from aqualink import aqualink
 from airquality import airquality
 from aquatemp import aquatemp
@@ -46,10 +45,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -58,7 +57,7 @@ def main():
     logging.info("Starting the scheduler...")
     schedule.every(1).minutes.do(with_timeout(aqualink))
     schedule.every(5).minutes.do(with_timeout(ngenic))
-    schedule.every(1).minutes.do(with_timeout(sigenergy))
+    # sigenergy now handled by the sigenergy-bridge Go service
     # schedule.every(5).minutes.do(with_timeout(balboa))
     schedule.every(5).minutes.do(with_timeout(aquatemp))
     schedule.every(5).minutes.do(with_timeout(deco))

@@ -89,6 +89,17 @@ services:
       - "wud.watch=true"
       - "wud.watch.digest=true"
 
+  sigenergy-bridge:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/sigenergy-bridge:latest
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - database-auth
+      - home-assistant
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
   tibber-influx-bridge:
     image: tkhduracell/tibber-influxdb-bridge:latest
     restart: unless-stopped
