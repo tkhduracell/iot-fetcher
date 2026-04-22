@@ -27,6 +27,10 @@ services:
     container_name: pool-pump-planner
     env_file: ./pool-pump-planner/.env
 
+  sigenergy-bridge:
+    container_name: sigenergy-bridge
+    env_file: ./sigenergy-bridge/.env
+
   tibber-influx-bridge:
     container_name: tibber-influxdb-bridge
     env_file: ./tibber-influx-bridge/.env
