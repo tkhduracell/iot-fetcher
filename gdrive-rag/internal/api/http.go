@@ -220,7 +220,7 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleQuery(w http.ResponseWriter, r *http.Request) {
 	var req QueryRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Service) handleReindex(w http.ResponseWriter, r *http.Request) {
 	var req ReindexRequest
 	// Reindex takes an optional body; accept empty body as "all folders".
 	if r.ContentLength != 0 {
-		if err := decodeJSON(r, &req); err != nil {
+		if err := decodeJSON(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -293,9 +293,11 @@ func classifyError(err error) (int, string) {
 }
 
 // decodeJSON enforces a 1 MiB body cap and rejects unknown fields so typos
-// fail fast instead of being silently ignored.
-func decodeJSON(r *http.Request, dst any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, maxRequestBody)
+// fail fast instead of being silently ignored. The ResponseWriter is passed
+// to MaxBytesReader so an oversized body results in a clean 413 with the
+// connection closed, rather than a bare EOF.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {

@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -112,8 +111,12 @@ func registerReindex(s *server.MCPServer, svc *api.Service, logger *slog.Logger)
 			}
 			logger.Info("mcp: reindex complete", "folder", folder)
 		}()
-		msg := fmt.Sprintf(`{"status":"accepted","folder":%q}`, folder)
-		return mcplib.NewToolResultText(msg), nil
+		body, err := json.Marshal(map[string]string{"status": "accepted", "folder": folder})
+		if err != nil {
+			logger.Error("mcp: reindex response marshal failed", "err", err)
+			return nil, err
+		}
+		return mcplib.NewToolResultText(string(body)), nil
 	})
 }
 
