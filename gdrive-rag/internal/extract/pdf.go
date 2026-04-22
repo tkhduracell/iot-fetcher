@@ -84,6 +84,7 @@ func ocrPDF(ctx context.Context, r *Router, fileHint string, body []byte, pageCo
 	conf := pdfmodel.NewDefaultConfiguration()
 
 	var out strings.Builder
+	lastEndedInNewline := true
 	for idx, pageSpec := range ranges {
 		var buf bytes.Buffer
 		if err := api.Trim(bytes.NewReader(body), &buf, []string{pageSpec}, conf); err != nil {
@@ -94,10 +95,11 @@ func ocrPDF(ctx context.Context, r *Router, fileHint string, body []byte, pageCo
 		if err != nil {
 			return "", fmt.Errorf("extract: pdf %s segment %s: %w", fileHint, pageSpec, err)
 		}
-		if idx > 0 && !strings.HasSuffix(out.String(), "\n") {
+		if idx > 0 && !lastEndedInNewline {
 			out.WriteByte('\n')
 		}
 		out.WriteString(text)
+		lastEndedInNewline = strings.HasSuffix(text, "\n")
 	}
 	return out.String(), nil
 }

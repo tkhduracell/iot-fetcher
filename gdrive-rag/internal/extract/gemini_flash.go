@@ -205,6 +205,9 @@ func (fc *FlashClient) waitForFileActive(ctx context.Context, f *genai.File) (*g
 	if f.State == genai.FileStateFailed {
 		return nil, fmt.Errorf("file upload failed: %+v", f.Error)
 	}
+	if f.State == genai.FileStateUnspecified {
+		return nil, fmt.Errorf("file %s returned STATE_UNSPECIFIED", f.Name)
+	}
 
 	interval := fc.pollInterval
 	if interval <= 0 {
@@ -238,6 +241,8 @@ func (fc *FlashClient) waitForFileActive(ctx context.Context, f *genai.File) (*g
 			return got, nil
 		case genai.FileStateFailed:
 			return nil, fmt.Errorf("file upload failed: %+v", got.Error)
+		case genai.FileStateUnspecified:
+			return nil, fmt.Errorf("file %s returned STATE_UNSPECIFIED", got.Name)
 		}
 	}
 }
