@@ -33,12 +33,20 @@ func main() {
 		return
 	}
 
-	// Run once on startup (mirroring python schedule.run_all), then daily at POOL_PLAN_TIME.
-	runPlanner(cfg)
-
 	hh, mm, err := parseHHMM(cfg.PlanTime)
 	if err != nil {
 		log.Fatalf("invalid POOL_PLAN_TIME %q: %v", cfg.PlanTime, err)
+	}
+
+	// Gate the startup run on "tomorrow's Nord Pool prices are published"
+	// (local hour >= POOL_PLAN_TIME). Before that, today's plan should
+	// already exist from yesterday's 14:05 run. This prevents every
+	// wud-triggered container restart from rewriting tomorrow's plan with
+	// a stale mid-day snapshot of inputs.
+	if now := time.Now().In(cfg.Timezone); now.Hour() >= hh {
+		runPlanner(cfg)
+	} else {
+		log.Printf("[planner] skipping startup run (current hour %d < plan hour %d; today's plan should already exist)", now.Hour(), hh)
 	}
 
 	for {

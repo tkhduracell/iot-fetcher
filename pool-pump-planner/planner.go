@@ -41,10 +41,20 @@ type planInputs struct {
 
 func nan() float64 { return math.NaN() }
 
-// runPlanner is the top-level entry. Any error is logged so the caller can
-// keep running on a schedule without crashing.
+// runPlanner is the top-level entry. Always plans the next local calendar
+// day (tomorrow), tags every point with plan_date=<tomorrow YYYY-MM-DD>,
+// and deletes any prior live-plan for that date before writing so repeat
+// runs are idempotent. Any error is logged so the caller can keep running
+// on a schedule without crashing.
 func runPlanner(cfg *Config) {
-	if _, _, err := plan(cfg, time.Now().UTC(), map[string]string{"run": "live"}); err != nil {
+	tomorrow := time.Now().In(cfg.Timezone).AddDate(0, 0, 1)
+	planStart := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, cfg.Timezone)
+	planDate := planStart.Format("2006-01-02")
+
+	cfg.deletePlanForDate(planDate)
+
+	tags := map[string]string{"run": "live", "plan_date": planDate}
+	if _, _, err := plan(cfg, planStart.UTC(), tags); err != nil {
 		log.Printf("[planner] run failed: %v", err)
 	}
 }
@@ -323,8 +333,11 @@ func solve(cfg *Config, slots []time.Time, prices, solar []float64, targetHours 
 	return result.schedule, stats, nil
 }
 
-func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float64, stats planStats,
-	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) error {
+// buildPlanPoints assembles the line-protocol points for one plan run:
+// 96 slot points plus a single summary point. Pure — no IO — so tests can
+// assert the tag/field shape directly.
+func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar []float64, stats planStats,
+	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) []*Point {
 	applyTags := func(p *Point) *Point {
 		for k, v := range extraTags {
 			p.Tag(k, v)
@@ -340,11 +353,12 @@ func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float6
 			Field("on", sch[t]).
 			Field("cost_sek", stats.costPerSlot[t]).
 			At(slot)
-		priceField := 0.0
+		// Missing Nord Pool price → omit the field so the panel renders a
+		// gap. Writing 0.0 would conflate "we have no data" with "price was
+		// really zero", which is never a legitimate SE4 value.
 		if len(prices) > t && !math.IsNaN(prices[t]) {
-			priceField = prices[t]
+			p.Field("price_sek_per_kwh", prices[t])
 		}
-		p.Field("price_sek_per_kwh", priceField)
 		solarField := 0.0
 		if len(solar) > t {
 			solarField = solar[t]
@@ -378,6 +392,17 @@ func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float6
 		Field("water_temp_c", waterC).
 		At(slots[0])
 	points = append(points, summary)
+	return points
+}
+
+func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float64, stats planStats,
+	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) error {
+	points := buildPlanPoints(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, mode, missing, extraTags)
+
+	missingTag := missing
+	if missingTag == "" {
+		missingTag = "none"
+	}
 
 	if cfg.DryRun {
 		printSchedule(cfg, slots, sch, prices, solar, stats.costPerSlot)
