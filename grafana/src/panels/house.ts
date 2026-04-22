@@ -88,9 +88,9 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('30m')
     .gridPos({ h: 7, w: 4, x: 20, y: 1 });
 
-  // Ngenic Innegivare - Relativ Luftfuktighet (timeseries)
+  // Luftfuktighet Inomhus (timeseries) - Ngenic indoor sensor + HA dehumidifier
   const humidity = new TimeseriesBuilder()
-    .title('Ngenic Innegivare - Relativ Luftfuktighet')
+    .title('Luftfuktighet Inomhus')
     .datasource(VM_DS)
     .unit('humidity')
     .axisSoftMin(40)
@@ -100,11 +100,17 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .legend(legendBottom())
     .tooltip(tooltipMulti())
     .insertNulls(SPAN_NULLS_MS)
-    .overrides([overrideDisplayName('humidity_relative_percent', 'Relativ fuktighet')])
     .withTarget(
       vmMetric('A', 'ngenic_node_sensor_measurement_value', 'humidity_relative_percent', {
         where: `"node_type" = 'SENSOR'`,
-      }),
+      }).legendFormat('Hallen'),
+    )
+    .withTarget(
+      vmExpr(
+        'B',
+        'avg(ha_avfuktare_humidity_target_current_humidity_value{}) by (friendly_name)',
+        'Tvättstuga',
+      ),
     )
     .gridPos({ h: 7, w: 8, x: 12, y: 8 });
 
