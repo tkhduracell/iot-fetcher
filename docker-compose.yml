@@ -5,6 +5,7 @@ volumes:
   garmin-tokens:
   home-assistant-config:
   caddy-data:
+  gdrive-rag-data:
 
 services:
   database:
@@ -96,6 +97,16 @@ services:
     depends_on:
       - database-auth
       - home-assistant
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  gdrive-rag:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/gdrive-rag:latest
+    hostname: gdrive-rag
+    restart: unless-stopped
+    volumes:
+      - gdrive-rag-data:/data
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"

@@ -22,10 +22,16 @@ build-sigenergy-bridge:
 push-sigenergy-bridge: build-sigenergy-bridge
 	(cd ./sigenergy-bridge && make push)
 
+build-gdrive-rag:
+	(cd ./gdrive-rag && make build)
+
+push-gdrive-rag: build-gdrive-rag
+	(cd ./gdrive-rag && make push)
+
 login:
 	balena login -H --token "$$(sed -n 's/^BALENA_TOKEN=//p' .env)"
 
 deploy: push-fetcher push-proxy login
 	balena push iot-hub
 
-.PHONY: build-fetcher push-fetcher deploy build-proxy push-proxy build-pool-pump-planner push-pool-pump-planner build-sigenergy-bridge push-sigenergy-bridge login run-proxy
+.PHONY: build-fetcher push-fetcher deploy build-proxy push-proxy build-pool-pump-planner push-pool-pump-planner build-sigenergy-bridge push-sigenergy-bridge build-gdrive-rag push-gdrive-rag login run-proxy
