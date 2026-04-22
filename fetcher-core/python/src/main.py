@@ -15,7 +15,7 @@ from airquality import airquality
 from aquatemp import aquatemp
 from tapo import tapo
 from sonos import sonos
-from backup_influx import backup_influx
+from backup_vm import backup_vm
 from eufy import eufy, eufy_snapshot
 
 logging.basicConfig(level=logging.INFO,
@@ -45,10 +45,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_vm', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [deco, elpris, ngenic, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, aqualink, aquatemp, airquality, tapo, sonos, backup_vm, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -74,7 +74,7 @@ def main():
     schedule.run_all(delay_seconds=10)
 
     # Avoid this from running every startup
-    schedule.every(12).hours.at(':10').do(with_timeout(backup_influx))
+    schedule.every(12).hours.at(':10').do(with_timeout(backup_vm, timeout_seconds=3600))
 
     while 1:
         schedule.run_pending()
