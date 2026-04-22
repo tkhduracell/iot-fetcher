@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func TestSlotCost(t *testing.T) {
@@ -78,5 +79,54 @@ func TestSlotCost(t *testing.T) {
 					tc.slotEnergy, tc.price, tc.solar, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildPlanPointsOmitsNaNPrice(t *testing.T) {
+	cfg := &Config{SlotMinutes: 15}
+	slots := []time.Time{
+		time.Date(2026, 4, 23, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 23, 0, 15, 0, 0, time.UTC),
+		time.Date(2026, 4, 23, 0, 30, 0, 0, time.UTC),
+	}
+	sch := []int{0, 1, 0}
+	prices := []float64{0.42, math.NaN(), -0.001}
+	solar := []float64{0, 0, 0}
+	stats := planStats{costPerSlot: []float64{0, 0, 0}}
+	tags := map[string]string{"run": "live", "plan_date": "2026-04-23"}
+
+	points := buildPlanPoints(cfg, slots, sch, prices, solar, stats, 0, false, 6, "optimal", "", tags)
+
+	if len(points) != len(slots)+1 {
+		t.Fatalf("expected %d points (slots + summary), got %d", len(slots)+1, len(points))
+	}
+
+	checkPrice := func(i int, wantField bool, wantVal float64) {
+		p := points[i]
+		got, ok := p.Fields["price_sek_per_kwh"]
+		if wantField {
+			if !ok {
+				t.Errorf("slot %d: expected price_sek_per_kwh field, missing", i)
+				return
+			}
+			if v, _ := got.(float64); v != wantVal {
+				t.Errorf("slot %d: price_sek_per_kwh = %v, want %v", i, got, wantVal)
+			}
+		} else if ok {
+			t.Errorf("slot %d: expected no price_sek_per_kwh field (NaN input), got %v", i, got)
+		}
+	}
+	checkPrice(0, true, 0.42)
+	checkPrice(1, false, 0)
+	checkPrice(2, true, -0.001) // negative prices are legitimate SE4 values
+
+	// plan_date + run tags must propagate to every slot point and the summary.
+	for i, p := range points {
+		if p.Tags["plan_date"] != "2026-04-23" {
+			t.Errorf("point %d: plan_date tag = %q, want %q", i, p.Tags["plan_date"], "2026-04-23")
+		}
+		if p.Tags["run"] != "live" {
+			t.Errorf("point %d: run tag = %q, want %q", i, p.Tags["run"], "live")
+		}
 	}
 }

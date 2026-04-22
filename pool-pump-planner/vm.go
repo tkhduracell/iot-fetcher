@@ -220,3 +220,43 @@ func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
 func (c *Config) fetchWaterTemp() (float64, bool) {
 	return c.fetchWaterTempAt(time.Time{})
 }
+
+// deletePlanForDate removes any existing live-plan points tagged with the
+// given plan_date, making the planner idempotent on re-run. Best-effort:
+// logs and returns without error so a blocked or unavailable admin endpoint
+// doesn't prevent the fresh write. DryRun short-circuits to no-op.
+func (c *Config) deletePlanForDate(planDate string) {
+	if c.DryRun {
+		log.Printf("[planner] DRY RUN: skipping delete for plan_date=%s", planDate)
+		return
+	}
+	base := c.vmBaseURL()
+	if base == "" {
+		log.Printf("[planner] VM URL not configured, skipping delete for plan_date=%s", planDate)
+		return
+	}
+	q := url.Values{}
+	q.Set("match[]", fmt.Sprintf(`{__name__=~"pool_iqpump_plan.*",run="live",plan_date="%s"}`, planDate))
+	u := base + "/api/v1/admin/tsdb/delete_series?" + q.Encode()
+	req, err := http.NewRequest("POST", u, nil)
+	if err != nil {
+		log.Printf("[planner] plan_date delete request build failed: %v, continuing", err)
+		return
+	}
+	if c.VMToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.VMToken)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[planner] plan_date delete failed: %v, continuing", err)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		log.Printf("[planner] plan_date delete HTTP %d: %s, continuing", resp.StatusCode, string(body))
+		return
+	}
+	log.Printf("[planner] deleted prior plan for plan_date=%s", planDate)
+}
