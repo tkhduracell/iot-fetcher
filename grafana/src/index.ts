@@ -9,6 +9,7 @@ import { eufyPanels } from './panels/eufy.ts';
 import { lightingPanels } from './panels/lighting.ts';
 import { navimowPanels } from './panels/navimow.ts';
 import { volvoPanels } from './panels/volvo.ts';
+import { systemPanels } from './panels/system.ts';
 
 function buildDashboard() {
   const builder = new DashboardBuilder('Irisgatan')
@@ -80,6 +81,12 @@ function buildDashboard() {
   // Tapo row
   builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 103 }));
   for (const panel of tapoPanels()) {
+    builder.withPanel(panel);
+  }
+
+  // System row (meta metrics)
+  builder.withRow(new RowBuilder('System').gridPos({ h: 1, w: 24, x: 0, y: 111 }));
+  for (const panel of systemPanels()) {
     builder.withPanel(panel);
   }
 
