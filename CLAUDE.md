@@ -19,6 +19,7 @@ Raw API is only for things the scripts above don't cover. Credentials: `INFLUX_H
 - On rpi5, always use `sudo` and both compose files: `sudo docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
 - Get IP: `ssh rpi5 'hostname -I'`
 - VM (authed): port 8427
+- gdrive-rag exposes its HTTP + MCP surface on port 8090 (local only).
 
 # Grafana
 - In Grafana dashboards, use `$__interval` with `spanNulls` instead of hardcoded lookback windows
