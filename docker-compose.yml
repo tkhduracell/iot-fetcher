@@ -18,6 +18,7 @@ services:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=3y
       - -httpListenAddr=:8181
+      - -dedup.minScrapeInterval=10s
 
   database-auth:
     image: victoriametrics/vmauth:latest
