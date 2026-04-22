@@ -4,11 +4,14 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 from google.cloud import storage
+
+from influx import write_influx, Point
 
 INFLUX_HOST = os.environ.get('INFLUX_HOST', '')
 INFLUX_TOKEN = os.environ.get('INFLUX_TOKEN', '')
@@ -77,6 +80,7 @@ def backup_vm():
     gcs_client = _setup_gcs_client()
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     filename = f"vm-export-{timestamp}.native.gz"
+    started = time.monotonic()
 
     with tempfile.TemporaryDirectory() as temp_dir:
         archive_path = Path(temp_dir) / filename
@@ -84,7 +88,23 @@ def backup_vm():
             size = _export_to_file(archive_path)
             logging.info("Export completed: %s (%d bytes)", filename, size)
             _upload_to_gcs(archive_path, gcs_client)
+            duration = time.monotonic() - started
             logging.info("VictoriaMetrics backup completed successfully")
+            _emit_success_metric(size_bytes=size, duration_seconds=duration)
         except Exception as e:
             logging.error("VictoriaMetrics backup failed: %s", e)
             raise
+
+
+def _emit_success_metric(size_bytes: int, duration_seconds: float) -> None:
+    try:
+        point = (
+            Point('vm_backup')
+            .tag('destination', 'gcs')
+            .field('last_success_timestamp', float(time.time()))
+            .field('size_bytes', int(size_bytes))
+            .field('duration_seconds', float(duration_seconds))
+        )
+        write_influx([point])
+    except Exception as e:
+        logging.warning("Failed to write vm_backup success metric: %s", e)
