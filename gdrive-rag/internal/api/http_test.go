@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,16 +20,25 @@ import (
 
 // fakeLooper satisfies looperIface for tests.
 type fakeLooper struct {
+	mu           sync.Mutex
 	reindexCalls []string
 	reindexErr   error
 	status       syncpkg.Status
 }
 
 func (f *fakeLooper) Reindex(_ context.Context, folder string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.reindexCalls = append(f.reindexCalls, folder)
 	return f.reindexErr
 }
 func (f *fakeLooper) Status(_ context.Context) syncpkg.Status { return f.status }
+
+func (f *fakeLooper) ReindexCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.reindexCalls...)
+}
 
 // fakeEmbedder satisfies embedderIface.
 type fakeEmbedder struct {
@@ -299,12 +309,13 @@ func TestReindexReturns202AndTriggers(t *testing.T) {
 	// Reindex fires a goroutine — poll briefly for the side effect.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if len(l.reindexCalls) == 1 && l.reindexCalls[0] == "fid123" {
+		calls := l.ReindexCalls()
+		if len(calls) == 1 && calls[0] == "fid123" {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("looper.Reindex not called with fid123; calls=%v", l.reindexCalls)
+	t.Fatalf("looper.Reindex not called with fid123; calls=%v", l.ReindexCalls())
 }
 
 func TestReindexEmptyBodyAllowed(t *testing.T) {
@@ -324,12 +335,13 @@ func TestReindexEmptyBodyAllowed(t *testing.T) {
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if len(l.reindexCalls) == 1 && l.reindexCalls[0] == "" {
+		calls := l.ReindexCalls()
+		if len(calls) == 1 && calls[0] == "" {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("looper.Reindex not called; calls=%v", l.reindexCalls)
+	t.Fatalf("looper.Reindex not called; calls=%v", l.ReindexCalls())
 }
 
 func TestMethodNotAllowed(t *testing.T) {

@@ -263,13 +263,10 @@ func (s *Store) Query(ctx context.Context, embedding []float32, opts QueryOption
 		return nil, errors.New("store: TopK must be > 0")
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.embedDim == 0 {
 		s.embedDim = len(embedding)
 	}
-	s.mu.Unlock()
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	total := s.collection.Count()
 	if total == 0 {

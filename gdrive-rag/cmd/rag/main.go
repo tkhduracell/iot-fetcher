@@ -17,6 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	// Embed the IANA timezone database so time.LoadLocation("America/Los_Angeles")
+	// works inside the distroless runtime image (which ships no OS tzdata).
+	// Pacific time drives the daily budget rollover and the post-exhaustion sleep.
+	_ "time/tzdata"
+
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/api"
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/budget"
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/drive"
