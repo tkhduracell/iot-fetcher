@@ -18,7 +18,7 @@ export const values: Config = [
         { measurement: 'tibber', field: 'accumulatedConsumption', title: 'Dygnskonsumtion', unit: 'KWh', decimals: 0, sparkline: '24h', sparklineMin: 0 },
         { measurement: 'sigenergy_battery', field: 'soc_percent', title: '🏡 Hem Batteri', unit: '%', decimals: 0, reload: 60000, sparkline: '24h', sparklineMin: 0, sparklineMax: 100 },
         { measurement: 'ha_volvo_xc40_battery', field: 'value', title: '🚗 XC40 Batteri', unit: '%', decimals: 0, reload: 60000, sparkline: '24h', sparklineMin: 0, sparklineMax: 100 },
-        { measurement: 'ha_volvo_xc40_charging_power', field: 'value', title: '🔌 XC40 Laddning', unit: 'kW', decimals: 1, reload: 60000, sparkline: '24h', sparklineMin: 0 },
+        { measurement: 'ha_volvo_xc40_charging_power', field: 'value', title: '🔌 XC40 Laddning', unit: 'W', decimals: 0, reload: 60000, sparkline: '24h', sparklineMin: 0 },
     ],
     [
         { measurement: 'sigenergy_pv_power', field: 'power_kw', title: '☀️ Solceller Produktion', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 3 },
