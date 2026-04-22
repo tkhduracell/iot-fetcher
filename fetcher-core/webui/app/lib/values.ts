@@ -21,7 +21,7 @@ export const values: Config = [
         { measurement: 'ha_volvo_xc40_charging_power', field: 'value', title: '🔌 XC40 Laddning', unit: 'W', decimals: 0, reload: 60000, sparkline: '24h', sparklineMin: 0 },
     ],
     [
-        { measurement: 'sigenergy_pv_power', field: 'power_kw', title: '☀️ Solceller Produktion', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 3 },
+        { measurement: 'sigenergy_pv_power', field: 'power_kw', filter: { string: 'total' }, title: '☀️ Solceller Produktion', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: 0, sparklineMax: 3 },
         { measurement: 'sigenergy_grid_power', field: 'net_power_kw', title: '⚡️ Nät Inköp', unit: 'kW', decimals: 1, reload: 10000, sparkline: '24h', sparklineMin: -5, sparklineMax: 10 },
         { measurement: 'sigenergy_home', field: 'load_kw',
          expr: 'clamp_min(sigenergy_pv_power_power_kw{string="total"} + on(host) sigenergy_grid_power_net_power_kw + on(host) sigenergy_battery_power_from_battery_kw, 0)',

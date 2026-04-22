@@ -16,7 +16,7 @@ function useHistoryQuery({ measurement, field, filter = {}, expr, sparkline }: U
   const selector = labelParts.length > 0 ? `{${labelParts.join(',')}}` : '';
   const inner = expr ?? `${measurement}_${field}${selector}`;
 
-  const query = enabled ? `avg_over_time(${inner}[5m])` : 'up';
+  const query = enabled ? `avg(avg_over_time(${inner}[5m]))` : 'up';
 
   const { start, end, step } = useMemo(() => {
     if (!enabled) return { start: new Date().toISOString(), end: new Date().toISOString(), step: '5m' };

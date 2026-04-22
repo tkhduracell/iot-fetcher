@@ -35,7 +35,7 @@ const LatestValueFullscreen: React.FC<LatestValueFullscreenProps> = ({
     const labelParts = Object.entries(filter).map(([k, v]) => `${k}="${v}"`);
     const selector = labelParts.length > 0 ? `{${labelParts.join(',')}}` : '';
     const inner = expr ?? `${measurement}_${field}${selector}`;
-    return `avg_over_time(${inner}[15m])`;
+    return `avg(avg_over_time(${inner}[15m]))`;
   }, [measurement, field, filter, expr]);
 
   const { initialLoading, error, result } = usePromQLQuery({
