@@ -92,6 +92,8 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
   const pumpPlan = new TimeseriesBuilder()
     .title('Poolpump plan (24h)')
     .datasource(VM_DS)
+    .interval('15m')
+    .lineInterpolation('stepAfter' as any)
     .colorScheme(paletteColor())
     .thresholds(greenThreshold())
     .legend(legendBottom())
