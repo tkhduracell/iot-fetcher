@@ -123,7 +123,8 @@ func (c *Client) resolveParent(ctx context.Context, fileID string) (string, erro
 		c.names[f.Id] = f.Name
 	}
 	if len(f.Parents) == 0 {
-		c.parents[fileID] = ""
+		// Don't cache "no parent" — if the file is later reparented into a
+		// whitelisted folder, the next call must re-fetch from Drive.
 		return "", nil
 	}
 	p := f.Parents[0]
