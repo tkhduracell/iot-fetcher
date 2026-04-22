@@ -131,13 +131,11 @@ func (l *Looper) drainQueue(ctx context.Context) error {
 				At:       l.now(),
 			})
 		default:
+			// Transient failure (network, API 5xx, etc.). Log and drop — a
+			// subsequent Drive change event, or an operator-triggered reindex,
+			// will re-enqueue the file. Don't pollute state.Skipped with
+			// transient noise; that list is for permanently-unindexable files.
 			l.logger.Warn("sync: ingest failed", "fileID", item.FileID, "err", err)
-			l.state.AppendSkipped(state.SkippedFile{
-				FileID:   item.FileID,
-				FileName: item.FileName,
-				Reason:   err.Error(),
-				At:       l.now(),
-			})
 		}
 	}
 }

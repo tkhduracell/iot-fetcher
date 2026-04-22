@@ -182,8 +182,11 @@ func TestQueryCapsTopK(t *testing.T) {
 	srv := httptest.NewServer(svc.Handler())
 	defer srv.Close()
 
-	resp, _ := http.Post(srv.URL+"/query", "application/json",
+	resp, err := http.Post(srv.URL+"/query", "application/json",
 		strings.NewReader(`{"query":"x","top_k":500}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	if fs.lastOpt.TopK != MaxTopK {
 		t.Fatalf("TopK: got %d want %d", fs.lastOpt.TopK, MaxTopK)
@@ -195,8 +198,11 @@ func TestQueryDefaultsTopK(t *testing.T) {
 	srv := httptest.NewServer(svc.Handler())
 	defer srv.Close()
 
-	resp, _ := http.Post(srv.URL+"/query", "application/json",
+	resp, err := http.Post(srv.URL+"/query", "application/json",
 		strings.NewReader(`{"query":"x"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	if fs.lastOpt.TopK != DefaultTopK {
 		t.Fatalf("TopK: got %d want %d", fs.lastOpt.TopK, DefaultTopK)
@@ -210,8 +216,11 @@ func TestQueryBudgetExhausted503(t *testing.T) {
 	srv := httptest.NewServer(svc.Handler())
 	defer srv.Close()
 
-	resp, _ := http.Post(srv.URL+"/query", "application/json",
+	resp, err := http.Post(srv.URL+"/query", "application/json",
 		strings.NewReader(`{"query":"x"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status: got %d want 503", resp.StatusCode)
@@ -225,8 +234,11 @@ func TestQueryEmbedderError500(t *testing.T) {
 	srv := httptest.NewServer(svc.Handler())
 	defer srv.Close()
 
-	resp, _ := http.Post(srv.URL+"/query", "application/json",
+	resp, err := http.Post(srv.URL+"/query", "application/json",
 		strings.NewReader(`{"query":"x"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status: got %d want 500", resp.StatusCode)
