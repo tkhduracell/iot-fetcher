@@ -23,7 +23,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(SPAN_NULLS_MS)
     .overrides([
       {
-        matcher: { id: 'byName', options: 'limit_w' },
+        matcher: { id: 'byRegexp', options: 'Lim.*' },
         properties: [
           { id: 'custom.axisPlacement', value: 'right' },
           { id: 'unit', value: 'watt' },
@@ -32,10 +32,10 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
       },
     ])
     .withTarget(
-      vmExpr('Active', 'last_over_time(sigenergy_discharge_control_active[$__interval])').legendFormat('{{reason}}'),
+      vmExpr('Active', 'last_over_time(sigenergy_discharge_control_active[$__interval])', 'Active'),
     )
     .withTarget(
-      vmExpr('Limit', 'last_over_time(sigenergy_discharge_control_limit_w[$__interval])', 'limit_w'),
+      vmExpr('Limit', 'last_over_time(sigenergy_discharge_control_limit_w[$__interval])', 'Limit'),
     )
     .gridPos({ h: 8, w: 16, x: 0, y: 112 });
 
