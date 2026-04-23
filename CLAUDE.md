@@ -12,7 +12,7 @@
 
 **For PromQL queries (instant or range), use `scripts/vm-query.sh`** — `vm-query.sh metrics|labels|label <name>|query <promql>|range <promql>`. Don't reinvent these with curl.
 
-Raw API is only for things the scripts above don't cover. Credentials: `INFLUX_HOST` (full URL incl. scheme) and `INFLUX_TOKEN` in `fetcher-core/python/.env.local`; auth header `Authorization: Bearer $INFLUX_TOKEN`. Endpoints: `/api/v1/label/__name__/values`, `/api/v1/labels`, `/api/v1/label/<name>/values`, `/api/v1/query`, `/api/v1/query_range`.
+Raw API is only for things the scripts above don't cover. Credentials: `INFLUX_HOST` (full URL incl. scheme) and `INFLUX_TOKEN`. Canonical location is `fetcher-core/python/.env.local`; the older `fetcher-core/python/.env` still exists and `vm-query.sh` / `vm-rename.sh` read from it — `vm-shape.sh` prefers `.env.local` and falls back to `.env`. Auth header `Authorization: Bearer $INFLUX_TOKEN`. Endpoints: `/api/v1/label/__name__/values`, `/api/v1/labels`, `/api/v1/label/<name>/values`, `/api/v1/query`, `/api/v1/query_range`.
 
 # Deployment (rpi5)
 - The remote directory on rpi5 is `~/iot-fetcher` (hyphen, NOT underscore). The local directory uses an underscore but the remote uses a hyphen — never create `~/iot_fetcher` on rpi5.

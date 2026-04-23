@@ -7,15 +7,21 @@ set -euo pipefail
 GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
 REPO_ROOT="$(cd "$GIT_COMMON_DIR/.." && pwd)"
 
-ENV_FILE="$REPO_ROOT/fetcher-core/python/.env.local"
-[[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE" >&2; exit 1; }
+# Prefer .env.local; fall back to the older .env that vm-query.sh / vm-rename.sh still read.
+ENV_FILE=""
+for candidate in "$REPO_ROOT/fetcher-core/python/.env.local" "$REPO_ROOT/fetcher-core/python/.env"; do
+  [[ -f "$candidate" ]] && { ENV_FILE="$candidate"; break; }
+done
+[[ -n "$ENV_FILE" ]] || { echo "Missing fetcher-core/python/.env.local (or .env)" >&2; exit 1; }
 
 for bin in curl jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "Missing required binary: $bin" >&2; exit 1; }
 done
 
-INFLUX_HOST="$(grep -E '^INFLUX_HOST=' "$ENV_FILE" | cut -d'=' -f2-)"
-INFLUX_TOKEN="$(grep -E '^INFLUX_TOKEN=' "$ENV_FILE" | cut -d'=' -f2-)"
+# `|| true` so a missing key doesn't trip `set -e` before the friendlier check below.
+# `-m1` guards against duplicate lines in the env file.
+INFLUX_HOST="$(grep -m1 -E '^INFLUX_HOST=' "$ENV_FILE" | cut -d'=' -f2- || true)"
+INFLUX_TOKEN="$(grep -m1 -E '^INFLUX_TOKEN=' "$ENV_FILE" | cut -d'=' -f2- || true)"
 [[ -n "$INFLUX_HOST" && -n "$INFLUX_TOKEN" ]] \
   || { echo "INFLUX_HOST / INFLUX_TOKEN missing in $ENV_FILE" >&2; exit 1; }
 
@@ -25,6 +31,7 @@ AUTH_HEADER="Authorization: Bearer ${INFLUX_TOKEN}"
 PATTERN="${1:-}"
 
 usage() {
+  local rc="${1:-1}"
   cat <<EOF
 Usage: $(basename "$0") [pattern]
 
@@ -34,10 +41,10 @@ Examples:
   $(basename "$0")                  # all metrics
   $(basename "$0") tibber           # only metrics containing "tibber"
 EOF
-  exit 1
+  exit "$rc"
 }
 
-[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && usage
+[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && usage 0
 
 # Fetch all metric names.
 METRICS_JSON="$(curl -sf "${BASE_URL}/api/v1/label/__name__/values" -H "$AUTH_HEADER")" \
@@ -92,19 +99,24 @@ for M in "${METRICS[@]}"; do
   done
   labels_cell="$(IFS=', '; echo "${label_parts[*]:-—}")"
 
+  # Pick the series with the newest sample timestamp — `.result[0]` would just be
+  # whatever VictoriaMetrics returned first, which can be a stale series for
+  # high-cardinality metrics where some labels stopped reporting.
+  pick_freshest='.data.result | max_by(.value[0] | tonumber) // empty'
+
   q_json="$(curl -sf -G "${BASE_URL}/api/v1/query" \
     --data-urlencode "query=${M}" \
     -H "$AUTH_HEADER")" || {
     printf '| %s | %s | (error) | — |\n' "$M" "$labels_cell"
     continue
   }
-  first="$(jq -c '.data.result[0] // empty' <<<"$q_json")"
+  first="$(jq -c "$pick_freshest" <<<"$q_json")"
 
   if [[ -z "$first" ]]; then
     q_json="$(curl -sf -G "${BASE_URL}/api/v1/query" \
       --data-urlencode "query=last_over_time(${M}[1d])" \
       -H "$AUTH_HEADER")" || q_json='{}'
-    first="$(jq -c '.data.result[0] // empty' <<<"$q_json")"
+    first="$(jq -c "$pick_freshest" <<<"$q_json")"
   fi
 
   if [[ -z "$first" ]]; then
