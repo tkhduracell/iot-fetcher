@@ -44,13 +44,14 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .title('💾 Senaste VM-backup')
     .datasource(VM_DS)
     .unit('dtdurations')
+    .decimals(1)
     .thresholds(thresholds([
       { color: 'green', value: null },
       { color: '#EAB839', value: 90000 },
       { color: 'red', value: 172800 },
     ]))
     .withTarget(
-      vmExpr('A', 'time() - last_over_time(vm_backup_last_success_timestamp[$__interval])'),
+      vmExpr('A', 'now() - last_over_time(vm_backup_last_success_timestamp[$__interval])'),
     )
     .gridPos({ h: 8, w: 8, x: 16, y: 112 });
 
