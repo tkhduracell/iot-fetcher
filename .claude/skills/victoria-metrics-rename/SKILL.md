@@ -1,6 +1,6 @@
 ---
-name: victoriametrics-rename
-description: Rename a VictoriaMetrics metric by exporting, transforming, and re-importing
+name: victoria-metrics-rename
+description: Use when renaming a metric in VictoriaMetrics — exports series under the old name, rewrites the name, re-imports under the new name, and optionally deletes the old. Wraps `scripts/vm-rename.sh` with a dry-run preview + confirmation flow.
 allowed-tools: Bash, AskUserQuestion
 ---
 
