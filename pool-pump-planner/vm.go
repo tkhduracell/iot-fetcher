@@ -205,8 +205,12 @@ func (c *Config) fetchHourlyPrices(slots []time.Time) []float64 {
 	return out
 }
 
+// fetchWaterTempAt looks back up to 12h for the most recent pool temperature
+// reading. The sensor publishes only on change (often hourly), so VM's default
+// ~5m lookback regularly misses a valid-enough reading and drops the planner
+// into fallback mode.
 func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
-	result, err := c.queryPromInstantAt("pool_temperature_value", at, "")
+	result, err := c.queryPromInstantAt("pool_temperature_value", at, "12h")
 	if err != nil {
 		log.Printf("[planner] water temp query failed: %v", err)
 		return 0, false
