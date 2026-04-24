@@ -32,10 +32,10 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
       },
     ])
     .withTarget(
-      vmExpr('Active', 'last_over_time(sigenergy_discharge_control_active[$__interval])', 'Active'),
+      vmExpr('Active', 'last_over_time(sum(sigenergy_discharge_control_active[$__interval]) by ())', 'Active'),
     )
     .withTarget(
-      vmExpr('Limit', 'last_over_time(sigenergy_discharge_control_limit_w[$__interval])', 'Limit'),
+      vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Limit'),
     )
     .gridPos({ h: 8, w: 16, x: 0, y: 112 });
 
