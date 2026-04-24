@@ -8,11 +8,7 @@
 - Build Docker images locally and push to registry — don't build on rpi5
 
 # VictoriaMetrics
-**When you need to know what metrics exist or what shape they have, run `scripts/vm-shape.sh [pattern]` first — don't hand-write curl.** It resolves the repo root (worktree-safe), loads creds from `fetcher-core/python/.env.local`, and prints a Markdown table of metric names, label keys with cardinality, and the latest sample value/timestamp. Use a substring filter (e.g. `scripts/vm-shape.sh tibber`) to keep the output small.
-
-**For PromQL queries (instant or range), use `scripts/vm-query.sh`** — `vm-query.sh metrics|labels|label <name>|query <promql>|range <promql>`. Don't reinvent these with curl.
-
-Raw API is only for things the scripts above don't cover. Credentials: `INFLUX_HOST` (full URL incl. scheme) and `INFLUX_TOKEN` in `fetcher-core/python/.env.local`; auth header `Authorization: Bearer $INFLUX_TOKEN`. Endpoints: `/api/v1/label/__name__/values`, `/api/v1/labels`, `/api/v1/label/<name>/values`, `/api/v1/query`, `/api/v1/query_range`.
+For anything involving metrics, PromQL, or series shape, use the `victoria-metrics` skill — it covers `scripts/vm-shape.sh`, `scripts/vm-query.sh` (metrics/labels/series/query/range, with `--format json` when you need to parse), `scripts/vm-rename.sh`, credentials, and conventions for this deployment. Don't hand-write curl against the VM API.
 
 # Deployment (rpi5)
 - The remote directory on rpi5 is `~/iot-fetcher` (hyphen, NOT underscore). The local directory uses an underscore but the remote uses a hyphen — never create `~/iot_fetcher` on rpi5.

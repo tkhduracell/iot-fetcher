@@ -1013,9 +1013,7 @@ Expected: same stdout table. This time `[influx] wrote N points` lines appear.
 - [ ] **Step 3: Verify VM received the tagged points**
 
 ```bash
-set -a && source fetcher-core/python/.env.local && set +a
-curl -s "$INFLUX_HOST/api/v1/query?query=count_over_time(pool_iqpump_plan_on%7Brun%3D%22backfill%22%7D%5B30d%5D)" \
-  -H "Authorization: Bearer $INFLUX_TOKEN"
+scripts/vm-query.sh query 'count_over_time(pool_iqpump_plan_on{run="backfill"}[30d])'
 ```
 
 Expected: `status=success`, a non-zero count (≈ 3 days × 96 slots = ~288).
