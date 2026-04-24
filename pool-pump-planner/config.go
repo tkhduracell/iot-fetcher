@@ -112,7 +112,7 @@ func loadConfig() *Config {
 
 		PriceArea:   getenv("POOL_PRICE_AREA", "SE4"),
 		SlotMinutes: getenvInt("POOL_SLOT_MINUTES", 15),
-		PlanTime:    getenv("POOL_PLAN_TIME", "14:05"),
+		PlanTime:    getenv("POOL_PLAN_TIME", "14:15"),
 	}
 
 	tzName := getenv("POOL_TIMEZONE", "Europe/Stockholm")

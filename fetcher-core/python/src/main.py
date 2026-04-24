@@ -65,7 +65,11 @@ def main():
     schedule.every(5).minutes.do(with_timeout(eufy))
     schedule.every(1).minutes.do(with_timeout(sonos))
 
-    schedule.every(6).hours.at(':05').do(with_timeout(elpris))
+    # Primary: run right before the pool-pump-planner fires at 14:15 local,
+    # so day-ahead prices are fresh. Backup every 6h in case the primary is
+    # missed (container down, job slip, etc.).
+    schedule.every().day.at('14:03').do(with_timeout(elpris))
+    schedule.every(6).hours.do(with_timeout(elpris))
     schedule.every(1).hours.at(':05').do(with_timeout(airquality))
     # schedule.every(1).hours.at(':10').do(with_timeout(balboa_control))  # Disabled SPA module
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
