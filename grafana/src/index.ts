@@ -66,26 +66,26 @@ function buildDashboard() {
   }
 
   // Navimow row
-  builder.withRow(new RowBuilder('Navimow').gridPos({ h: 1, w: 24, x: 0, y: 93 }));
+  builder.withRow(new RowBuilder('Navimow').gridPos({ h: 1, w: 24, x: 0, y: 101 }));
   for (const panel of navimowPanels()) {
     builder.withPanel(panel);
   }
 
   // Eufy Cameras row (collapsed)
-  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 102 });
+  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 110 });
   for (const panel of eufyPanels()) {
     eufyRow.withPanel(panel);
   }
   builder.withRow(eufyRow);
 
   // Tapo row
-  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 103 }));
+  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 111 }));
   for (const panel of tapoPanels()) {
     builder.withPanel(panel);
   }
 
   // System row (meta metrics)
-  builder.withRow(new RowBuilder('System').gridPos({ h: 1, w: 24, x: 0, y: 111 }));
+  builder.withRow(new RowBuilder('System').gridPos({ h: 1, w: 24, x: 0, y: 119 }));
   for (const panel of systemPanels()) {
     builder.withPanel(panel);
   }

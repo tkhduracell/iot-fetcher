@@ -78,5 +78,34 @@ export function volvoPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'last_over_time(ha_volvo_xc40_time_to_service_value[$__interval])', 'Service'))
     .gridPos({ h: 8, w: 3, x: 21, y: 85 });
 
-  return [batteryTs, chargingTs, distanceStat, serviceStat];
+  // 🔒 Urladdningskontroll (timeseries, stepAfter)
+  const dischargeControl = new TimeseriesBuilder()
+    .title('🔒 Urladdningskontroll')
+    .datasource(VM_DS)
+    .interval('1m')
+    .colorScheme(paletteColor())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .lineInterpolation('stepAfter' as any)
+    .min(0)
+    .insertNulls(SPAN_NULLS_MS)
+    .overrides([
+      {
+        matcher: { id: 'byRegexp', options: 'Lim.*' },
+        properties: [
+          { id: 'custom.axisPlacement', value: 'right' },
+          { id: 'unit', value: 'watt' },
+          { id: 'displayName', value: 'Gräns (W)' },
+        ],
+      },
+    ])
+    .withTarget(
+      vmExpr('Active', 'last_over_time(sum(sigenergy_discharge_control_active[$__interval]) by ())', 'Active'),
+    )
+    .withTarget(
+      vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Limit'),
+    )
+    .gridPos({ h: 8, w: 16, x: 0, y: 93 });
+
+  return [batteryTs, chargingTs, distanceStat, serviceStat, dischargeControl];
 }
