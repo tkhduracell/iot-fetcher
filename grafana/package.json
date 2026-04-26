@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "generate": "node --env-file=.env src/index.ts",
-    "build": "GRAFANA_SKIP_UPLOAD=1 node src/index.ts"
+    "build": "GRAFANA_SKIP_UPLOAD=1 node src/index.ts",
+    "test": "node --experimental-strip-types --test 'src/**/*.test.ts'"
   },
   "engines": {
     "node": ">=25.0.0"
