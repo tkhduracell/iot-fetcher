@@ -50,7 +50,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
       { color: 'red', value: 1 },
     ]))
     .withTarget(
-      vmExpr('A', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())'),
+      vmExpr('A', 'last_over_time(sum(sigenergy_ems_control_max_discharge_limit_w[$__interval]) by ())'),
     )
     .gridPos({ h: 8, w: 4, x: 12, y: 128 });
 
