@@ -39,13 +39,13 @@ function buildDashboard() {
   }
 
   // Belysning row
-  builder.withRow(new RowBuilder('Belysning'));
+  builder.withRow(new RowBuilder('Belysning').gridPos({ h: 1, w: 24, x: 0, y: 15 }));
   for (const panel of lightingPanels()) {
     builder.withPanel(panel);
   }
 
   // Poolen row
-  builder.withRow(new RowBuilder('Poolen'));
+  builder.withRow(new RowBuilder('Poolen').gridPos({ h: 1, w: 24, x: 0, y: 23 }));
   for (const panel of poolPanels()) {
     builder.withPanel(panel);
   }
