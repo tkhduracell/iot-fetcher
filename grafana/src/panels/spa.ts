@@ -7,7 +7,7 @@ import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
   greenThreshold, greenRedThresholds, paletteColor,
   legendBottom, tooltipMulti,
-  overrideDisplayAndColor,
+  overrideDisplayAndColor, overrideDisplayName,
   SPAN_NULLS_MS,
 } from '../helpers.ts';
 
@@ -31,7 +31,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     ])
     .withTarget(vmMetric('A', 'spa_climate', 'current_temperature_value'))
     .withTarget(vmExpr('B', 'last_over_time(spa_temperature_range_state_text[$__interval])', 'state_text'))
-    .gridPos({ h: 8, w: 12, x: 0, y: 44 });
+    .gridPos({ h: 8, w: 12, x: 0, y: 61 });
 
   // Spabadet (stat) - latest temp
   const spaStat = new StatBuilder()
@@ -43,7 +43,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('current_temperature_value', 'Temperatur', 'purple'),
     ])
     .withTarget(vmMetric('A', 'spa_climate', 'current_temperature_value'))
-    .gridPos({ h: 8, w: 4, x: 12, y: 44 });
+    .gridPos({ h: 8, w: 4, x: 12, y: 61 });
 
   // Spa Circulation (gauge)
   const spaCirculation = new GaugeBuilder()
@@ -51,8 +51,15 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     .datasource(VM_DS)
     .unit('bool_on_off')
     .thresholds(greenThreshold())
+    .overrides([
+      overrideDisplayName('circulation', 'Circulation'),
+      overrideDisplayName('spa_pump_1_value', 'Jet 1'),
+      overrideDisplayName('spa_pump_2_value', 'Jet 2'),
+    ])
     .withTarget(vmExpr('A', 'last_over_time(spa_circulation_pump_value[$__interval])', 'circulation'))
-    .gridPos({ h: 8, w: 4, x: 16, y: 44 });
+    .withTarget(vmMetric('B', 'spa_pump_1', 'value'))
+    .withTarget(vmMetric('C', 'spa_pump_2', 'value'))
+    .gridPos({ h: 8, w: 4, x: 16, y: 61 });
 
   return [spaTs, spaStat, spaCirculation];
 }
