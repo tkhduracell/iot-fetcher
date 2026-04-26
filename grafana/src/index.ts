@@ -38,11 +38,12 @@ function buildDashboard() {
     builder.withPanel(panel);
   }
 
-  // Belysning row
-  builder.withRow(new RowBuilder('Belysning').gridPos({ h: 1, w: 24, x: 0, y: 15 }));
+  // Belysning row (collapsed)
+  const belysningRow = new RowBuilder('Belysning').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 15 });
   for (const panel of lightingPanels()) {
-    builder.withPanel(panel);
+    belysningRow.withPanel(panel);
   }
+  builder.withRow(belysningRow);
 
   // Poolen row
   builder.withRow(new RowBuilder('Poolen').gridPos({ h: 1, w: 24, x: 0, y: 23 }));
