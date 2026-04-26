@@ -26,7 +26,7 @@ export function navimowPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('Navimow i206 AWD Battery', 'Navimow i206 AWD Battery', 'green'),
     ])
     .withTarget(vmExpr('A', 'last_over_time(ha_navimow_i206_awd_battery_value[$__interval])', '{{friendly_name}}'))
-    .gridPos({ h: 8, w: 24, x: 0, y: 94 });
+    .gridPos({ h: 8, w: 24, x: 0, y: 110 });
 
   return [batteryTs];
 }

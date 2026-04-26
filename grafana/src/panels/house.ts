@@ -133,52 +133,6 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('7d/d')
     .gridPos({ h: 7, w: 4, x: 20, y: 8 });
 
-  // Ngenic Batteri (timeseries, 30d) - aggregated by node type
-  const sensorBattery = new TimeseriesBuilder()
-    .title('Ngenic Batteri')
-    .datasource(VM_DS)
-    .unit('percent')
-    .min(0)
-    .max(100)
-    .interval('1h')
-    .colorScheme(paletteColor())
-    .thresholds(greenThreshold())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
-    .overrides([
-      overrideDisplayName('SENSOR', 'Innegivare'),
-      overrideDisplayName('CONTROLLER', 'Styrenhet'),
-    ])
-    .withTarget(
-      vmExpr('A', 'avg by (node_type) (avg_over_time(ngenic_node_battery_value[$__interval]))', '{{node_type}}'),
-    )
-    .timeFrom('30d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 15 });
-
-  // Ngenic Radiosignal (timeseries, 30d) - aggregated by node type
-  const sensorSignal = new TimeseriesBuilder()
-    .title('Ngenic Radiosignal')
-    .datasource(VM_DS)
-    .unit('percent')
-    .min(0)
-    .max(100)
-    .interval('1h')
-    .colorScheme(paletteColor())
-    .thresholds(greenThreshold())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
-    .overrides([
-      overrideDisplayName('SENSOR', 'Innegivare'),
-      overrideDisplayName('CONTROLLER', 'Styrenhet'),
-    ])
-    .withTarget(
-      vmExpr('A', 'avg by (node_type) (avg_over_time(ngenic_node_radio_signal_value[$__interval]))', '{{node_type}}'),
-    )
-    .timeFrom('30d/d')
-    .gridPos({ h: 7, w: 12, x: 12, y: 15 });
-
   // Sovrum (timeseries) - bedroom climate temperature
   const bedroomTemp = new TimeseriesBuilder()
     .title('Sovrum')
@@ -209,7 +163,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('30m')
     .gridPos({ h: 7, w: 4, x: 8, y: 8 });
 
-  return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi, bedroomTemp, bedroomStat, sensorBattery, sensorSignal];
+  return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi, bedroomTemp, bedroomStat];
 }
 
 export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
@@ -239,7 +193,7 @@ export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
       ),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 104 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 120 });
 
   return [tapoOnline];
 }

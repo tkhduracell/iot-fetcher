@@ -37,7 +37,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Limit'),
     )
-    .gridPos({ h: 8, w: 16, x: 0, y: 112 });
+    .gridPos({ h: 8, w: 16, x: 0, y: 128 });
 
   // 💾 Senaste VM-backup (stat, age in seconds)
   const vmBackup = new StatBuilder()
@@ -53,7 +53,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'now() - last_over_time(vm_backup_last_success_timestamp[$__interval])'),
     )
-    .gridPos({ h: 8, w: 8, x: 16, y: 112 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 128 });
 
   return [dischargeControl, vmBackup];
 }
