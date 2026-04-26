@@ -39,6 +39,9 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Test dashboard
+      run: npm test
+
     - name: Build dashboard JSON
       if: ${{ github.event_name == 'pull_request' }}
       run: npm run build
