@@ -37,7 +37,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Limit'),
     )
-    .gridPos({ h: 8, w: 12, x: 0, y: 128 });
+    .gridPos({ h: 8, w: 12, x: 0, y: 136 });
 
   // ⚡ Urladdningsgräns (stat, current discharge limit in W)
   const dischargeLimitStat = new StatBuilder()
@@ -52,7 +52,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())'),
     )
-    .gridPos({ h: 8, w: 4, x: 12, y: 128 });
+    .gridPos({ h: 8, w: 4, x: 12, y: 136 });
 
   // 💾 Senaste VM-backup (stat, age in seconds)
   const vmBackup = new StatBuilder()
@@ -68,7 +68,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'now() - last_over_time(vm_backup_last_success_timestamp[$__interval])'),
     )
-    .gridPos({ h: 8, w: 8, x: 16, y: 128 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 136 });
 
   return [dischargeControl, dischargeLimitStat, vmBackup];
 }

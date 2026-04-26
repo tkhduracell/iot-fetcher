@@ -23,7 +23,7 @@ export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
     .withTransformation({ id: 'labelsToFields', options: { valueLabel: 'device_name' } })
     .withTarget(vmMetric('A', 'eufy_device', 'battery'))
     .timeFrom('7d/d')
-    .gridPos({ h: 8, w: 8, x: 0, y: 86 });
+    .gridPos({ h: 8, w: 8, x: 0, y: 119 });
 
   // Eufy Battery Temperature (timeseries + labelsToFields)
   const batteryTemp = new TimeseriesBuilder()
@@ -39,7 +39,7 @@ export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
     .withTransformation({ id: 'labelsToFields', options: { valueLabel: 'device_name' } })
     .withTarget(vmMetric('A', 'eufy_device', 'batteryTemperature'))
     .timeFrom('7d/d')
-    .gridPos({ h: 8, w: 8, x: 8, y: 86 });
+    .gridPos({ h: 8, w: 8, x: 8, y: 119 });
 
   // Eufy WiFi Signal (timeseries, dBm)
   const wifiRssi = new TimeseriesBuilder()
@@ -59,7 +59,7 @@ export function eufyPanels(): cog.Builder<dashboard.Panel>[] {
     .withTransformation({ id: 'labelsToFields', options: { valueLabel: 'device_name' } })
     .withTarget(vmMetric('A', 'eufy_device', 'wifiRssi'))
     .timeFrom('7d/d')
-    .gridPos({ h: 8, w: 8, x: 16, y: 86 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 119 });
 
   return [batteryTs, batteryTemp, wifiRssi];
 }
