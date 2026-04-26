@@ -24,6 +24,17 @@ type Readings struct {
 	FromBatteryKW       float64 // discharging (positive ESS power)
 	PVTotalKW           float64
 	PVStringKW          [4]float64 // per-string, plant-wide aggregation — 0 when unknown
+
+	// Extended plant block (30049..30051). Zero/empty when read fails.
+	AvailMaxDischargeW int    // 30049, available max ESS discharge, watts
+	RunningState       string // 30051, standby/running/fault/shutdown
+
+	// Remote EMS holding registers (40029..40036). Valid only when EMSControlOK.
+	EMSControlOK         bool
+	RemoteEMSEnabled     bool
+	RemoteEMSControlMode int
+	ESSMaxChargeLimitW   int // 40032
+	ESSMaxDischargeLimitW int // 40034
 }
 
 // Client is the Sigenergy surface consumed by the controller.
@@ -129,6 +140,15 @@ func (c *tcpClient) readInputLocked(addr, count uint16, slave uint8) ([]uint16, 
 	return c.client.ReadRegisters(addr, count, smb.INPUT_REGISTER)
 }
 
+// readHoldingLocked reads `count` holding registers. Must be called with the
+// connection already open (via withConnection).
+func (c *tcpClient) readHoldingLocked(addr, count uint16, slave uint8) ([]uint16, error) {
+	if err := c.client.SetUnitId(slave); err != nil {
+		return nil, err
+	}
+	return c.client.ReadRegisters(addr, count, smb.HOLDING_REGISTER)
+}
+
 // readInput is a convenience wrapper for single-call reads that don't
 // need a shared connection with other I/O.
 func (c *tcpClient) readInput(addr, count uint16, slave uint8) ([]uint16, error) {
@@ -224,7 +244,7 @@ func (c *tcpClient) writeU32KW(ctx context.Context, addr uint16, watts int, labe
 func (c *tcpClient) Read(ctx context.Context) (*Readings, error) {
 	rd := &Readings{}
 
-	var r1, r2 []uint16
+	var r1, r2, r3, r4 []uint16
 	err := c.withConnection(func() error {
 		var e error
 		// Plant block 1: 30003..30014 (12 regs: EMSWorkMode through SOC).
@@ -237,6 +257,10 @@ func (c *tcpClient) Read(ctx context.Context) (*Readings, error) {
 		if e != nil {
 			return fmt.Errorf("read plant block 30035: %w", e)
 		}
+		// Plant block 3: 30049..30051 (avail discharge U32 + running state). Non-fatal.
+		r3, _ = c.readInputLocked(RegPlantAvailMaxDischargeW, 3, SlaveIDPlant)
+		// Holding registers: 40029..40037 (remote EMS enable/mode + ESS limits). Non-fatal.
+		r4, _ = c.readHoldingLocked(RegPlantRemoteEMSEnable, 9, SlaveIDPlant)
 		// Inverter reads inline: model-type string (15 regs) + PV1..PV4
 		// voltage/current pairs. Errors here are non-fatal.
 		rd.ModelType = c.readModelTypeLocked(ctx)
@@ -286,6 +310,28 @@ func (c *tcpClient) Read(ctx context.Context) (*Readings, error) {
 		rd.FromBatteryKW = float64(-essW) / scaleKW
 	}
 
+	if len(r3) >= 3 {
+		rd.AvailMaxDischargeW = int(U32FromRegs(r3[0], r3[1]))
+		rd.RunningState = runningStateLabel(int(r3[2]))
+	} else {
+		rd.RunningState = "unknown"
+	}
+
+	// Layout of the 9-register holding block starting at 40029:
+	//   [0] 40029 RemoteEMSEnable   U16
+	//   [1] 40030 (reserved)
+	//   [2] 40031 RemoteEMSControlMode U16
+	//   [3..4] 40032..33 ESSMaxChargeLimitKW  U32 (raw = W)
+	//   [5..6] 40034..35 ESSMaxDischargeLimitKW U32 (raw = W)
+	//   [7..8] 40036..37 PVMaxPowerLimitKW U32 (unused here)
+	if len(r4) >= 7 {
+		rd.EMSControlOK = true
+		rd.RemoteEMSEnabled = r4[0] == 1
+		rd.RemoteEMSControlMode = int(r4[2])
+		rd.ESSMaxChargeLimitW = int(U32FromRegs(r4[3], r4[4]))
+		rd.ESSMaxDischargeLimitW = int(U32FromRegs(r4[5], r4[6]))
+	}
+
 	return rd, nil
 }
 
@@ -331,6 +377,21 @@ func (c *tcpClient) readPVStringsLocked(ctx context.Context, rd *Readings) {
 		if kw > 0 && kw < 50 {
 			rd.PVStringKW[i] = kw
 		}
+	}
+}
+
+func runningStateLabel(s int) string {
+	switch s {
+	case 0:
+		return "standby"
+	case 1:
+		return "running"
+	case 2:
+		return "fault"
+	case 3:
+		return "shutdown"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
 	}
 }
 

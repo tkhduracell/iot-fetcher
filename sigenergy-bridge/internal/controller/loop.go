@@ -264,6 +264,7 @@ func readingsToPoints(host string, r *modbus.Readings, ts time.Time) []*metrics.
 			Tag("host", host).
 			Tag("operating_mode", r.OperatingMode).
 			Tag("model_type", r.ModelType).
+			Tag("running_state", r.RunningState).
 			Field("on_grid", boolInt(r.OnGrid)).
 			Field("grid_sensor_connected", boolInt(r.GridSensorConnected)).
 			At(ts),
@@ -278,12 +279,22 @@ func readingsToPoints(host string, r *modbus.Readings, ts time.Time) []*metrics.
 			Field("soc_percent", r.BatterySOCPct).
 			Field("power_to_battery_kw", r.ToBatteryKW).
 			Field("power_from_battery_kw", r.FromBatteryKW).
+			Field("avail_max_discharge_w", r.AvailMaxDischargeW).
 			At(ts),
 		metrics.NewPoint("sigenergy_pv_power").
 			Tag("host", host).
 			Tag("string", "total").
 			Field("power_kw", r.PVTotalKW).
 			At(ts),
+	}
+	if r.EMSControlOK {
+		points = append(points, metrics.NewPoint("sigenergy_ems_control").
+			Tag("host", host).
+			Field("remote_ems_enabled", boolInt(r.RemoteEMSEnabled)).
+			Field("control_mode", r.RemoteEMSControlMode).
+			Field("max_discharge_limit_w", r.ESSMaxDischargeLimitW).
+			Field("max_charge_limit_w", r.ESSMaxChargeLimitW).
+			At(ts))
 	}
 	for i, kw := range r.PVStringKW {
 		if kw <= 0 {
