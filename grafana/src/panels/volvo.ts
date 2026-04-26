@@ -39,7 +39,7 @@ export function volvoPanels(): cog.Builder<dashboard.Panel>[] {
   const chargingTs = new TimeseriesBuilder()
     .title('⚡ XC40 Laddeffekt')
     .datasource(VM_DS)
-    .unit('kwatt')
+    .unit('watt')
     .axisSoftMin(0)
     .colorScheme(paletteColor())
     .thresholds(greenThreshold())
