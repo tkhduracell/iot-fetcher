@@ -20,3 +20,6 @@ For anything involving metrics, PromQL, or series shape, use the `victoria-metri
 # Grafana
 - In Grafana dashboards, use `$__interval` with `spanNulls` instead of hardcoded lookback windows
 - Update the Grafana dashboard via the conversion script (`convert_dashboard.py`), not by editing JSON directly
+
+# CI / GitHub Actions
+- To suppress actionlint warnings, use `.github/actionlint.yaml` with an `ignore:` pattern — inline comments like `# actionlint:ignore:rule` don't work
