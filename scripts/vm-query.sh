@@ -4,8 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-TOKEN=$(grep '^INFLUX_TOKEN=' "$PROJECT_DIR/fetcher-core/python/.env" | cut -d'=' -f2-)
-DOMAIN=$(grep '^PROXY_DOMAIN=' "$PROJECT_DIR/https-proxy/.env" | cut -d'=' -f2-)
+# .env files are not committed, so in a git worktree they only exist in the main worktree root.
+MAIN_PROJECT_DIR="$(git -C "$PROJECT_DIR" worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+ENV_DIR="${MAIN_PROJECT_DIR:-$PROJECT_DIR}"
+
+TOKEN=$(grep '^INFLUX_TOKEN=' "$ENV_DIR/fetcher-core/python/.env" | cut -d'=' -f2-)
+DOMAIN=$(grep '^PROXY_DOMAIN=' "$ENV_DIR/https-proxy/.env" | cut -d'=' -f2-)
 BASE_URL="https://${DOMAIN}"
 
 usage() {
