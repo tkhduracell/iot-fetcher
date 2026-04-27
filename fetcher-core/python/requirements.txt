@@ -72,7 +72,7 @@ idna==3.12
     #   httpx
     #   requests
     #   yarl
-influxdb3-python==0.18.0
+influxdb3-python==0.19.0
     # via iot-fetcher (pyproject.toml)
 jsons==1.6.3
     # via plugp100
