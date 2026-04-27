@@ -54,9 +54,12 @@ func runPlanner(cfg *Config) {
 	cfg.deletePlanForDate(planDate)
 
 	tags := map[string]string{"run": "live", "plan_date": planDate}
-	if _, _, err := plan(cfg, planStart.UTC(), tags); err != nil {
+	_, inputs, err := plan(cfg, planStart.UTC(), tags)
+	if err != nil {
 		log.Printf("[planner] run failed: %v", err)
+		return
 	}
+	runBaselines(cfg, inputs, planDate, cfg.DryRun)
 }
 
 func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, planInputs, error) {
