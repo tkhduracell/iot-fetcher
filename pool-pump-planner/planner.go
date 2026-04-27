@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strings"
 	"time"
 )
 
@@ -98,7 +97,10 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 	if priceCount < horizonSlots {
 		log.Printf("[planner] partial prices: %d/%d slots covered (NaN slots are blocked in MILP)", priceCount, horizonSlots)
 	}
-	missing := missingInputs(priceCount, waterOK, minSlots)
+	if !waterOK {
+		log.Printf("[planner] water_temp unavailable, using default target_hours=%d", cfg.TargetHours)
+	}
+	missing := missingInputs(priceCount, minSlots)
 	if missing != "" {
 		log.Printf("[planner] missing inputs %s, falling back to static schedule", missing)
 		sch := fallbackSchedule(cfg, slots)
@@ -155,19 +157,14 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 	}, inputs, nil
 }
 
-// missingInputs returns a comma-separated list of inputs missing by enough
-// that we cannot produce an optimal plan. Prices only count as missing if
-// fewer than minSlots are priced — partial coverage is acceptable because the
-// MILP blocks NaN-priced slots (see solve()).
-func missingInputs(priceCount int, waterOK bool, minSlots int) string {
-	missing := []string{}
+// missingInputs returns a non-empty string when prices are too sparse to run
+// the MILP. water_temp absence is tolerated — computeTargetHours falls back
+// to cfg.TargetHours when waterOK is false, so the optimizer still runs.
+func missingInputs(priceCount int, minSlots int) string {
 	if priceCount < minSlots {
-		missing = append(missing, "prices")
+		return "prices"
 	}
-	if !waterOK {
-		missing = append(missing, "water_temp")
-	}
-	return strings.Join(missing, ",")
+	return ""
 }
 
 func countNonNaN(xs []float64) int {
