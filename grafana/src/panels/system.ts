@@ -2,6 +2,7 @@ import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-s
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
+import { MappingType } from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmExpr } from '../datasource.ts';
 import {
   thresholds, paletteColor,
@@ -31,6 +32,10 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
         ],
       },
     ])
+    .mappings([{
+      type: MappingType.ValueToText,
+      options: { '4294967295': { text: 'MAX', index: 0 } },
+    }])
     .withTarget(
       vmExpr('Active', 'last_over_time(sum(sigenergy_discharge_control_active[$__interval]) by ())', 'Active'),
     )
