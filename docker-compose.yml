@@ -71,6 +71,8 @@ services:
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
     restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
