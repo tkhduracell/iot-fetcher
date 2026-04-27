@@ -66,7 +66,7 @@ hyperframe==6.1.0
     # via h2
 iaqualink==0.6.0
     # via iot-fetcher (pyproject.toml)
-idna==3.12
+idna==3.13
     # via
     #   anyio
     #   httpx
