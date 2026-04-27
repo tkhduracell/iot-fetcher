@@ -202,6 +202,7 @@ func (d *Deps) clamp(ctx context.Context, reason string) error {
 		return fmt.Errorf("set discharge=0: %w", err)
 	}
 	d.emitControl(ctx, reason, 0, true)
+	d.poll(ctx)
 	return nil
 }
 
@@ -214,6 +215,7 @@ func (d *Deps) unclamp(ctx context.Context, reason string) error {
 		return fmt.Errorf("disable remote EMS: %w", err)
 	}
 	d.emitControl(ctx, reason, d.Cfg.SigenergyUnlimitedW, false)
+	d.poll(ctx)
 	return nil
 }
 
