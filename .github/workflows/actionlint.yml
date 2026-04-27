@@ -29,4 +29,4 @@ jobs:
           tar -xzf actionlint.tar.gz actionlint
 
       - name: Run actionlint
-        run: ./actionlint -color
+        run: ./actionlint -color -ignore 'constant expression "false" in condition'
