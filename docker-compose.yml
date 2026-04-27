@@ -71,6 +71,8 @@ services:
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
     restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -85,6 +87,8 @@ services:
   pool-pump-planner:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/pool-pump-planner:latest
     restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
     depends_on:
       - database-auth
     labels:
