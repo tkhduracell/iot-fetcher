@@ -247,6 +247,7 @@ func (d *Deps) emitControl(ctx context.Context, reason string, limitW int, activ
 }
 
 func (d *Deps) poll(ctx context.Context) {
+	start := time.Now()
 	r, err := d.Modbus.Read(ctx)
 	if err != nil {
 		d.Log.WarnContext(ctx, "modbus read failed", "err", err)
@@ -255,6 +256,13 @@ func (d *Deps) poll(ctx context.Context) {
 	points := readingsToPoints(d.Cfg.SigenergyHost, r, d.Now())
 	if err := d.Metrics.Write(ctx, points); err != nil {
 		d.Log.WarnContext(ctx, "metrics write (poll) failed", "err", err)
+	}
+	meta := metrics.NewPoint("sigenergy_bridge").
+		Tag("host", d.Cfg.SigenergyHost).
+		Field("duration_ms", time.Since(start).Milliseconds()).
+		At(d.Now())
+	if err := d.Metrics.Write(ctx, []*metrics.Point{meta}); err != nil {
+		d.Log.WarnContext(ctx, "metrics write (meta) failed", "err", err)
 	}
 }
 
