@@ -51,8 +51,8 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .unit('watt')
     .decimals(0)
     .thresholds(thresholds([
-      { color: 'green', value: null },
-      { color: 'red', value: 1 },
+      { color: 'red', value: null },
+      { color: 'green', value: 1 },
     ]))
     .withTarget(
       vmExpr('A', 'last_over_time(sum(sigenergy_ems_control_max_discharge_limit_w[$__interval]) by ())'),
@@ -75,5 +75,21 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     )
     .gridPos({ h: 8, w: 8, x: 16, y: 136 });
 
-  return [dischargeControl, dischargeLimitStat, vmBackup];
+  // ⏱ Poll-tid Sigenergy (timeseries, duration_ms per poll cycle)
+  const pollDuration = new TimeseriesBuilder()
+    .title('⏱ Poll-tid Sigenergy')
+    .datasource(VM_DS)
+    .interval('1m')
+    .colorScheme(paletteColor())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .unit('ms')
+    .min(0)
+    .insertNulls(SPAN_NULLS_MS)
+    .withTarget(
+      vmExpr('Duration', 'last_over_time(sigenergy_bridge_duration_ms[$__interval])', 'Duration (ms)'),
+    )
+    .gridPos({ h: 8, w: 24, x: 0, y: 144 });
+
+  return [dischargeControl, dischargeLimitStat, vmBackup, pollDuration];
 }
