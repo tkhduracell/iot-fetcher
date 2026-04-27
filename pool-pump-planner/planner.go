@@ -78,6 +78,7 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 	} else {
 		solar = cfg.fetchSolarForecast(slots)
 	}
+	solar = cfg.applySolarMask(solar, slots)
 	waterTemp, waterOK := cfg.fetchWaterTempAt(now)
 
 	inputs := planInputs{

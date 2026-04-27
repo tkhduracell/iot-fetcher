@@ -120,6 +120,20 @@ func samplesToKWhPerSlot(samples []promSample, slots []time.Time, slotMinutes in
 	return out
 }
 
+// applySolarMask multiplies each slot's solar value by the per-hour factor
+// from cfg.SolarHourlyMask (indexed by local clock hour). A nil mask is a
+// no-op. Useful for zeroing hours where a building extension shades the panels.
+func (c *Config) applySolarMask(solar []float64, slots []time.Time) []float64 {
+	if len(c.SolarHourlyMask) != 24 {
+		return solar
+	}
+	out := make([]float64, len(solar))
+	for i, s := range slots {
+		out[i] = solar[i] * c.SolarHourlyMask[s.In(c.Timezone).Hour()]
+	}
+	return out
+}
+
 func toFloat(v any) (float64, bool) {
 	switch x := v.(type) {
 	case float64:

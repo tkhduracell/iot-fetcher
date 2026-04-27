@@ -54,9 +54,13 @@ type Config struct {
 	TargetTempC          float64
 	HeatingRateCPerHour  float64
 
-	PriceArea    string
-	Timezone     *time.Location
-	SlotMinutes  int
+	PriceArea       string
+	Timezone        *time.Location
+	SlotMinutes     int
+	// SolarHourlyMask is a 24-element slice of multipliers (0.0–1.0) indexed
+	// by local clock hour. nil means no masking (all slots pass through).
+	// Use POOL_SOLAR_HOURLY_MASK=0,0,...,1,1,... to zero shaded hours.
+	SolarHourlyMask []float64
 
 	// Scheduling
 	PlanTime string // HH:MM, site-local
@@ -110,9 +114,10 @@ func loadConfig() *Config {
 		TargetTempC:         getenvFloat("POOL_TARGET_TEMP_C", 29),
 		HeatingRateCPerHour: getenvFloat("POOL_HEATING_RATE_C_PER_HOUR", 0),
 
-		PriceArea:   getenv("POOL_PRICE_AREA", "SE4"),
-		SlotMinutes: getenvInt("POOL_SLOT_MINUTES", 15),
-		PlanTime:    getenv("POOL_PLAN_TIME", "14:15"),
+		PriceArea:       getenv("POOL_PRICE_AREA", "SE4"),
+		SlotMinutes:     getenvInt("POOL_SLOT_MINUTES", 15),
+		PlanTime:        getenv("POOL_PLAN_TIME", "14:15"),
+		SolarHourlyMask: getenvFloatList("POOL_SOLAR_HOURLY_MASK", nil),
 	}
 
 	tzName := getenv("POOL_TIMEZONE", "Europe/Stockholm")
@@ -178,6 +183,29 @@ func getenvFloat(k string, def float64) float64 {
 		}
 	}
 	return def
+}
+
+func getenvFloatList(k string, def []float64) []float64 {
+	v, ok := os.LookupEnv(k)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def
+	}
+	out := []float64{}
+	for _, p := range strings.Split(v, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		f, err := strconv.ParseFloat(p, 64)
+		if err != nil {
+			continue
+		}
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 func getenvIntList(k string, def []int) []int {
