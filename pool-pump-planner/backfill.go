@@ -143,7 +143,7 @@ func writeBaseline(cfg *Config, in planInputs, windowHours []int, runTag, anchor
 		// prints the schedule which is noisy for baselines; skip it entirely.
 		return stats.expectedCostSEK
 	}
-	if err := writePlan(cfg, in.Slots, sch, in.Prices, in.Solar, stats,
+	if err := writePlan(cfg, in.Slots, sch, in.Prices, in.Solar, in.SolarRaw, stats,
 		in.WaterTemp, in.WaterOK, len(windowHours), "baseline", "none", tags); err != nil {
 		// Non-fatal: baselines are comparison only, don't fail the day.
 		fmt.Printf("[backfill] baseline %s write failed: %v\n", runTag, err)
