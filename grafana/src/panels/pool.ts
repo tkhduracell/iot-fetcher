@@ -132,7 +132,8 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenThreshold())
     .legend(legendBottom())
     .tooltip(tooltipMulti())
-    .insertNulls(SPAN_NULLS_MS)
+    .insertNulls(86_400_000)
+    .interval('1d')
     .overrides([
       {
         matcher: { id: 'byName', options: 'planned_hours' },
@@ -168,7 +169,7 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('D', 'sum without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_night"})', 'night_baseline_sek'))
     .withTarget(vmExpr('E', 'sum without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_afternoon"})', 'afternoon_baseline_sek'))
     .withTarget(vmExpr('C', 'sum without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
-    .timeFrom('now-30d')
+    .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
   return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, pumpPlan, pumpPlanBackfill];
