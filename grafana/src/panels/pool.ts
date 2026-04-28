@@ -160,15 +160,15 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     // anchor_date (backfill) and plan_date (live) are both removed so the two
     // sources collapse into a single line. Live runs fill in the most recent
     // days that the backfill subcommand hasn't covered yet.
-    .withTarget(vmExpr('A', 'max without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_planned_hours{run=~"backfill|live"})', 'planned_hours'))
-    .withTarget(vmExpr('B', 'max without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run=~"backfill|live"})', 'expected_cost_sek'))
+    .withTarget(vmExpr('A', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_planned_hours{run=~"backfill|live"})', 'planned_hours'))
+    .withTarget(vmExpr('B', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run=~"backfill|live"})', 'expected_cost_sek'))
     // Night/afternoon fixed-schedule baselines emitted alongside every plan
     // (both backfill and live). Plotting all three on the same panel makes the
     // optimizer's value directly visible: the gap between yellow and the
     // baselines is SEK the planner saved vs a naive always-at-this-time rule.
-    .withTarget(vmExpr('D', 'max without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_night"})', 'night_baseline_sek'))
-    .withTarget(vmExpr('E', 'max without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_afternoon"})', 'afternoon_baseline_sek'))
-    .withTarget(vmExpr('C', 'max without(anchor_date, plan_date, mode, missing_inputs) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
+    .withTarget(vmExpr('D', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_night"})', 'night_baseline_sek'))
+    .withTarget(vmExpr('E', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_afternoon"})', 'afternoon_baseline_sek'))
+    .withTarget(vmExpr('C', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
     .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
