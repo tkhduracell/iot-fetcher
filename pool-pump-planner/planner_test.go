@@ -95,7 +95,7 @@ func TestBuildPlanPointsOmitsNaNPrice(t *testing.T) {
 	stats := planStats{costPerSlot: []float64{0, 0, 0}}
 	tags := map[string]string{"run": "live", "plan_date": "2026-04-23"}
 
-	points := buildPlanPoints(cfg, slots, sch, prices, solar, stats, 0, false, 6, "optimal", "", tags)
+	points := buildPlanPoints(cfg, slots, sch, prices, solar, solar, stats, 0, false, 6, "optimal", "", tags)
 
 	if len(points) != len(slots)+1 {
 		t.Fatalf("expected %d points (slots + summary), got %d", len(slots)+1, len(points))

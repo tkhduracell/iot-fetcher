@@ -102,7 +102,8 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .overrides([
       overrideDisplayAndColor('on', 'Pump på', 'blue'),
       overrideDisplayAndColor('price_sek_per_kwh', 'Spotpris (SEK/kWh)', 'yellow'),
-      overrideDisplayAndColor('solar_kwh', 'Solprognos (kWh)', 'orange'),
+      overrideDisplayAndColor('solar_forecast_masked_kwh', 'Solprognos maskad (kWh)', 'orange'),
+      overrideDisplayAndColor('solar_forecast_kwh', 'Solprognos rådata (kWh)', 'light-orange'),
     ])
     // Strictly run="live" — the untagged legacy series in VM is a fossil
     // mixture of points from older deployments (e.g. when slot-size was 30m)
@@ -111,7 +112,8 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     // fallback on the same day) into one line.
     .withTarget(vmExpr('A', 'max(last_over_time(pool_iqpump_plan_on{run="live"}[$__interval]))', 'on'))
     .withTarget(vmExpr('B', 'max(last_over_time(pool_iqpump_plan_price_sek_per_kwh{run="live"}[$__interval]))', 'price_sek_per_kwh'))
-    .withTarget(vmExpr('C', 'max(last_over_time(pool_iqpump_plan_solar_kwh{run="live"}[$__interval]))', 'solar_kwh'))
+    .withTarget(vmExpr('C', 'max(last_over_time(pool_iqpump_plan_solar_forecast_masked_kwh{run="live"}[$__interval]))', 'solar_forecast_masked_kwh'))
+    .withTarget(vmExpr('D', 'max(last_over_time(pool_iqpump_plan_solar_forecast_kwh{run="live"}[$__interval]))', 'solar_forecast_kwh'))
     // Show the full ISO week (Mon 00:00 -> Sun 23:59:59) so the 24h forecast
     // sits in context of the rest of the week. Grafana rejects negative
     // timeShift, so this week-anchored form is the documented workaround for

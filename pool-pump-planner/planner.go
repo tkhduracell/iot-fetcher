@@ -33,7 +33,8 @@ type planReport struct {
 type planInputs struct {
 	Slots     []time.Time
 	Prices    []float64
-	Solar     []float64
+	Solar     []float64    // post-mask
+	SolarRaw  []float64    // pre-mask forecast
 	WaterTemp float64
 	WaterOK   bool
 }
@@ -72,19 +73,20 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 	}
 
 	prices := cfg.fetchHourlyPrices(slots)
-	var solar []float64
+	var solarRaw []float64
 	if cfg.Backfill {
-		solar = cfg.fetchSolarHistoricalKWh(slots)
+		solarRaw = cfg.fetchSolarHistoricalKWh(slots)
 	} else {
-		solar = cfg.fetchSolarForecast(slots)
+		solarRaw = cfg.fetchSolarForecast(slots)
 	}
-	solar = cfg.applySolarMask(solar, slots)
+	solar := cfg.applySolarMask(solarRaw, slots)
 	waterTemp, waterOK := cfg.fetchWaterTempAt(now)
 
 	inputs := planInputs{
 		Slots:     slots,
 		Prices:    prices,
 		Solar:     solar,
+		SolarRaw:  solarRaw,
 		WaterTemp: waterTemp,
 		WaterOK:   waterOK,
 	}
@@ -107,7 +109,7 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 		sch := fallbackSchedule(cfg, slots)
 		stats := fallbackStats(cfg, sch, prices, solar)
 		tgt := len(cfg.FallbackNightHours) + len(cfg.FallbackAfternoonHours)
-		if err := writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", missing, extraTags); err != nil {
+		if err := writePlan(cfg, slots, sch, prices, solar, solarRaw, stats, waterTemp, waterOK, tgt, "fallback", missing, extraTags); err != nil {
 			return planReport{}, inputs, err
 		}
 		return planReport{
@@ -131,7 +133,7 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 		sch = fallbackSchedule(cfg, slots)
 		stats = fallbackStats(cfg, sch, prices, solar)
 		tgt := len(cfg.FallbackNightHours) + len(cfg.FallbackAfternoonHours)
-		if err := writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, tgt, "fallback", "infeasible", extraTags); err != nil {
+		if err := writePlan(cfg, slots, sch, prices, solar, solarRaw, stats, waterTemp, waterOK, tgt, "fallback", "infeasible", extraTags); err != nil {
 			return planReport{}, inputs, err
 		}
 		return planReport{
@@ -144,7 +146,7 @@ func plan(cfg *Config, now time.Time, extraTags map[string]string) (planReport, 
 			OnHours:     onHoursFromSchedule(sch, slots, cfg.Timezone),
 		}, inputs, nil
 	}
-	if err := writePlan(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, "optimal", "", extraTags); err != nil {
+	if err := writePlan(cfg, slots, sch, prices, solar, solarRaw, stats, waterTemp, waterOK, targetHours, "optimal", "", extraTags); err != nil {
 		return planReport{}, inputs, err
 	}
 	return planReport{
@@ -337,7 +339,7 @@ func solve(cfg *Config, slots []time.Time, prices, solar []float64, targetHours 
 // buildPlanPoints assembles the line-protocol points for one plan run:
 // 96 slot points plus a single summary point. Pure — no IO — so tests can
 // assert the tag/field shape directly.
-func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar []float64, stats planStats,
+func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar, solarRaw []float64, stats planStats,
 	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) []*Point {
 	applyTags := func(p *Point) *Point {
 		for k, v := range extraTags {
@@ -360,11 +362,15 @@ func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar []
 		if len(prices) > t && !math.IsNaN(prices[t]) {
 			p.Field("price_sek_per_kwh", prices[t])
 		}
-		solarField := 0.0
+		maskedField := 0.0
 		if len(solar) > t {
-			solarField = solar[t]
+			maskedField = solar[t]
 		}
-		p.Field("solar_kwh", solarField)
+		rawField := 0.0
+		if len(solarRaw) > t {
+			rawField = solarRaw[t]
+		}
+		p.Field("solar_forecast_kwh", rawField).Field("solar_forecast_masked_kwh", maskedField)
 		points = append(points, p)
 	}
 
@@ -396,9 +402,9 @@ func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar []
 	return points
 }
 
-func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar []float64, stats planStats,
+func writePlan(cfg *Config, slots []time.Time, sch []int, prices, solar, solarRaw []float64, stats planStats,
 	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) error {
-	points := buildPlanPoints(cfg, slots, sch, prices, solar, stats, waterTemp, waterOK, targetHours, mode, missing, extraTags)
+	points := buildPlanPoints(cfg, slots, sch, prices, solar, solarRaw, stats, waterTemp, waterOK, targetHours, mode, missing, extraTags)
 
 	missingTag := missing
 	if missingTag == "" {
