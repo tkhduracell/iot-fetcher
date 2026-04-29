@@ -88,10 +88,11 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmMetric('B', 'pool_iqpump_motordata', 'speed'))
     .gridPos({ h: 7, w: 7, x: 17, y: 37 });
 
-  // Poolpump plan (timeseries) — 24h MILP schedule from pool-pump-planner
+  // Poolpump plan (timeseries) — MILP schedule from pool-pump-planner
   const pumpPlan = new TimeseriesBuilder()
-    .title('Poolpump plan (24h)')
+    .title('Poolpump plan')
     .datasource(VM_DS)
+    .maxDataPoints(984)
     .interval('15m')
     .lineInterpolation('stepAfter' as any)
     .colorScheme(paletteColor())
@@ -114,12 +115,10 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('B', 'max(last_over_time(pool_iqpump_plan_price_sek_per_kwh{run="live"}[$__interval]))', 'price_sek_per_kwh'))
     .withTarget(vmExpr('C', 'max(last_over_time(pool_iqpump_plan_solar_forecast_masked_kwh{run="live"}[$__interval]))', 'solar_forecast_masked_kwh'))
     .withTarget(vmExpr('D', 'max(last_over_time(pool_iqpump_plan_solar_forecast_kwh{run="live"}[$__interval]))', 'solar_forecast_kwh'))
-    // Show the full ISO week (Mon 00:00 -> Sun 23:59:59) so the 24h forecast
-    // sits in context of the rest of the week. Grafana rejects negative
-    // timeShift, so this week-anchored form is the documented workaround for
-    // including future slots in a panel with a bounded window.
+    // Anchor to the start of the ISO week so the panel shows the week so far,
+    // with a 1h shift to keep the most recent slot in view.
     .timeFrom('now/w')
-    .timeShift('0w/w')
+    .timeShift('1h')
     .gridPos({ h: 8, w: 12, x: 0, y: 52 });
 
   // Poolpump plan — 30-day backfill: per-day summary of planned hours + cost
