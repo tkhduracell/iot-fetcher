@@ -21,6 +21,9 @@ export function buildDashboard() {
     .liveNow(true)
     .timepicker(
       new TimePickerBuilder().quickRanges([
+        new TimeOptionBuilder().display('2h').from('now-2h').to('now'),
+        new TimeOptionBuilder().display('6h').from('now-6h').to('now'),
+        new TimeOptionBuilder().display('12h').from('now-12h').to('now'),
         new TimeOptionBuilder().display('24h').from('now-24h').to('now'),
         new TimeOptionBuilder().display('48h').from('now-48h').to('now'),
         new TimeOptionBuilder().display('7 days').from('now-7d').to('now'),
