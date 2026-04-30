@@ -42,7 +42,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
       vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Laddgräns'),
     )
     .withTarget(
-      vmExpr('Power', 'last_over_time(ha_wallbox_pulsar_max_sn_992144_charging_power_value[$__interval] * 1000)', 'Laddning'),
+      vmExpr('Power', 'last_over_time(ha_wallbox_pulsar_max_sn_992144_charging_power_value[$__interval]) * 1000', 'Laddning'),
     )
     .gridPos({ h: 8, w: 12, x: 0, y: 136 });
 
