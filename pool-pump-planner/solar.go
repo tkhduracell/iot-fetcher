@@ -127,9 +127,11 @@ func (c *Config) applySolarMask(solar []float64, slots []time.Time) []float64 {
 	if len(c.SolarHourlyMask) != 24 {
 		return solar
 	}
+	n := min(len(solar), len(slots))
 	out := make([]float64, len(solar))
-	for i, s := range slots {
-		out[i] = solar[i] * c.SolarHourlyMask[s.In(c.Timezone).Hour()]
+	copy(out, solar)
+	for i := range n {
+		out[i] = solar[i] * c.SolarHourlyMask[slots[i].In(c.Timezone).Hour()]
 	}
 	return out
 }
