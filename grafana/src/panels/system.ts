@@ -24,11 +24,10 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(SPAN_NULLS_MS)
     .overrides([
       {
-        matcher: { id: 'byRegexp', options: 'Lim.*' },
+        matcher: { id: 'byRegexp', options: 'Ladd.*' },
         properties: [
           { id: 'custom.axisPlacement', value: 'right' },
           { id: 'unit', value: 'watt' },
-          { id: 'displayName', value: 'Gräns (W)' },
         ],
       },
     ])
@@ -40,7 +39,10 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
       vmExpr('Active', 'last_over_time(sum(sigenergy_discharge_control_active[$__interval]) by ())', 'Active'),
     )
     .withTarget(
-      vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Limit'),
+      vmExpr('Limit', 'last_over_time(sum(sigenergy_discharge_control_limit_w[$__interval]) by ())', 'Laddgräns'),
+    )
+    .withTarget(
+      vmExpr('Power', 'last_over_time(ha_wallbox_pulsar_max_sn_992144_charging_power_value[$__interval]) * 1000', 'Laddning'),
     )
     .gridPos({ h: 8, w: 12, x: 0, y: 136 });
 
