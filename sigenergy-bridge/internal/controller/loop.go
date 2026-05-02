@@ -1,16 +1,17 @@
 // Package controller wires the HA WebSocket listener, the Sigenergy Modbus
 // client, and the VictoriaMetrics writer into a single state machine:
 // clamp the battery's discharge to 0 while the Wallbox is charging, and
-// hand control back to the inverter's default EMS when idle.
+// restore the configured ceiling when idle.
 //
-// Clamp strategy: enable remote EMS (40029=1) and set control mode to
-// Standby (40031=0x01). In Standby the inverter neither charges nor
-// discharges the ESS, so any PV flows straight to loads/grid and the grid
-// covers the Wallbox without routing through the house battery. As a
-// defence-in-depth we also write max-discharge=0 (40034). On exit we do
-// the mirror: restore the discharge limit to the configured sentinel and
-// disable remote EMS, which hands control back to the user's normal mode
-// (typically max self-consumption or the Sigen AI mode).
+// Clamp strategy: write ESS max discharge limit (40034) only — to 0 for a
+// clamp, to the configured ceiling for an unclamp. We do NOT toggle
+// remote EMS (40029) or its control mode (40031). Touching 40029 forces
+// the inverter's EMS work mode (read-only register 30003) to "remote EMS"
+// while enabled, and on disable the firmware falls back to max self-
+// consumption rather than restoring the user's previous selection —
+// silently overwriting Sigen AI mode. SPC113+ firmware honours 40034
+// directly while EMS work mode stays at the user's choice, which is what
+// we want.
 package controller
 
 import (
@@ -54,12 +55,6 @@ func Run(ctx context.Context, d Deps) error {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	priorMode, err := d.Modbus.ReadOperatingMode(ctx)
-	if err != nil {
-		d.Log.WarnContext(ctx, "could not read operating mode on startup; assuming max self-consumption",
-			"err", err)
-		priorMode = modbus.EMSMaxSelfConsumption
-	}
 
 	// Resolve the "unlimited" discharge ceiling. Priority:
 	//   1. Explicit SIGENERGY_DISCHARGE_UNLIMITED_W override (>0)
@@ -86,7 +81,6 @@ func Run(ctx context.Context, d Deps) error {
 	}
 
 	d.Log.InfoContext(ctx, "controller starting",
-		"prior_operating_mode", priorMode,
 		"discharge_unlimited_w", unlimitedW,
 		"discharge_unlimited_source", source,
 		"poll_interval", d.Cfg.PollInterval,
@@ -195,9 +189,6 @@ func isCharging(state string, chargingStates []string) bool {
 
 func (d *Deps) clamp(ctx context.Context, reason string) error {
 	d.Log.InfoContext(ctx, "clamping discharge", "reason", reason)
-	if err := d.Modbus.EnableRemoteEMS(ctx, modbus.ControlModeStandby); err != nil {
-		return fmt.Errorf("enable remote EMS: %w", err)
-	}
 	if err := d.Modbus.SetDischargeLimitW(ctx, 0); err != nil {
 		return fmt.Errorf("set discharge=0: %w", err)
 	}
@@ -210,9 +201,6 @@ func (d *Deps) unclamp(ctx context.Context, reason string) error {
 	d.Log.InfoContext(ctx, "restoring discharge", "reason", reason, "limit_w", d.Cfg.SigenergyUnlimitedW)
 	if err := d.Modbus.SetDischargeLimitW(ctx, d.Cfg.SigenergyUnlimitedW); err != nil {
 		return fmt.Errorf("restore discharge: %w", err)
-	}
-	if err := d.Modbus.DisableRemoteEMS(ctx); err != nil {
-		return fmt.Errorf("disable remote EMS: %w", err)
 	}
 	d.emitControl(ctx, reason, d.Cfg.SigenergyUnlimitedW, false)
 	d.poll(ctx)

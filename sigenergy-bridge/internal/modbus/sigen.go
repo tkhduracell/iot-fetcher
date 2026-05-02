@@ -30,24 +30,21 @@ type Readings struct {
 	RunningState       string // 30051, standby/running/fault/shutdown
 
 	// Remote EMS holding registers (40029..40036). Valid only when EMSControlOK.
-	EMSControlOK         bool
-	RemoteEMSEnabled     bool
-	RemoteEMSControlMode int
-	ESSMaxChargeLimitW   int // 40032
+	EMSControlOK          bool
+	RemoteEMSEnabled      bool
+	RemoteEMSControlMode  int
+	ESSMaxChargeLimitW    int // 40032
 	ESSMaxDischargeLimitW int // 40034
 }
 
 // Client is the Sigenergy surface consumed by the controller.
 type Client interface {
 	Read(ctx context.Context) (*Readings, error)
-	ReadOperatingMode(ctx context.Context) (int, error)
 	// ReadPlantMaxPowerW returns the plant nameplate (register 30010) in
 	// watts. Used at startup to auto-size the "unlimited" discharge
 	// sentinel so we never write a value above what the inverter is built
 	// to handle.
 	ReadPlantMaxPowerW(ctx context.Context) (int, error)
-	EnableRemoteEMS(ctx context.Context, controlMode int) error
-	DisableRemoteEMS(ctx context.Context) error
 	SetDischargeLimitW(ctx context.Context, watts int) error
 	SetChargingLimitW(ctx context.Context, watts int) error
 	Close() error
@@ -84,10 +81,10 @@ func NewTCP(opts Opts) (Client, error) {
 }
 
 type tcpClient struct {
-	opts     Opts
-	client   *smb.ModbusClient
-	mu       sync.Mutex // simonvetter is not goroutine-safe
-	opened   bool
+	opts   Opts
+	client *smb.ModbusClient
+	mu     sync.Mutex // simonvetter is not goroutine-safe
+	opened bool
 }
 
 func (c *tcpClient) Close() error {
@@ -173,14 +170,6 @@ func (c *tcpClient) writeHolding(addr uint16, values []uint16, slave uint8) erro
 	})
 }
 
-func (c *tcpClient) ReadOperatingMode(ctx context.Context) (int, error) {
-	regs, err := c.readInput(RegPlantEMSWorkMode, 1, SlaveIDPlant)
-	if err != nil {
-		return 0, fmt.Errorf("read EMS work mode: %w", err)
-	}
-	return int(regs[0]), nil
-}
-
 func (c *tcpClient) ReadPlantMaxPowerW(ctx context.Context) (int, error) {
 	regs, err := c.readInput(RegPlantMaxActivePower, 2, SlaveIDPlant)
 	if err != nil {
@@ -188,27 +177,6 @@ func (c *tcpClient) ReadPlantMaxPowerW(ctx context.Context) (int, error) {
 	}
 	// U32 register pair, raw value = kW × 1000 = watts.
 	return int(U32FromRegs(regs[0], regs[1])), nil
-}
-
-func (c *tcpClient) EnableRemoteEMS(ctx context.Context, controlMode int) error {
-	c.opts.Log.InfoContext(ctx, "enabling remote EMS", "control_mode", controlMode)
-	return c.withConnection(func() error {
-		if err := c.client.SetUnitId(SlaveIDPlant); err != nil {
-			return err
-		}
-		if err := c.client.WriteRegister(RegPlantRemoteEMSEnable, 1); err != nil {
-			return fmt.Errorf("enable remote EMS: %w", err)
-		}
-		if err := c.client.WriteRegister(RegPlantRemoteEMSControlMode, uint16(controlMode)); err != nil {
-			return fmt.Errorf("set control mode: %w", err)
-		}
-		return nil
-	})
-}
-
-func (c *tcpClient) DisableRemoteEMS(ctx context.Context) error {
-	c.opts.Log.InfoContext(ctx, "disabling remote EMS")
-	return c.writeHolding(RegPlantRemoteEMSEnable, []uint16{0}, SlaveIDPlant)
 }
 
 func (c *tcpClient) SetDischargeLimitW(ctx context.Context, watts int) error {
@@ -424,19 +392,8 @@ type dryRunClient struct {
 func (d *dryRunClient) Read(ctx context.Context) (*Readings, error) {
 	return d.inner.Read(ctx)
 }
-func (d *dryRunClient) ReadOperatingMode(ctx context.Context) (int, error) {
-	return d.inner.ReadOperatingMode(ctx)
-}
 func (d *dryRunClient) ReadPlantMaxPowerW(ctx context.Context) (int, error) {
 	return d.inner.ReadPlantMaxPowerW(ctx)
-}
-func (d *dryRunClient) EnableRemoteEMS(ctx context.Context, controlMode int) error {
-	d.log.InfoContext(ctx, "dry-run: EnableRemoteEMS", "control_mode", controlMode)
-	return nil
-}
-func (d *dryRunClient) DisableRemoteEMS(ctx context.Context) error {
-	d.log.InfoContext(ctx, "dry-run: DisableRemoteEMS")
-	return nil
 }
 func (d *dryRunClient) SetDischargeLimitW(ctx context.Context, watts int) error {
 	d.log.InfoContext(ctx, "dry-run: SetDischargeLimitW", "watts", watts)
