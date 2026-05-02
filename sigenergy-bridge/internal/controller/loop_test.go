@@ -18,38 +18,22 @@ import (
 // --- fakes ---
 
 type fakeModbus struct {
-	mu                sync.Mutex
-	operatingMode     int
-	calls             []string // ordered trace of write calls (type:arg)
-	readCalls         atomic.Int32
+	mu        sync.Mutex
+	calls     []string // ordered trace of write calls (type:arg)
+	readCalls atomic.Int32
 }
 
 func (f *fakeModbus) Read(ctx context.Context) (*modbus.Readings, error) {
 	f.readCalls.Add(1)
 	return &modbus.Readings{
-		OperatingMode: "max_self_consumption",
+		OperatingMode: "sigen_ai",
 		ModelType:     "SigenStor",
 		BatterySOCPct: 55,
 		FromBatteryKW: 1.2,
 	}, nil
 }
-func (f *fakeModbus) ReadOperatingMode(ctx context.Context) (int, error) {
-	return f.operatingMode, nil
-}
 func (f *fakeModbus) ReadPlantMaxPowerW(ctx context.Context) (int, error) {
 	return 10000, nil
-}
-func (f *fakeModbus) EnableRemoteEMS(ctx context.Context, controlMode int) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "enable")
-	return nil
-}
-func (f *fakeModbus) DisableRemoteEMS(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, "disable")
-	return nil
 }
 func (f *fakeModbus) SetDischargeLimitW(ctx context.Context, watts int) error {
 	f.mu.Lock()
@@ -62,7 +46,7 @@ func (f *fakeModbus) SetDischargeLimitW(ctx context.Context, watts int) error {
 	return nil
 }
 func (f *fakeModbus) SetChargingLimitW(ctx context.Context, watts int) error { return nil }
-func (f *fakeModbus) Close() error                                          { return nil }
+func (f *fakeModbus) Close() error                                           { return nil }
 
 type fakeHA struct {
 	events    chan ha.Event
@@ -113,7 +97,7 @@ func newCfg() *config.Config {
 }
 
 func newDeps(t *testing.T) (*fakeModbus, *fakeHA, *fakeMetrics, Deps) {
-	fm := &fakeModbus{operatingMode: modbus.EMSMaxSelfConsumption}
+	fm := &fakeModbus{}
 	fh := &fakeHA{events: make(chan ha.Event, 4), connected: make(chan bool, 4)}
 	fmx := &fakeMetrics{}
 	d := Deps{
@@ -137,10 +121,10 @@ func TestRun_ChargingStartedThenStopped(t *testing.T) {
 	go func() { done <- Run(ctx, d) }()
 
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Ready", NewState: "Charging"}
-	waitFor(t, func() bool { return callCount(fm) >= 2 })
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
 
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Charging", NewState: "Ready"}
-	waitFor(t, func() bool { return callCount(fm) >= 4 })
+	waitFor(t, func() bool { return callCount(fm) >= 2 })
 
 	cancel()
 	select {
@@ -151,7 +135,7 @@ func TestRun_ChargingStartedThenStopped(t *testing.T) {
 
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
-	want := []string{"enable", "discharge=0", "discharge=unlimited", "disable"}
+	want := []string{"discharge=0", "discharge=unlimited"}
 	if !equal(fm.calls, want) {
 		t.Errorf("calls: got %v want %v", fm.calls, want)
 	}
@@ -172,11 +156,11 @@ func TestRun_FailsafeOnHADisconnect(t *testing.T) {
 	go func() { done <- Run(ctx, d) }()
 
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Ready", NewState: "Charging"}
-	waitFor(t, func() bool { return callCount(fm) >= 2 })
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
 
 	fh.connected <- false
 
-	waitFor(t, func() bool { return callCount(fm) >= 4 })
+	waitFor(t, func() bool { return callCount(fm) >= 2 })
 
 	cancel()
 	<-done
@@ -195,7 +179,7 @@ func TestRun_ShutdownRestoresIfClamped(t *testing.T) {
 	go func() { done <- Run(ctx, d) }()
 
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Ready", NewState: "Charging"}
-	waitFor(t, func() bool { return callCount(fm) >= 2 })
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
 
 	cancel()
 	select {
@@ -207,8 +191,8 @@ func TestRun_ShutdownRestoresIfClamped(t *testing.T) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	last := fm.calls[len(fm.calls)-1]
-	if last != "disable" {
-		t.Errorf("last call should be disable; got %v (%v)", last, fm.calls)
+	if last != "discharge=unlimited" {
+		t.Errorf("last call should restore discharge; got %v (%v)", last, fm.calls)
 	}
 	reasons := fmx.controlReasons()
 	if len(reasons) < 2 || reasons[len(reasons)-1] != "shutdown" {
@@ -231,10 +215,10 @@ func TestRun_MaxClampDurationReleases(t *testing.T) {
 	go func() { done <- Run(ctx, d) }()
 
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Ready", NewState: "Charging"}
-	waitFor(t, func() bool { return callCount(fm) >= 2 })
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
 
 	// Do NOT disconnect HA — we want to verify max-duration (not failsafe).
-	waitFor(t, func() bool { return callCount(fm) >= 4 })
+	waitFor(t, func() bool { return callCount(fm) >= 2 })
 
 	cancel()
 	<-done
@@ -303,9 +287,9 @@ func TestRun_AutoDetectsDischargeCeiling(t *testing.T) {
 
 	// Drive one clamp/unclamp so we see the discharge writes.
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Ready", NewState: "Charging"}
-	waitFor(t, func() bool { return callCount(fm) >= 2 })
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
 	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", OldState: "Charging", NewState: "Ready"}
-	waitFor(t, func() bool { return callCount(fm) >= 4 })
+	waitFor(t, func() bool { return callCount(fm) >= 2 })
 
 	cancel()
 	<-done

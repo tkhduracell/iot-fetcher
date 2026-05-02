@@ -44,12 +44,6 @@ func TestDryRun_AllowsWrites(t *testing.T) {
 	dry := DryRun(&stubClient{}, log)
 
 	ctx := context.Background()
-	if err := dry.EnableRemoteEMS(ctx, ControlModeStandby); err != nil {
-		t.Errorf("EnableRemoteEMS: %v", err)
-	}
-	if err := dry.DisableRemoteEMS(ctx); err != nil {
-		t.Errorf("DisableRemoteEMS: %v", err)
-	}
 	if err := dry.SetDischargeLimitW(ctx, 0); err != nil {
 		t.Errorf("SetDischargeLimitW: %v", err)
 	}
@@ -64,10 +58,7 @@ type stubClient struct{}
 func (stubClient) Read(ctx context.Context) (*Readings, error) {
 	return &Readings{}, nil
 }
-func (stubClient) ReadOperatingMode(ctx context.Context) (int, error)            { return 0, nil }
-func (stubClient) ReadPlantMaxPowerW(ctx context.Context) (int, error)            { return 10000, nil }
-func (stubClient) EnableRemoteEMS(ctx context.Context, controlMode int) error    { return nil }
-func (stubClient) DisableRemoteEMS(ctx context.Context) error                    { return nil }
-func (stubClient) SetDischargeLimitW(ctx context.Context, watts int) error       { return nil }
-func (stubClient) SetChargingLimitW(ctx context.Context, watts int) error        { return nil }
-func (stubClient) Close() error                                                  { return nil }
+func (stubClient) ReadPlantMaxPowerW(ctx context.Context) (int, error)     { return 10000, nil }
+func (stubClient) SetDischargeLimitW(ctx context.Context, watts int) error { return nil }
+func (stubClient) SetChargingLimitW(ctx context.Context, watts int) error  { return nil }
+func (stubClient) Close() error                                            { return nil }
