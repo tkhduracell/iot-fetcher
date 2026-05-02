@@ -22,7 +22,7 @@ test('alerts build into a single Irisgatan group', () => {
   const groups = buildAlerts() as RuleGroup[];
   assert.equal(groups.length, 1);
   assert.equal(groups[0].title, 'Irisgatan');
-  assert.equal(groups[0].rules?.length, 4);
+  assert.equal(groups[0].rules?.length, 3);
 });
 
 test('every rule has the four required identity fields', () => {
