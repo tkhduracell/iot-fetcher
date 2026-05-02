@@ -64,11 +64,15 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayAndColor('temperature_C', 'Utomhustemperatur', 'blue'),
+      overrideDisplayAndColor('Marktemperatur', 'Marktemperatur', 'orange'),
     ])
     .withTarget(
       vmMetric('A', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
         where: `"node_type" = 'CONTROLLER'`,
       }),
+    )
+    .withTarget(
+      vmExpr('B', 'avg_over_time(ha_soil_sensor_temperature_value[$__interval])', 'Marktemperatur'),
     )
     .gridPos({ h: 7, w: 8, x: 12, y: 1 });
 
