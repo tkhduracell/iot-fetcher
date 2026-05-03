@@ -7,7 +7,7 @@ import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
   greenRedThresholds, greenThreshold, thresholds, paletteColor,
   legendBottom, tooltipSingle, tooltipMulti,
-  overrideDisplayAndColor,
+  overrideDisplayAndColor, overrideDisplayName,
   SPAN_NULLS_MS,
 } from '../helpers.ts';
 
@@ -63,6 +63,10 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(SPAN_NULLS_MS)
     .fillOpacity(10)
     .stacking(new StackingConfigBuilder().mode(StackingMode.Normal))
+    .overrides([
+      overrideDisplayName('pool_iqpump_motordata_power', 'Circulationspump'),
+      overrideDisplayName('power_usage', 'Värmepump'),
+    ])
     .withTarget(vmExpr('A', 'avg_over_time(pool_iqpump_motordata_power[$__interval])', 'pool_iqpump_motordata_power'))
     .withTarget(vmMetric('B', 'aqua_temp', 'power_usage'))
     .gridPos({ h: 7, w: 7, x: 17, y: 30 });
