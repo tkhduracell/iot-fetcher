@@ -12,7 +12,7 @@ export function energiPerFas(): alerting.RuleBuilder {
     .annotations({
       __dashboardUid__: 'aehvj7vxn6vi8f',
       __panelId__: '6',
-      summary: 'En av faserna över snart överbalastad',
+      summary: 'En av faserna är snart överbelastad',
     })
     .notificationSettings(new alerting.NotificationSettingsBuilder().receiver('Slack'))
     .withQuery(
