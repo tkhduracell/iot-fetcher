@@ -23,10 +23,12 @@ CODES = {
 
 # Codes we fetch but don't emit as their own fields — used only as inputs
 # to the derived `power_usage` metric (compressor current × supply voltage).
-# Per the radical-squared/aquatemp HA integration's parameter map, T06 is
-# amper and T13 is volt; T12 (which we previously mislabelled as power) is
-# actually a temperature, hence the rename.
-DERIVATION_CODES = ('T06', 'T13')
+# Per the radical-squared/aquatemp HA integration's per-device entity map
+# (entity_description.1442284873216843776.json), T07 is "Compressor current
+# Detect [A]" and T14 is "Inverter plate AC voltage [V]". The legacy default
+# parameter map said T06=amper / T13=volt, which is correct for older units
+# but NOT this device — verified live: T07 reports 9.5, T14 reports 222 (V).
+DERIVATION_CODES = ('T07', 'T14')
 
 PROTOCOL_CODES = list(CODES.keys()) + list(DERIVATION_CODES)
 
@@ -178,11 +180,12 @@ def _aquatemp():
                 p = p.field(metricName, values[code])
                 has_fields = True
 
-        # Derived input power: compressor current (T06, A) × supply voltage
-        # (T13, V). Stored under the same `power_usage` field name as before
-        # but now reflects real instantaneous draw instead of the misread T12.
-        if 'T06' in values and 'T13' in values:
-            p = p.field('power_usage', values['T06'] * values['T13'])
+        # Derived input power: compressor current (T07, A) × inverter plate
+        # AC voltage (T14, V). Stored under the same `power_usage` field name
+        # as before but now reflects real instantaneous draw instead of the
+        # previous T12-as-power misread (T12 is actually fan target RPM).
+        if 'T07' in values and 'T14' in values:
+            p = p.field('power_usage', values['T07'] * values['T14'])
             has_fields = True
 
         if has_fields:
