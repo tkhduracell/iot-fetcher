@@ -1,5 +1,6 @@
 import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-sdk/timeseries';
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
+import { StackingConfigBuilder, StackingMode } from '@grafana/grafana-foundation-sdk/common';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
@@ -47,10 +48,12 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('now-24h')
     .gridPos({ h: 7, w: 5, x: 12, y: 30 });
 
-  // Poolvärmepump (timeseries)
+  // Pool Energi (timeseries)
   const heatPump = new TimeseriesBuilder()
-    .title('Poolvärmepump')
+    .title('Pool Energi')
     .datasource(VM_DS)
+    .unit('watt')
+    .interval('5m')
     .axisSoftMin(15)
     .axisSoftMax(35)
     .colorScheme(paletteColor())
@@ -58,7 +61,10 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .legend(legendBottom())
     .tooltip(tooltipSingle())
     .insertNulls(SPAN_NULLS_MS)
+    .fillOpacity(10)
+    .stacking(new StackingConfigBuilder().mode(StackingMode.Normal))
     .withTarget(vmMetric('A', 'aqua_temp', 'power_usage'))
+    .withTarget(vmExpr('B', 'avg_over_time(pool_iqpump_motordata_power[$__interval])', 'pool_iqpump_motordata_power'))
     .gridPos({ h: 7, w: 7, x: 17, y: 30 });
 
   // Pumpvarvtal (stat)
