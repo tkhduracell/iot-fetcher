@@ -104,6 +104,11 @@ async function main() {
   console.log(`Alerts JSON written to ${alertsPath}`);
 
   if (!process.env.GRAFANA_SKIP_UPLOAD) {
+    if (!folderUid) {
+      throw new Error(
+        'GRAFANA_FOLDER_UID must be set when uploading so dashboards and alerts target the same Grafana folder.',
+      );
+    }
     await uploadToGrafana(dashboard);
     await uploadAlertGroups(alertGroups);
   }
