@@ -1,10 +1,7 @@
 import * as alerting from '@grafana/grafana-foundation-sdk/alerting';
-import { vmExpr } from '../datasource.ts';
-import { reduceExpr, thresholdExpr } from './helpers.ts';
+import { reduceExpr, thresholdExpr, vmAlertQuery } from './helpers.ts';
 
 export function energiPerFas(): alerting.RuleBuilder {
-  const query = vmExpr('A', 'union(tibber_powerL1{}, tibber_powerL2{}, tibber_powerL3{})', '__auto');
-
   return new alerting.RuleBuilder('Energi per fas')
     .uid('feveqo0rnu3ggc')
     .ruleGroup('Irisgatan')
@@ -19,10 +16,10 @@ export function energiPerFas(): alerting.RuleBuilder {
     })
     .notificationSettings(new alerting.NotificationSettingsBuilder().receiver('Slack'))
     .withQuery(
-      new alerting.QueryBuilder('A')
-        .relativeTimeRange({ from: 300, to: 0 })
-        .datasourceUid('cfc7gnph2ojr4d')
-        .model(query),
+      vmAlertQuery('A', 'union(tibber_powerL1{}, tibber_powerL2{}, tibber_powerL3{})', {
+        intervalMs: 1000,
+        rangeSeconds: 300,
+      }),
     )
     .withQuery(reduceExpr('B', 'A', 'mean', 'last'))
     .withQuery(thresholdExpr('C', 'B', 'gt', 5750));
