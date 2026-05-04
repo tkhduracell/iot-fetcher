@@ -1,6 +1,9 @@
 import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-sdk/timeseries';
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
-import { StackingConfigBuilder, StackingMode } from '@grafana/grafana-foundation-sdk/common';
+import {
+  StackingConfigBuilder, StackingMode,
+  GraphThresholdsStyleConfigBuilder, GraphThresholdsStyleMode,
+} from '@grafana/grafana-foundation-sdk/common';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
@@ -47,6 +50,50 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'last_over_time(pool_temperature_value[$__interval])', 'Pooltemp'))
     .timeFrom('now-24h')
     .gridPos({ h: 7, w: 5, x: 12, y: 30 });
+
+  // ΔT över värmeväxlaren (timeseries) — flödesindikator för poolvärmepumpen.
+  // Y-axeln klippt till 0–4 °C: när cirkulationspumpen pausas står vattnet
+  // stilla i värmeväxlaren och utgående-temp skenar (sett 8–12 °C i datat),
+  // vilket bara säger "kompressorn körde nyss" och inget om flödet.
+  const deltaT = new TimeseriesBuilder()
+    .title('ΔT över värmeväxlaren')
+    .description(
+      'ΔT = utgående − ingående vattentemperatur över poolvärmepumpens växlare. ' +
+      'Mäter om flödet genom värmepumpen är rätt avvägt med bypass-ventilerna.\n\n' +
+      '**Mål: ~2 °C** vid full kompressorlast (Hayward / AquaCal-rekommendation för inverter-pumpar).\n\n' +
+      '- **ΔT > 2 °C** → för lite flöde genom värmepumpen → stäng bypass-ventilen lite (mer vatten genom HP).\n' +
+      '- **ΔT < 2 °C** → för mycket flöde → öppna bypass-ventilen lite.\n' +
+      '- **ΔT ≈ 3 °C** = klart för lågt flöde, sämre COP och risk för högtryckslarm.\n\n' +
+      'Varför lågt ΔT är bättre på en inverter-pump: kompressorn moduleras, så köldmediet ' +
+      'håller sig nära vattentemperaturen. Mindre vatten-ΔT → mindre köldmedie/vatten-gap → bättre COP. ' +
+      'Att jaga högre ΔT sparar inte cirkulationspumps-energi (den går ändå för filtrering).\n\n' +
+      'Tuningprocedur: Justera ventilerna i små steg, vänta ~10 min tills steady state, ' +
+      'avläs när `aqua_temp_power_usage` plateau:at (≥1800 W). Bortse från korta dippar — ' +
+      'det är avfrostningscykler (~var 25:e minut vid kall ute-temp).\n\n' +
+      'Y-axeln klippt 0–4 °C: värden över 4 °C är nästan alltid avstannat vatten i växlaren ' +
+      'när cirkulationspumpen pausas, inte ett verkligt flödesproblem.'
+    )
+    .datasource(VM_DS)
+    .unit('celsius')
+    .min(0)
+    .max(4)
+    .colorScheme(paletteColor())
+    .thresholds(thresholds([
+      { color: 'green', value: null },
+      { color: 'yellow', value: 2 },
+      { color: 'red', value: 3 },
+    ]))
+    .thresholdsStyle(new GraphThresholdsStyleConfigBuilder().mode(GraphThresholdsStyleMode.Dashed))
+    .legend(legendBottom())
+    .tooltip(tooltipSingle())
+    .insertNulls(SPAN_NULLS_MS)
+    .overrides([overrideDisplayAndColor('delta_t', 'ΔT (utgående − ingående)', 'blue')])
+    .withTarget(vmExpr(
+      'A',
+      'avg_over_time(aqua_temp_temp_outgoing[$__interval]) - avg_over_time(aqua_temp_temp_incoming[$__interval])',
+      'delta_t',
+    ))
+    .gridPos({ h: 8, w: 12, x: 0, y: 44 });
 
   // Pool Energi (timeseries)
   const heatPump = new TimeseriesBuilder()
@@ -184,5 +231,5 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
-  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, pumpPlan, pumpPlanBackfill];
+  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, deltaT, pumpPlan, pumpPlanBackfill];
 }
