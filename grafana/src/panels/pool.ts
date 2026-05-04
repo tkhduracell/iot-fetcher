@@ -147,7 +147,7 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
 
   // Poolpump plan (timeseries) — 24h MILP schedule from pool-pump-planner
   const pumpPlan = new TimeseriesBuilder()
-    .title('Poolpump plan (24h)')
+    .title('Smart Planner - Pumpschema (24h)')
     .datasource(VM_DS)
     .interval('15m')
     .lineInterpolation('stepAfter' as any)
@@ -179,12 +179,15 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .timeShift('0w/w')
     .gridPos({ h: 8, w: 12, x: 0, y: 52 });
 
-  // Poolpump plan — 30-day backfill: per-day summary of planned hours + cost
-  // emitted by `pool-pump-planner backfill`. Each anchor_date is its own VM
-  // series (different tag) with one point per day; sum without(anchor_date)
-  // collapses them so the panel draws a single line with 30 points.
-  const pumpPlanBackfill = new TimeseriesBuilder()
-    .title('Poolpump plan (30 dagar backfill)')
+  // Smart Planner — 30-day backfill cost comparison: optimizer vs naive
+  // schedules. Each anchor_date is its own VM series (different tag) with one
+  // point per day; sum without(anchor_date) collapses them so the panel draws
+  // a single line with 30 points. anchor_date (backfill) and plan_date (live)
+  // are both removed so the two sources collapse into a single line — live
+  // runs fill in the most recent days that the backfill subcommand hasn't
+  // covered yet.
+  const pumpPlanCost = new TimeseriesBuilder()
+    .title('Smart Planner - Kostnad (30 dagar)')
     .datasource(VM_DS)
     .unit('currencySEK')
     .colorScheme(paletteColor())
@@ -194,32 +197,10 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(86_400_000)
     .interval('1d')
     .overrides([
-      {
-        matcher: { id: 'byName', options: 'planned_hours' },
-        properties: [
-          { id: 'displayName', value: 'Planerade timmar' },
-          { id: 'color', value: { fixedColor: 'blue', mode: 'fixed' } },
-          { id: 'custom.axisPlacement', value: 'right' },
-          { id: 'unit', value: 'h' },
-        ],
-      },
       overrideDisplayAndColor('expected_cost_sek', 'Optimerad', 'yellow'),
       overrideDisplayAndColor('night_baseline_sek', 'Naiv 00-06', 'purple'),
       overrideDisplayAndColor('afternoon_baseline_sek', 'Naiv 12-18', 'red'),
-      {
-        matcher: { id: 'byName', options: 'slack_hours' },
-        properties: [
-          { id: 'displayName', value: 'Slack (h)' },
-          { id: 'color', value: { fixedColor: 'orange', mode: 'fixed' } },
-          { id: 'custom.axisPlacement', value: 'right' },
-          { id: 'unit', value: 'h' },
-        ],
-      },
     ])
-    // anchor_date (backfill) and plan_date (live) are both removed so the two
-    // sources collapse into a single line. Live runs fill in the most recent
-    // days that the backfill subcommand hasn't covered yet.
-    .withTarget(vmExpr('A', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_planned_hours{run=~"backfill|live"})', 'planned_hours'))
     .withTarget(vmExpr('B', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run=~"backfill|live"})', 'expected_cost_sek'))
     // Night/afternoon fixed-schedule baselines emitted alongside every plan
     // (both backfill and live). Plotting all three on the same panel makes the
@@ -227,9 +208,31 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     // baselines is SEK the planner saved vs a naive always-at-this-time rule.
     .withTarget(vmExpr('D', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_night"})', 'night_baseline_sek'))
     .withTarget(vmExpr('E', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_afternoon"})', 'afternoon_baseline_sek'))
-    .withTarget(vmExpr('C', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
     .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
-  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, deltaT, pumpPlan, pumpPlanBackfill];
+  // Smart Planner — 30-day planned-vs-slack hours. Split out from the cost
+  // panel so the two unit families (SEK / hours) don't fight over a shared
+  // axis. Planned = hours the planner committed to running; slack = hours
+  // budgeted but not yet locked in (deferrable headroom).
+  const pumpPlanHours = new TimeseriesBuilder()
+    .title('Smart Planner - Drifttimmar (30 dagar)')
+    .datasource(VM_DS)
+    .unit('h')
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .insertNulls(86_400_000)
+    .interval('1d')
+    .overrides([
+      overrideDisplayAndColor('planned_hours', 'Planerade timmar', 'blue'),
+      overrideDisplayAndColor('slack_hours', 'Slack (h)', 'orange'),
+    ])
+    .withTarget(vmExpr('A', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_planned_hours{run=~"backfill|live"})', 'planned_hours'))
+    .withTarget(vmExpr('C', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
+    .timeFrom('14d/d')
+    .gridPos({ h: 8, w: 12, x: 12, y: 44 });
+
+  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, deltaT, pumpPlanHours, pumpPlan, pumpPlanCost];
 }
