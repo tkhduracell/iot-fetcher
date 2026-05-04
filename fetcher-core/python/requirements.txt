@@ -133,7 +133,7 @@ semantic-version==2.10.0
     # via plugp100
 six==1.17.0
     # via python-dateutil
-tplinkrouterc6u==5.18.1
+tplinkrouterc6u==5.19.0
     # via iot-fetcher (pyproject.toml)
 tuya-connector-python==0.1.2
     # via iot-fetcher (pyproject.toml)
