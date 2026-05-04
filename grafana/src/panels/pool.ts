@@ -1,6 +1,9 @@
 import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-sdk/timeseries';
 import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/stat';
-import { StackingConfigBuilder, StackingMode } from '@grafana/grafana-foundation-sdk/common';
+import {
+  StackingConfigBuilder, StackingMode,
+  GraphThresholdsStyleConfigBuilder, GraphThresholdsStyleMode,
+} from '@grafana/grafana-foundation-sdk/common';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
@@ -47,6 +50,50 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'last_over_time(pool_temperature_value[$__interval])', 'Pooltemp'))
     .timeFrom('now-24h')
     .gridPos({ h: 7, w: 5, x: 12, y: 30 });
+
+  // ΔT över värmeväxlaren (timeseries) — flödesindikator för poolvärmepumpen.
+  // Y-axeln klippt till 0–4 °C: när cirkulationspumpen pausas står vattnet
+  // stilla i värmeväxlaren och utgående-temp skenar (sett 8–12 °C i datat),
+  // vilket bara säger "kompressorn körde nyss" och inget om flödet.
+  const deltaT = new TimeseriesBuilder()
+    .title('ΔT över värmeväxlaren')
+    .description(
+      'ΔT = utgående − ingående vattentemperatur över poolvärmepumpens växlare. ' +
+      'Mäter om flödet genom värmepumpen är rätt avvägt med bypass-ventilerna.\n\n' +
+      '**Mål: ~2 °C** vid full kompressorlast (Hayward / AquaCal-rekommendation för inverter-pumpar).\n\n' +
+      '- **ΔT > 2 °C** → för lite flöde genom värmepumpen → stäng bypass-ventilen lite (mer vatten genom HP).\n' +
+      '- **ΔT < 2 °C** → för mycket flöde → öppna bypass-ventilen lite.\n' +
+      '- **ΔT ≈ 3 °C** = klart för lågt flöde, sämre COP och risk för högtryckslarm.\n\n' +
+      'Varför lågt ΔT är bättre på en inverter-pump: kompressorn moduleras, så köldmediet ' +
+      'håller sig nära vattentemperaturen. Mindre vatten-ΔT → mindre köldmedie/vatten-gap → bättre COP. ' +
+      'Att jaga högre ΔT sparar inte cirkulationspumps-energi (den går ändå för filtrering).\n\n' +
+      'Tuningprocedur: Justera ventilerna i små steg, vänta ~10 min tills steady state, ' +
+      'avläs när `aqua_temp_power_usage` plateau:at (≥1800 W). Bortse från korta dippar — ' +
+      'det är avfrostningscykler (~var 25:e minut vid kall ute-temp).\n\n' +
+      'Y-axeln klippt 0–4 °C: värden över 4 °C är nästan alltid avstannat vatten i växlaren ' +
+      'när cirkulationspumpen pausas, inte ett verkligt flödesproblem.'
+    )
+    .datasource(VM_DS)
+    .unit('celsius')
+    .min(0)
+    .max(4)
+    .colorScheme(paletteColor())
+    .thresholds(thresholds([
+      { color: 'green', value: null },
+      { color: 'yellow', value: 2 },
+      { color: 'red', value: 3 },
+    ]))
+    .thresholdsStyle(new GraphThresholdsStyleConfigBuilder().mode(GraphThresholdsStyleMode.Dashed))
+    .legend(legendBottom())
+    .tooltip(tooltipSingle())
+    .insertNulls(SPAN_NULLS_MS)
+    .overrides([overrideDisplayAndColor('delta_t', 'ΔT (utgående − ingående)', 'blue')])
+    .withTarget(vmExpr(
+      'A',
+      'avg_over_time(aqua_temp_temp_outgoing[$__interval]) - avg_over_time(aqua_temp_temp_incoming[$__interval])',
+      'delta_t',
+    ))
+    .gridPos({ h: 8, w: 12, x: 0, y: 44 });
 
   // Pool Energi (timeseries)
   const heatPump = new TimeseriesBuilder()
@@ -100,7 +147,7 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
 
   // Poolpump plan (timeseries) — 24h MILP schedule from pool-pump-planner
   const pumpPlan = new TimeseriesBuilder()
-    .title('Poolpump plan (24h)')
+    .title('Smart Planner - Pumpschema (24h)')
     .datasource(VM_DS)
     .interval('15m')
     .lineInterpolation('stepAfter' as any)
@@ -132,12 +179,15 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .timeShift('0w/w')
     .gridPos({ h: 8, w: 12, x: 0, y: 52 });
 
-  // Poolpump plan — 30-day backfill: per-day summary of planned hours + cost
-  // emitted by `pool-pump-planner backfill`. Each anchor_date is its own VM
-  // series (different tag) with one point per day; sum without(anchor_date)
-  // collapses them so the panel draws a single line with 30 points.
-  const pumpPlanBackfill = new TimeseriesBuilder()
-    .title('Poolpump plan (30 dagar backfill)')
+  // Smart Planner — 30-day backfill cost comparison: optimizer vs naive
+  // schedules. Each anchor_date is its own VM series (different tag) with one
+  // point per day; sum without(anchor_date) collapses them so the panel draws
+  // a single line with 30 points. anchor_date (backfill) and plan_date (live)
+  // are both removed so the two sources collapse into a single line — live
+  // runs fill in the most recent days that the backfill subcommand hasn't
+  // covered yet.
+  const pumpPlanCost = new TimeseriesBuilder()
+    .title('Smart Planner - Kostnad (30 dagar)')
     .datasource(VM_DS)
     .unit('currencySEK')
     .colorScheme(paletteColor())
@@ -147,32 +197,10 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(86_400_000)
     .interval('1d')
     .overrides([
-      {
-        matcher: { id: 'byName', options: 'planned_hours' },
-        properties: [
-          { id: 'displayName', value: 'Planerade timmar' },
-          { id: 'color', value: { fixedColor: 'blue', mode: 'fixed' } },
-          { id: 'custom.axisPlacement', value: 'right' },
-          { id: 'unit', value: 'h' },
-        ],
-      },
       overrideDisplayAndColor('expected_cost_sek', 'Optimerad', 'yellow'),
       overrideDisplayAndColor('night_baseline_sek', 'Naiv 00-06', 'purple'),
       overrideDisplayAndColor('afternoon_baseline_sek', 'Naiv 12-18', 'red'),
-      {
-        matcher: { id: 'byName', options: 'slack_hours' },
-        properties: [
-          { id: 'displayName', value: 'Slack (h)' },
-          { id: 'color', value: { fixedColor: 'orange', mode: 'fixed' } },
-          { id: 'custom.axisPlacement', value: 'right' },
-          { id: 'unit', value: 'h' },
-        ],
-      },
     ])
-    // anchor_date (backfill) and plan_date (live) are both removed so the two
-    // sources collapse into a single line. Live runs fill in the most recent
-    // days that the backfill subcommand hasn't covered yet.
-    .withTarget(vmExpr('A', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_planned_hours{run=~"backfill|live"})', 'planned_hours'))
     .withTarget(vmExpr('B', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run=~"backfill|live"})', 'expected_cost_sek'))
     // Night/afternoon fixed-schedule baselines emitted alongside every plan
     // (both backfill and live). Plotting all three on the same panel makes the
@@ -180,9 +208,31 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     // baselines is SEK the planner saved vs a naive always-at-this-time rule.
     .withTarget(vmExpr('D', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_night"})', 'night_baseline_sek'))
     .withTarget(vmExpr('E', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_expected_cost_sek{run="baseline_afternoon"})', 'afternoon_baseline_sek'))
-    .withTarget(vmExpr('C', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
     .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
-  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, pumpPlan, pumpPlanBackfill];
+  // Smart Planner — 30-day planned-vs-slack hours. Split out from the cost
+  // panel so the two unit families (SEK / hours) don't fight over a shared
+  // axis. Planned = hours the planner committed to running; slack = hours
+  // budgeted but not yet locked in (deferrable headroom).
+  const pumpPlanHours = new TimeseriesBuilder()
+    .title('Smart Planner - Drifttimmar (30 dagar)')
+    .datasource(VM_DS)
+    .unit('h')
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .insertNulls(86_400_000)
+    .interval('1d')
+    .overrides([
+      overrideDisplayAndColor('planned_hours', 'Planerade timmar', 'blue'),
+      overrideDisplayAndColor('slack_hours', 'Slack (h)', 'orange'),
+    ])
+    .withTarget(vmExpr('A', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_planned_hours{run=~"backfill|live"})', 'planned_hours'))
+    .withTarget(vmExpr('C', 'max without(anchor_date, plan_date, mode, missing_inputs, run) (pool_iqpump_plan_summary_slack_hours{run=~"backfill|live"})', 'slack_hours'))
+    .timeFrom('14d/d')
+    .gridPos({ h: 8, w: 12, x: 12, y: 44 });
+
+  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, deltaT, pumpPlanHours, pumpPlan, pumpPlanCost];
 }
