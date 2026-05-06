@@ -211,6 +211,77 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 52 });
 
+  // Pool kostnad — actual pump cost using SE4 spot price plus Swedish
+  // grid+tax loading: (spot + 0.2584 transferfee + 0.36 energiskatt) * 1.25 VAT,
+  // matching pool-pump-planner config defaults (March 2026 E.ON invoice).
+  // Subquery resamples at 5m to cover the heat pump's 5m scrape interval; the
+  // [5m] inner lookback ensures every step lands on a real sample. * 5 / 60
+  // converts SEK/h × 5-min samples into SEK accumulated per bucket. The inner
+  // sum() collapses incidental label variants (e.g. a stray device="00" series
+  // alongside the real device="17") that show up over a YTD range so the
+  // legend stays a single line per pump.
+  const POOL_COST_FEES = '0.6184'; // 0.2584 transferfee + 0.36 energiskatt
+  const POOL_COST_VAT = '1.25';    // 25% moms applied on top of spot+fees
+  const poolCostExpr = (powerMetric: string): string =>
+    `sum_over_time((sum(avg_over_time(${powerMetric}[5m])) / 1000 * ` +
+    `(scalar(avg_over_time(energy_price_SEK_per_kWh{area="SE4"}[5m])) + ${POOL_COST_FEES}) * ${POOL_COST_VAT}` +
+    `)[$__interval:5m]) * 5 / 60`;
+
+  const poolCostDaily = new TimeseriesBuilder()
+    .title('Pool kostnad per dag')
+    .description(
+      'Daglig elkostnad för pool-cirkulationspumpen och värmepumpen. ' +
+      'Beräknas som energi × spotpris (SE4) + nätavgift + energiskatt + moms 25%, ' +
+      'samma formel som pool-pump-planner använder.'
+    )
+    .datasource(VM_DS)
+    .unit('currencySEK')
+    .drawStyle('bars' as any)
+    .fillOpacity(100)
+    .axisSoftMin(0)
+    .interval('1d')
+    .colorScheme(paletteColor())
+    .thresholds(greenThreshold())
+    .legend(legendBottom())
+    .tooltip(tooltipMulti())
+    .insertNulls(86_400_000)
+    .stacking(new StackingConfigBuilder().mode(StackingMode.Normal))
+    .overrides([
+      overrideDisplayAndColor('pool_iqpump_motordata_power', 'Cirkulationspump', 'blue'),
+      overrideDisplayAndColor('aqua_temp_power_usage', 'Värmepump', 'red'),
+    ])
+    .withTarget(vmExpr('A', poolCostExpr('pool_iqpump_motordata_power'), 'pool_iqpump_motordata_power'))
+    .withTarget(vmExpr('B', poolCostExpr('aqua_temp_power_usage'), 'aqua_temp_power_usage'))
+    .timeFrom('now/y')
+    .gridPos({ h: 8, w: 16, x: 0, y: 60 });
+
+  // Pool kostnad i år (stat) — accumulated YTD cost across both pumps.
+  // sum() drops labels so the two metrics with disjoint label sets can be
+  // added; `or vector(0)` handles the period before aqua_temp_power_usage
+  // started emitting (April 2026). 15m subquery step keeps the YTD point
+  // count under VM's per-series limit while still capturing pump-cycle
+  // dynamics; spot price is hourly so 15m is plenty for the price factor.
+  const poolCostYTD = new StatBuilder()
+    .title('Pool kostnad i år')
+    .description(
+      'Ackumulerad elkostnad för poolen sedan årsskiftet. ' +
+      'Inkluderar cirkulationspump + värmepump × spotpris (SE4) + nätavgift + energiskatt + moms 25%.'
+    )
+    .datasource(VM_DS)
+    .unit('currencySEK')
+    .thresholds(greenThreshold())
+    .withTarget(vmExpr(
+      'A',
+      'sum_over_time((' +
+        '((sum(avg_over_time(pool_iqpump_motordata_power[15m])) or vector(0)) + ' +
+        '(sum(avg_over_time(aqua_temp_power_usage[15m])) or vector(0))) / 1000 * ' +
+        `(scalar(avg_over_time(energy_price_SEK_per_kWh{area="SE4"}[15m])) + ${POOL_COST_FEES}) * ${POOL_COST_VAT}` +
+      ')[$__range:15m]) * 15 / 60',
+      'YTD',
+    ))
+    .timeFrom('now/y')
+    .gridPos({ h: 8, w: 8, x: 16, y: 60 });
+
   // Smart Planner — 30-day planned-vs-slack hours. Split out from the cost
   // panel so the two unit families (SEK / hours) don't fight over a shared
   // axis. Planned = hours the planner committed to running; slack = hours
@@ -234,5 +305,5 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('14d/d')
     .gridPos({ h: 8, w: 12, x: 12, y: 44 });
 
-  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, deltaT, pumpPlanHours, pumpPlan, pumpPlanCost];
+  return [waterTemp, poolTempStat, heatPump, pumpSpeedStat, pumpSpeedTs, deltaT, pumpPlanHours, pumpPlan, pumpPlanCost, poolCostDaily, poolCostYTD];
 }

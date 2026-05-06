@@ -26,7 +26,7 @@ export function navimowPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('Navimow i206 AWD Battery', 'Navimow i206 AWD Battery', 'green'),
     ])
     .withTarget(vmExpr('A', 'last_over_time(ha_navimow_i206_awd_battery_value[$__interval])', '{{friendly_name}}'))
-    .gridPos({ h: 8, w: 16, x: 0, y: 110 });
+    .gridPos({ h: 8, w: 16, x: 0, y: 118 });
 
   // Markfuktighet (timeseries) - HA soil moisture sensor
   const soilHumidity = new TimeseriesBuilder()
@@ -43,7 +43,7 @@ export function navimowPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'avg_over_time(ha_soil_sensor_humidity_value[$__interval])', 'Dvärgpersika'),
     )
-    .gridPos({ h: 8, w: 8, x: 16, y: 110 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 118 });
 
   return [batteryTs, soilHumidity];
 }

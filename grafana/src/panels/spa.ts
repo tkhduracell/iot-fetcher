@@ -31,7 +31,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     ])
     .withTarget(vmMetric('A', 'spa_climate', 'current_temperature_value'))
     .withTarget(vmExpr('B', 'last_over_time(spa_temperature_range_state_text[$__interval])', 'state_text'))
-    .gridPos({ h: 8, w: 12, x: 0, y: 61 });
+    .gridPos({ h: 8, w: 12, x: 0, y: 69 });
 
   // Spabadet (stat) - latest temp
   const spaStat = new StatBuilder()
@@ -43,7 +43,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
       overrideDisplayAndColor('current_temperature_value', 'Temperatur', 'purple'),
     ])
     .withTarget(vmMetric('A', 'spa_climate', 'current_temperature_value'))
-    .gridPos({ h: 8, w: 4, x: 12, y: 61 });
+    .gridPos({ h: 8, w: 4, x: 12, y: 69 });
 
   // Spa Circulation (gauge)
   const spaCirculation = new GaugeBuilder()
@@ -59,7 +59,7 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(vmExpr('A', 'last_over_time(spa_circulation_pump_value[$__interval])', 'circulation'))
     .withTarget(vmMetric('B', 'spa_pump_1', 'value'))
     .withTarget(vmMetric('C', 'spa_pump_2', 'value'))
-    .gridPos({ h: 8, w: 8, x: 16, y: 61 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 69 });
 
   return [spaTs, spaStat, spaCirculation];
 }
