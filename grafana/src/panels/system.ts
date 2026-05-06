@@ -44,7 +44,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('Power', 'last_over_time(ha_wallbox_pulsar_max_sn_992144_charging_power_value[$__interval]) * 1000', 'Laddning'),
     )
-    .gridPos({ h: 8, w: 12, x: 0, y: 136 });
+    .gridPos({ h: 8, w: 12, x: 0, y: 144 });
 
   // ⚡ Urladdningsgräns (stat, current discharge limit in W)
   const dischargeLimitStat = new StatBuilder()
@@ -59,7 +59,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'last_over_time(sum(sigenergy_ems_control_max_discharge_limit_w[$__interval]) by ())'),
     )
-    .gridPos({ h: 8, w: 4, x: 12, y: 136 });
+    .gridPos({ h: 8, w: 4, x: 12, y: 144 });
 
   // 💾 Senaste VM-backup (stat, age in seconds)
   const vmBackup = new StatBuilder()
@@ -75,7 +75,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'now() - last_over_time(vm_backup_last_success_timestamp[$__interval])'),
     )
-    .gridPos({ h: 8, w: 8, x: 16, y: 136 });
+    .gridPos({ h: 8, w: 8, x: 16, y: 144 });
 
   // ⏱ Poll-tid Sigenergy (timeseries, duration_ms per poll cycle)
   const pollDuration = new TimeseriesBuilder()
@@ -91,7 +91,7 @@ export function systemPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('Duration', 'last_over_time(sigenergy_bridge_duration_ms[$__interval])', 'Duration (ms)'),
     )
-    .gridPos({ h: 8, w: 24, x: 0, y: 144 });
+    .gridPos({ h: 8, w: 24, x: 0, y: 152 });
 
   return [dischargeControl, dischargeLimitStat, vmBackup, pollDuration];
 }
