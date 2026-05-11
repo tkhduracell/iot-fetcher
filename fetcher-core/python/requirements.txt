@@ -86,7 +86,7 @@ ngenicpy==0.5.2
     # via iot-fetcher (pyproject.toml)
 plugp100==5.1.7
     # via iot-fetcher (pyproject.toml)
-propcache==0.4.1
+propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
