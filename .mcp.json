@@ -2,7 +2,7 @@
   "mcpServers": {
     "Home Assistant": {
       "command": "uvx",
-      "args": ["ha-mcp@latest"],
+      "args": ["ha-mcp==7.6.0"],
       "env": {
         "HOMEASSISTANT_URL": "${HOMEASSISTANT_URL}",
         "HOMEASSISTANT_TOKEN": "${HOMEASSISTANT_TOKEN}"
