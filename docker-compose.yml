@@ -15,11 +15,13 @@ services:
     # No ports exposed - only accessible via database-auth (vmauth) for security
     volumes:
       - victoria-metrics:/victoria-metrics-data
+      - ./victoria-metrics/vmscrape.yml:/etc/vmscrape.yml:ro
     command:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=3y
       - -httpListenAddr=:8181
       - -dedup.minScrapeInterval=10s
+      - -promscrape.config=/etc/vmscrape.yml
 
   database-auth:
     image: victoriametrics/vmauth:latest
