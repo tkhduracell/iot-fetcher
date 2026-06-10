@@ -123,7 +123,6 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .title('Pumpvarvtal')
     .datasource(VM_DS)
     .unit('rotrpm')
-    .decimals(0)
     .min(0)
     .max(3600)
     .thresholds(thresholds([{ color: 'blue', value: null }]))
