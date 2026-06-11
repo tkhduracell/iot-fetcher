@@ -11,7 +11,7 @@ export const values: Config = [
     [
         { measurement: 'spa_climate', field: 'current_temperature_value', title: '🛁 Spa Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 45 },
         { measurement: 'pool_temperature', field: 'value', title: '🏊 Pool Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 30 },
-        { measurement: 'pool_iqpump_motordata', field: 'speed', title: '💦 Poolpump', unit: 'RPM', sparkline: '24h', sparklineMin: 0, sparklineMax: 3000 },
+        { measurement: 'pool_iqpump_motordata', field: 'speed', title: '💦 Poolpump', unit: 'RPM', decimals: 0, sparkline: '24h', sparklineMin: 0, sparklineMax: 3000 },
     ],
     [
         { measurement: 'tibber', field: 'accumulatedCost', title: 'Dygnskostnad', unit: 'Kr', decimals: 0, sparkline: '24h', sparklineMin: 0 },
