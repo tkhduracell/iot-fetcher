@@ -151,6 +151,14 @@ const maxWriteAttempts = 3
 // short fixed backoff is enough.
 var writeRetryBackoff = 500 * time.Millisecond
 
+// maxWriteDuration caps the total wall-clock a single Write (all attempts and
+// backoffs) may consume. Write runs synchronously on the controller's single
+// select loop, so an unbounded retry against a hung VM would freeze clamp/
+// unclamp handling. Kept well below the default 60s poll interval so a metrics
+// outage can never outlast one poll cycle. Package-level so tests can shorten
+// it.
+var maxWriteDuration = 15 * time.Second
+
 // statusError carries a non-2xx HTTP response so the retry logic can tell a
 // server-side 5xx (retryable) from a client-side 4xx (permanent).
 type statusError struct {
@@ -183,6 +191,12 @@ func (w *HTTPWriter) Write(ctx context.Context, points []*Point) error {
 		body.WriteString("\n")
 	}
 	bodyBytes := body.Bytes()
+
+	// Bound the whole retry sequence so a hung endpoint can't block the
+	// caller's control loop longer than a poll cycle. The per-attempt
+	// http.Client timeout still applies within this budget.
+	ctx, cancel := context.WithTimeout(ctx, maxWriteDuration)
+	defer cancel()
 
 	var lastErr error
 	for attempt := 1; attempt <= maxWriteAttempts; attempt++ {

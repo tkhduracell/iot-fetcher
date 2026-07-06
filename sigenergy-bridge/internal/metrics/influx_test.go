@@ -226,9 +226,44 @@ func TestHTTPWriter_RetriesExhausted(t *testing.T) {
 	}
 }
 
+// TestHTTPWriter_BoundsTotalDuration ensures a hung endpoint is abandoned at
+// maxWriteDuration rather than blocking the caller's control loop indefinitely.
+func TestHTTPWriter_BoundsTotalDuration(t *testing.T) {
+	defer swapBackoff(1 * time.Millisecond)()
+	defer swapMaxDuration(50 * time.Millisecond)()
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release // hang until the test tears down
+	}))
+	// LIFO: release the handler before Close(), so Close() doesn't block on it.
+	defer srv.Close()
+	defer close(release)
+
+	w := NewHTTP(srv.URL, "tok", "b")
+	start := time.Now()
+	err := w.Write(context.Background(), []*Point{NewPoint("m").Field("v", 1)})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a deadline error against a hung endpoint")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Write did not honour maxWriteDuration; took %v", elapsed)
+	}
+}
+
 // swapBackoff shortens the retry backoff for a test and returns a restore func.
 func swapBackoff(d time.Duration) func() {
 	prev := writeRetryBackoff
 	writeRetryBackoff = d
 	return func() { writeRetryBackoff = prev }
+}
+
+// swapMaxDuration shortens the total write budget for a test and returns a
+// restore func.
+func swapMaxDuration(d time.Duration) func() {
+	prev := maxWriteDuration
+	maxWriteDuration = d
+	return func() { maxWriteDuration = prev }
 }
