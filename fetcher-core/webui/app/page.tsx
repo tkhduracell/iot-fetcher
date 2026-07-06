@@ -9,6 +9,7 @@ import PomodoroButton from './components/PomodoroButton';
 import SpeakersButton from './components/SpeakersButton';
 import useAutoReload from './hooks/useAutoReload';
 import EnergyPriceBar from './components/EnergyPriceBar';
+import WeatherBar from './components/WeatherBar';
 import SonosWidget from './components/SonosWidget';
 import { values } from './lib/values';
 import { Config, ConfigRow } from './lib/types';
@@ -50,6 +51,7 @@ export default function DashboardPage() {
       </div>
       <div className="w-full py-0 flex flex-col gap-1.5">
         <Grid values={values} onOpen={openFullscreen} />
+        <WeatherBar />
         <EnergyPriceBar />
         <SonosWidget />
       </div>
