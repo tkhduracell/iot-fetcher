@@ -7,6 +7,7 @@ package metrics
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,6 +141,27 @@ func NewHTTP(host, token, database string) *HTTPWriter {
 	}
 }
 
+// maxWriteAttempts bounds the retry loop in Write. Writes carry explicit
+// second-precision timestamps, so re-sending the same batch is idempotent
+// (VictoriaMetrics overwrites the same series+timestamp) — retrying is safe.
+const maxWriteAttempts = 3
+
+// writeRetryBackoff is the pause between attempts. Package-level so tests can
+// shorten it; the keep-alive EOF race resolves on the next connection, so a
+// short fixed backoff is enough.
+var writeRetryBackoff = 500 * time.Millisecond
+
+// statusError carries a non-2xx HTTP response so the retry logic can tell a
+// server-side 5xx (retryable) from a client-side 4xx (permanent).
+type statusError struct {
+	code int
+	body string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("influx write %d: %s", e.code, e.body)
+}
+
 func (w *HTTPWriter) Write(ctx context.Context, points []*Point) error {
 	if len(points) == 0 {
 		return nil
@@ -160,8 +182,34 @@ func (w *HTTPWriter) Write(ctx context.Context, points []*Point) error {
 		body.WriteString(p.LineProtocol())
 		body.WriteString("\n")
 	}
+	bodyBytes := body.Bytes()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	var lastErr error
+	for attempt := 1; attempt <= maxWriteAttempts; attempt++ {
+		if attempt > 1 {
+			// Back off before retrying, but honour cancellation.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(writeRetryBackoff):
+			}
+		}
+		lastErr = w.writeOnce(ctx, endpoint, bodyBytes)
+		if lastErr == nil {
+			return nil
+		}
+		// 4xx (bad token, malformed line protocol) is permanent — retrying
+		// won't help, so fail fast. Retry only the transient cases: transport
+		// errors (the keep-alive EOF race, resets, timeouts) and 5xx.
+		if !isRetryableWriteErr(lastErr) {
+			return lastErr
+		}
+	}
+	return fmt.Errorf("influx write failed after %d attempts: %w", maxWriteAttempts, lastErr)
+}
+
+func (w *HTTPWriter) writeOnce(ctx context.Context, endpoint string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -175,7 +223,21 @@ func (w *HTTPWriter) Write(ctx context.Context, points []*Point) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("influx write %d: %s", resp.StatusCode, string(respBody))
+		return &statusError{code: resp.StatusCode, body: string(respBody)}
 	}
 	return nil
+}
+
+// isRetryableWriteErr reports whether a failed write is worth retrying. A
+// non-2xx status is retryable only when server-side (5xx); everything that
+// isn't a statusError is a transport/network error (EOF, connection reset,
+// timeout) — exactly the transient keep-alive races we want to retry. A
+// cancelled context surfaces here too, but the backoff select catches
+// ctx.Done() before another attempt runs.
+func isRetryableWriteErr(err error) bool {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.code >= 500
+	}
+	return true
 }

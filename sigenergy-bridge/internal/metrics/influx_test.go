@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -144,4 +145,90 @@ func TestHTTPWriter_EmptyPoints(t *testing.T) {
 	if err := w.Write(context.Background(), nil); err != nil {
 		t.Errorf("empty batch should be a no-op, got %v", err)
 	}
+}
+
+// TestHTTPWriter_RetriesTransientEOF reproduces the keep-alive race: the first
+// attempt hijacks and abruptly closes the connection (client sees EOF), the
+// second succeeds. Write must recover instead of dropping the batch.
+func TestHTTPWriter_RetriesTransientEOF(t *testing.T) {
+	defer swapBackoff(1 * time.Millisecond)()
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("server does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("hijack: %v", err)
+			}
+			conn.Close() // abrupt close → client's Do() returns EOF
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	w := NewHTTP(srv.URL, "tok", "b")
+	err := w.Write(context.Background(), []*Point{NewPoint("m").Field("v", 1).At(time.Unix(100, 0))})
+	if err != nil {
+		t.Fatalf("Write should recover after a transient EOF, got %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("expected 2 attempts (1 fail + 1 retry), got %d", got)
+	}
+}
+
+// TestHTTPWriter_NoRetryOn4xx ensures a client-side error fails fast without
+// burning retries — a bad token or malformed batch won't fix itself.
+func TestHTTPWriter_NoRetryOn4xx(t *testing.T) {
+	defer swapBackoff(1 * time.Millisecond)()
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("nope"))
+	}))
+	defer srv.Close()
+
+	w := NewHTTP(srv.URL, "tok", "b")
+	err := w.Write(context.Background(), []*Point{NewPoint("m").Field("v", 1)})
+	if err == nil || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("expected 400 error, got %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("4xx must not be retried, made %d attempts", got)
+	}
+}
+
+// TestHTTPWriter_RetriesExhausted confirms a persistently failing endpoint
+// gives up after maxWriteAttempts and surfaces the underlying error.
+func TestHTTPWriter_RetriesExhausted(t *testing.T) {
+	defer swapBackoff(1 * time.Millisecond)()
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	w := NewHTTP(srv.URL, "tok", "b")
+	err := w.Write(context.Background(), []*Point{NewPoint("m").Field("v", 1)})
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if got := atomic.LoadInt32(&calls); got != maxWriteAttempts {
+		t.Errorf("expected %d attempts, got %d", maxWriteAttempts, got)
+	}
+}
+
+// swapBackoff shortens the retry backoff for a test and returns a restore func.
+func swapBackoff(d time.Duration) func() {
+	prev := writeRetryBackoff
+	writeRetryBackoff = d
+	return func() { writeRetryBackoff = prev }
 }
