@@ -53,29 +53,29 @@ const WeatherBar: React.FC = () => {
         {days.map((day, idx) => (
           <div
             key={day.date}
-            className="flex-1 flex flex-col items-center justify-between gap-0.5 rounded bg-sky-200/50 dark:bg-sky-800/40 py-1"
+            className="flex-1 flex flex-col items-center justify-center gap-1 rounded bg-sky-200/50 dark:bg-sky-800/40 py-1"
           >
-            <div className="text-xs font-semibold capitalize text-gray-700 dark:text-gray-200">
-              {idx === 0 ? 'Idag' : weekdayLabel(day.date)}
-            </div>
             {day.symbolCode ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={`${ICON_BASE}/${day.symbolCode}.svg`}
                 alt={day.symbolCode}
-                className="w-10 h-10"
+                className="w-16 h-16"
                 loading="eager"
               />
             ) : (
-              <div className="w-10 h-10" />
+              <div className="w-16 h-16" />
             )}
-            <div className="text-xs text-gray-700 dark:text-gray-200">
+            <div className="flex items-center gap-1 whitespace-nowrap text-xs text-gray-700 dark:text-gray-200">
+              <span className="font-semibold capitalize">
+                {idx === 0 ? 'Idag' : weekdayLabel(day.date)}
+              </span>
+              <span className="text-gray-400">·</span>
               <span className="font-semibold">
                 {day.tempMax != null ? `${day.tempMax}°` : '–'}
-              </span>
-              <span className="mx-0.5 text-gray-400">/</span>
-              <span className="text-gray-500 dark:text-gray-400">
-                {day.tempMin != null ? `${day.tempMin}°` : '–'}
+                <span className="font-normal text-gray-500 dark:text-gray-400">
+                  /{day.tempMin != null ? `${day.tempMin}°` : '–'}
+                </span>
               </span>
             </div>
           </div>
