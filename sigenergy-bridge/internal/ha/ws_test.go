@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,9 +114,11 @@ func TestDial_AuthOK_ForwardsMatchingEvent(t *testing.T) {
 }
 
 func TestDial_AuthInvalid_Stops(t *testing.T) {
-	connectCount := 0
+	// connectCount is written by the server-handler goroutine and read by the
+	// test goroutine, so it must be accessed atomically to stay race-free.
+	var connectCount atomic.Int32
 	url, stop := newTestServer(t, func(c *websocket.Conn, t *testing.T) {
-		connectCount++
+		connectCount.Add(1)
 		_ = c.WriteJSON(map[string]any{"type": "auth_required"})
 		var auth map[string]any
 		if err := c.ReadJSON(&auth); err != nil {
@@ -135,8 +138,8 @@ func TestDial_AuthInvalid_Stops(t *testing.T) {
 
 	// Connected may or may not have emitted; we only assert that the loop
 	// stopped reconnecting. Count should be exactly 1.
-	if connectCount != 1 {
-		t.Errorf("expected 1 connect on auth_invalid, got %d", connectCount)
+	if got := connectCount.Load(); got != 1 {
+		t.Errorf("expected 1 connect on auth_invalid, got %d", got)
 	}
 	_ = l
 }
