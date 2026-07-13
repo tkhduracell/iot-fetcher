@@ -117,7 +117,7 @@ pytz==2026.2
     # via iot-fetcher (pyproject.toml)
 reactivex==4.1.0
     # via influxdb3-python
-requests==2.33.1
+requests==2.34.2
     # via
     #   iot-fetcher (pyproject.toml)
     #   google-api-core
