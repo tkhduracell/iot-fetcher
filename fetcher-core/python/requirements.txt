@@ -29,7 +29,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-api-core==2.30.3
+google-api-core==2.31.0
     # via
     #   google-cloud-core
     #   google-cloud-storage
