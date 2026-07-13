@@ -83,7 +83,10 @@ const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatouserco
 const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/dc07756a-54e3-4851-acc4-9fce465ee255/54252202-2ca1-45b3-963c-a3747597aac5/preview.m4a';
 
 const workCompleteAudio = typeof window !== 'undefined' ? new Audio(WORK_COMPLETE_SOUND) : null;
+if (workCompleteAudio) workCompleteAudio.preload = 'auto';
+
 const breakCompleteAudio = typeof window !== 'undefined' ? new Audio(BREAK_COMPLETE_SOUND) : null;
+if (breakCompleteAudio) breakCompleteAudio.preload = 'auto';
 
 const SONOS_SPEAKER = 'Kontor';
 const SONOS_VOLUME = 40;
@@ -117,8 +120,16 @@ export interface PomodoroTimerActions {
 
 function playSound(audio: HTMLAudioElement | null) {
   if (!audio) return;
+  // Ensure audio is loaded before playing
+  if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    // Audio not ready, try to load and play
+    audio.load();
+  }
   audio.currentTime = 0;
-  audio.play().catch(err => console.error('Failed to play sound:', err));
+  audio.play().catch(err => {
+    // Provide more context for debugging
+    console.error('Failed to play sound:', err.name, err.message);
+  });
 }
 
 function timerReducer(state: TimerState, action: TimerAction): TimerState {
