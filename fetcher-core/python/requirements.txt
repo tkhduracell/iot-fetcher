@@ -40,7 +40,7 @@ google-auth==2.52.0
     #   google-cloud-storage
 google-cloud-core==2.6.0
     # via google-cloud-storage
-google-cloud-storage==3.10.1
+google-cloud-storage==3.12.1
     # via iot-fetcher (pyproject.toml)
 google-crc32c==1.8.0
     # via
