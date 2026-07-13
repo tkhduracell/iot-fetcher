@@ -125,8 +125,8 @@ function playSound(audio: HTMLAudioElement | null) {
     // Audio not ready, wait for it to load then play
     const playWhenReady = () => {
       audio.currentTime = 0;
-      audio.play().catch(err => {
-        console.error('Failed to play sound:', err.name, err.message);
+      audio.play().catch(() => {
+        // Silently handle playback errors - audio may be blocked by browser autoplay policy
       });
       audio.removeEventListener('canplaythrough', playWhenReady);
     };
@@ -135,8 +135,8 @@ function playSound(audio: HTMLAudioElement | null) {
   } else {
     // Audio is ready, play immediately
     audio.currentTime = 0;
-    audio.play().catch(err => {
-      console.error('Failed to play sound:', err.name, err.message);
+    audio.play().catch(() => {
+      // Silently handle playback errors - audio may be blocked by browser autoplay policy
     });
   }
 }
