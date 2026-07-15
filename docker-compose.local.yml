@@ -57,6 +57,7 @@ services:
 
   sonos-http-api:
     container_name: sonos-http-api
+    env_file: ./sonos-http-api/.env
     volumes:
       - ./sonos-http-api/settings.json:/app/settings.json:ro
 
