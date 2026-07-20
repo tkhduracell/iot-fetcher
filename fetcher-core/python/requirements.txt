@@ -97,7 +97,7 @@ protobuf==7.34.1
     #   google-api-core
     #   googleapis-common-protos
     #   proto-plus
-pyarrow==24.0.0
+pyarrow==25.0.0
     # via influxdb3-python
 pyasn1==0.6.4
     # via pyasn1-modules
