@@ -1,135 +1,55 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { useRoborockZones } from '../hooks/useRoborockZones';
-import { RoborockZone } from '../lib/types';
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import RoborockCleanDialog from './RoborockCleanDialog';
+import { useRoborockTargets } from '../hooks/useRoborockTargets';
 
 const RoborockCleanButton: React.FC = () => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isCleaning, setIsCleaning] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const { targets, isLoading, refetch } = useRoborockTargets();
 
-  const { data: zones, isLoading, error } = useRoborockZones();
-
+  // Sync with URL hash, matching SpeakersButton.
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
+    const check = () => setOpen(window.location.hash === '#clean');
+    check();
+    window.addEventListener('hashchange', check);
+    return () => window.removeEventListener('hashchange', check);
+  }, []);
 
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
+  const handleClose = () => {
+    history.pushState(null, '', window.location.pathname + window.location.search);
+    setOpen(false);
+  };
 
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen]);
-
-  const handleClean = async (zone: RoborockZone) => {
-    setIsCleaning(true);
-    setIsOpen(false);
-
-    try {
-      const response = await fetch(
-        `/roborock/${zone.device_id}/${zone.map_flag}/${zone.zone_id}/clean`,
-        { method: 'POST' }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to start cleaning');
-      }
-
-      const result = await response.json();
-      console.log('Clean started:', result);
-    } catch (err) {
-      console.error('Failed to start cleaning:', err);
-      alert(`Failed to start cleaning: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    } finally {
-      setIsCleaning(false);
+  const toggle = () => {
+    if (open) {
+      handleClose();
+    } else {
+      refetch();
+      history.pushState(null, '', '#clean');
+      setOpen(true);
     }
   };
 
-  const zonesByMap = zones?.reduce((acc, zone) => {
-    if (!acc[zone.map_name]) {
-      acc[zone.map_name] = [];
-    }
-    acc[zone.map_name].push(zone);
-    return acc;
-  }, {} as Record<string, RoborockZone[]>);
+  const isEmpty = targets.floors.length === 0 && targets.rooms.length === 0;
 
-  if (error) return null;
+  // Hide entirely when Home Assistant is unconfigured or unreachable.
+  if (isLoading || isEmpty) return null;
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <>
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        disabled={isCleaning || isLoading}
+        onClick={toggle}
         title="Start Roborock cleaning"
-        className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-4 py-1.5 rounded-full shadow text-sm font-semibold cursor-pointer transition-colors"
+        className="px-4 py-1.5 rounded-full shadow text-sm font-semibold cursor-pointer transition-colors duration-200 bg-green-600 hover:bg-green-700 text-white flex items-center gap-1.5"
       >
-        {isCleaning ? 'Starting...' : 'Clean'}
+        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M10 2a8 8 0 100 16 8 8 0 000-16zm0 3a5 5 0 110 10 5 5 0 010-10zm0 3a2 2 0 100 4 2 2 0 000-4z" clipRule="evenodd" />
+        </svg>
+        Clean
       </button>
-
-      {isOpen && (
-        <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50 max-h-96 overflow-y-auto">
-          {isLoading && (
-            <div className="p-4 text-center text-gray-600 dark:text-gray-400">
-              Loading zones...
-            </div>
-          )}
-
-          {error && (
-            <div className="p-4 text-center text-red-600 dark:text-red-400">
-              Failed to load zones
-            </div>
-          )}
-
-          {zones && zones.length === 0 && (
-            <div className="p-4 text-center text-gray-600 dark:text-gray-400">
-              No zones configured
-            </div>
-          )}
-
-          {zonesByMap && Object.keys(zonesByMap).map((mapName) => (
-            <div key={mapName} className="border-b border-gray-200 dark:border-gray-700 last:border-b-0">
-              <div className="px-4 py-2 bg-gray-50 dark:bg-gray-750 font-semibold text-xs text-gray-700 dark:text-gray-300 uppercase tracking-wide">
-                {mapName}
-              </div>
-              {zonesByMap[mapName].map((zone) => (
-                <button
-                  key={`${zone.device_id}-${zone.zone_id}`}
-                  onClick={() => handleClean(zone)}
-                  className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-between group"
-                >
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {zone.zone_name}
-                    </span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      Segment {zone.segment_id}
-                    </span>
-                  </div>
-                  <svg
-                    className="w-4 h-4 text-gray-400 group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 5l7 7-7 7"
-                    />
-                  </svg>
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+      {open && <RoborockCleanDialog targets={targets} onClose={handleClose} />}
+    </>
   );
 };
 
