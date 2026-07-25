@@ -135,3 +135,20 @@ curl -X POST http://localhost:8080/roborock/clean \
 ## License
 
 This project is licensed under the MIT License.
+
+## Home Assistant
+
+The Roborock clean dialog reads its floors and rooms from Home Assistant. Add to
+`fetcher-core/webui/.env` (loaded by `docker-compose.local.yml`):
+
+```
+HOMEASSISTANT_URL=http://192.168.68.87:8123
+HOMEASSISTANT_TOKEN=<long-lived access token>
+```
+
+Both are read server-side only; the token never reaches the browser. When either is
+unset the dialog reports no targets and the Clean button hides itself.
+
+Floors and rooms are discovered from the `roborock_floor` and `roborock_room` HA
+labels — run `scripts/roborock-ha-provision.mjs` to create them. To add a room later,
+label its automation in Home Assistant; no code change is needed.
