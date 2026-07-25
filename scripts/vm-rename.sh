@@ -2,13 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-ENV_DIR="$(cd "$(git -C "$PROJECT_DIR" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
+# Resolves VM_BASE_URL / VM_TOKEN from the environment or the repo's .env files.
+source "$SCRIPT_DIR/vm-env.sh"
 
-TOKEN=$(grep '^INFLUX_TOKEN=' "$ENV_DIR/fetcher-core/python/.env" | cut -d'=' -f2-)
-DOMAIN=$(grep '^PROXY_DOMAIN=' "$ENV_DIR/https-proxy/.env" | cut -d'=' -f2-)
-BASE_URL="https://${DOMAIN}"
+TOKEN="$VM_TOKEN"
+BASE_URL="$VM_BASE_URL"
 
 usage() {
   cat <<EOF

@@ -1,26 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve the main repo root even when invoked from a worktree — the common
-# .git dir is shared across all worktrees of a repo, so its parent is the
-# canonical checkout that holds fetcher-core/python/.env.local.
-GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
-REPO_ROOT="$(cd "$GIT_COMMON_DIR/.." && pwd)"
-
-ENV_FILE="$REPO_ROOT/fetcher-core/python/.env.local"
-[[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE" >&2; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 for bin in curl jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "Missing required binary: $bin" >&2; exit 1; }
 done
 
-INFLUX_HOST="$(grep -E '^INFLUX_HOST=' "$ENV_FILE" | cut -d'=' -f2-)"
-INFLUX_TOKEN="$(grep -E '^INFLUX_TOKEN=' "$ENV_FILE" | cut -d'=' -f2-)"
-[[ -n "$INFLUX_HOST" && -n "$INFLUX_TOKEN" ]] \
-  || { echo "INFLUX_HOST / INFLUX_TOKEN missing in $ENV_FILE" >&2; exit 1; }
+# Resolves VM_BASE_URL / VM_TOKEN from the environment or the repo's .env files.
+source "$SCRIPT_DIR/vm-env.sh"
 
-BASE_URL="${INFLUX_HOST%/}"
-AUTH_HEADER="Authorization: Bearer ${INFLUX_TOKEN}"
+BASE_URL="$VM_BASE_URL"
+AUTH_HEADER="Authorization: Bearer ${VM_TOKEN}"
 
 PATTERN="${1:-}"
 
