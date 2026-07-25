@@ -29,7 +29,28 @@ webui/
 - `GET /influx/api/v2/health` - Proxy to InfluxDB health check
 
 ### Metrics
-- `GET /metrics/garmin` - Get Garmin device metrics
+- `GET /metrics/garmin` - Semi-structured tile list for the Garmin watch app
+
+  Returns a JSON array of tiles, each carrying its own rendering hints so the
+  watch app needs no per-metric knowledge:
+
+  ```json
+  [
+    { "title": "Batteri",   "unit": "%",  "decimals": 0, "key": "battery_soc", "data": 64 },
+    { "title": "Solceller", "unit": "kW", "decimals": 1, "key": "solar_power", "data": 2.5 },
+    { "title": "Inkop",     "unit": "kW", "decimals": 1, "key": "grid_power",  "data": -1.25 },
+    { "title": "Bil",       "unit": "%",  "decimals": 0, "key": "car_soc",     "data": 82 }
+  ]
+  ```
+
+  - Tile order is stable (it follows `METRIC_DEFS`), so the watch layout does
+    not shuffle between polls.
+  - A metric with no data is omitted rather than sent as null; the response is
+    `500 {"error": "No data available"}` only when every metric is missing.
+  - `car_soc` comes from `ha_volvo_xc40_battery_value`. The car only reports
+    while awake, so it is read as `last_over_time(...[24h])` instead of the 5m
+    average used for the frequently-sampled sigenergy metrics.
+  - Titles are ASCII on purpose — the watch font lacks Swedish diacritics.
 
 ### Sonos
 - `GET /sonos/*` - Proxy to Sonos API

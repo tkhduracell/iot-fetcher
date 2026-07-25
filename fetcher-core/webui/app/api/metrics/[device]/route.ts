@@ -1,13 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const METRIC_DEFS = [
+type MetricDef = {
+  title: string;
+  unit: string;
+  decimals: number;
+  key: string;
+  metric: string;
+  labels: Record<string, string>;
+  /** Range-vector aggregation applied to the selector. Defaults to avg_over_time. */
+  agg?: string;
+  /** Range-vector window. Defaults to 5m. */
+  window?: string;
+};
+
+// Titles are rendered by the Garmin watch app, whose font has no Swedish
+// diacritics — keep them ASCII ("Inkop", not "Inköp").
+const METRIC_DEFS: MetricDef[] = [
   {
     title: "Batteri",
     unit: "%",
     decimals: 0,
     key: "battery_soc",
     metric: "sigenergy_battery_soc_percent",
-    labels: {} as Record<string, string>,
+    labels: {},
   },
   {
     title: "Solceller",
@@ -23,7 +38,20 @@ const METRIC_DEFS = [
     decimals: 1,
     key: "grid_power",
     metric: "sigenergy_grid_power_net_power_kw",
-    labels: {} as Record<string, string>,
+    labels: {},
+  },
+  {
+    title: "Bil",
+    unit: "%",
+    decimals: 0,
+    key: "car_soc",
+    metric: "ha_volvo_xc40_battery_value",
+    labels: {},
+    // The car only reports while awake/connected, so samples are sparse and
+    // averaging a 5m window usually yields nothing. Take the last known SoC
+    // over a long window instead.
+    agg: "last_over_time",
+    window: "24h",
   },
 ];
 
@@ -47,9 +75,7 @@ export async function GET(
     return new NextResponse('Missing INFLUX_TOKEN', { status: 500 });
   }
 
-  const results: any[] = [];
-
-  for (const d of METRIC_DEFS) {
+  const settled = await Promise.all(METRIC_DEFS.map(async (d) => {
     const labelSelector = Object.entries(d.labels)
       .map(([k, v]) => `${k}="${v}"`)
       .join(',');
@@ -57,7 +83,7 @@ export async function GET(
     if (labelSelector) {
       selector += '{' + labelSelector + '}';
     }
-    const query = `avg_over_time(${selector}[5m])`;
+    const query = `${d.agg ?? 'avg_over_time'}(${selector}[${d.window ?? '5m'}])`;
 
     try {
       const resp = await fetch(
@@ -74,7 +100,7 @@ export async function GET(
 
       if (!resp.ok) {
         console.warn(`PromQL query failed for ${d.key}: ${await resp.text()}`);
-        continue;
+        return null;
       }
 
       const data = await resp.json();
@@ -82,16 +108,20 @@ export async function GET(
 
       if (promResult.length > 0) {
         const value = parseFloat(promResult[0].value[1]);
-        const { metric: _m, labels: _l, ...meta } = d;
-        results.push({ ...meta, data: value });
-      } else {
-        console.warn(`No data returned for ${d.key}`);
+        const { metric: _m, labels: _l, agg: _a, window: _w, ...meta } = d;
+        return { ...meta, data: value };
       }
+
+      console.warn(`No data returned for ${d.key}`);
+      return null;
     } catch (e) {
       console.error(`Error querying for ${d.key}:`, e);
-      continue;
+      return null;
     }
-  }
+  }));
+
+  // Preserves METRIC_DEFS order, so the watch app's tile layout stays stable.
+  const results = settled.filter((r) => r !== null);
 
   if (results.length === 0) {
     return NextResponse.json({ error: "No data available" }, { status: 500 });
