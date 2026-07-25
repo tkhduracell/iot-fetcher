@@ -33,8 +33,12 @@ VictoriaMetrics runs on rpi5 (container name `database`, `-httpListenAddr=:8181`
 
 ## Credentials
 
-- `scripts/vm-query.sh` and `scripts/vm-rename.sh` read `INFLUX_TOKEN` from `fetcher-core/python/.env` and `PROXY_DOMAIN` from `https-proxy/.env` — no shell prep needed.
-- `scripts/vm-shape.sh` reads `INFLUX_HOST` + `INFLUX_TOKEN` from `fetcher-core/python/.env.local`.
+- All three scripts resolve credentials through `scripts/vm-env.sh` — no shell prep needed.
+- Resolution order per value: an already-exported env var first, then the first `.env` file that defines the key.
+  - Endpoint: `VM_BASE_URL`, else `PROXY_DOMAIN` (→ `https://$PROXY_DOMAIN`), else `INFLUX_HOST`.
+  - Token: `INFLUX_TOKEN`.
+  - Files checked, in order: `fetcher-core/python/.env.local`, `fetcher-core/python/.env`, `https-proxy/.env.local`, `https-proxy/.env`.
+- A fresh clone or container has no `.env` files. The scripts then fail with an explicit "could not resolve VictoriaMetrics credentials" message listing what to set — that is a missing-credentials problem, not a broken script. Export the two vars to query from such an environment.
 - All scripts are worktree-safe (they resolve the main repo root via `git rev-parse --git-common-dir`).
 
 ## Anti-patterns
