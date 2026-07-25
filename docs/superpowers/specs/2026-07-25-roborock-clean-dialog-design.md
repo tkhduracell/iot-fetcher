@@ -75,8 +75,19 @@ and reloads.
 `automation.stada` stays unlabelled — it has no map and would be ambiguous in the dialog.
 
 Labels are created with the WebSocket API (`config/label_registry/create`) and assigned
-with `config/entity_registry/update`; neither is exposed over REST. The plan must verify
-these command names against the running HA version before relying on them.
+with `config/entity_registry/update`; neither is exposed over REST. Both were verified
+against the live HA on 2026-07-25 with a throwaway `cc_probe_tmp` label — create, assign,
+read back via `{{ label_entities(...) }}` over the REST template API, and delete all
+succeeded, and HA was left in its original state.
+
+**`config/entity_registry/update` replaces the `labels` array rather than appending**, so
+assignment must read the entity's current labels and merge. No `Städa *` automation
+carries labels today, but they do carry `area_id` (e.g. `stada_koket` → `kok`), which must
+not be disturbed.
+
+This is a one-off provisioning step, not something the web-ui does at runtime — the
+web-ui only ever reads labels, over REST. A short script under `scripts/` performs the
+provisioning so it is repeatable and reviewable.
 
 ## Web-ui changes
 
