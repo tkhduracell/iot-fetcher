@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { RoborockTarget, RoborockTargets } from '../lib/roborock';
 import { useRoborockStatus } from '../hooks/useRoborockStatus';
 
@@ -9,11 +9,20 @@ type Props = {
   onClose: () => void;
 };
 
+// Vacuum states that mean "hasn't actually gone off to clean". If the
+// vacuum is still in one of these ~15s after we asked it to start, the most
+// likely reason is its Do Not Disturb window (22:00-08:00) silently
+// refusing the request.
+const NOT_MOVING_STATES = new Set(['docked', 'idle', 'charging']);
+const START_CONFIRM_DELAY_MS = 15000;
+
 const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
   const status = useRoborockStatus(true);
   const [pending, setPending] = useState<string | null>(null);
-  const [started, setStarted] = useState<string | null>(null);
+  const [requested, setRequested] = useState<string | null>(null);
+  const [notStarted, setNotStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pendingCheck = useRef<{ at: number } | null>(null);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -23,10 +32,22 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
     return () => window.removeEventListener('keydown', handleEsc);
   }, [onClose]);
 
+  // A 200 from the trigger route only proves Home Assistant accepted the
+  // call, not that the vacuum moved — check status a little later before
+  // trusting it.
+  useEffect(() => {
+    if (!pendingCheck.current || !status) return;
+    if (Date.now() - pendingCheck.current.at < START_CONFIRM_DELAY_MS) return;
+    if (NOT_MOVING_STATES.has(status.state)) setNotStarted(true);
+    pendingCheck.current = null;
+  }, [status]);
+
   const start = async (target: RoborockTarget) => {
     setPending(target.entity_id);
     setError(null);
-    setStarted(null);
+    setRequested(null);
+    setNotStarted(false);
+    pendingCheck.current = null;
     try {
       const resp = await fetch('/api/roborock/trigger', {
         method: 'POST',
@@ -34,7 +55,8 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
         body: JSON.stringify({ entity_id: target.entity_id }),
       });
       if (!resp.ok) throw new Error(`Could not start ${target.name}`);
-      setStarted(target.name);
+      setRequested(target.name);
+      pendingCheck.current = { at: Date.now() };
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
     } finally {
@@ -44,10 +66,12 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
 
   const dock = async () => {
     setError(null);
+    setNotStarted(false);
+    pendingCheck.current = null;
     try {
       const resp = await fetch('/api/roborock/dock', { method: 'POST' });
       if (!resp.ok) throw new Error('Could not send the vacuum back to its dock');
-      setStarted('Returning to dock');
+      setRequested('Return to dock');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
     }
@@ -114,7 +138,14 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
           ) : (
             <span className="text-gray-500">Loading status…</span>
           )}
-          {started && <span className="text-green-400 truncate">{started} started</span>}
+          {requested && notStarted && (
+            <span className="text-yellow-400 truncate">
+              {requested} hasn&apos;t started — Do Not Disturb may be active
+            </span>
+          )}
+          {requested && !notStarted && (
+            <span className="text-green-400 truncate">{requested} requested</span>
+          )}
           {error && <span className="text-red-400 truncate">{error}</span>}
         </div>
         <button
