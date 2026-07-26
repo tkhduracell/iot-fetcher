@@ -121,9 +121,18 @@ The Roborock clean dialog is driven by Home Assistant. It allows you to:
 Add to `fetcher-core/webui/.env` (loaded by `docker-compose.local.yml`):
 
 ```
-HOMEASSISTANT_URL=http://192.168.68.87:8123
+HOMEASSISTANT_URL=http://host.docker.internal:8123
 HOMEASSISTANT_TOKEN=<long-lived access token>
 ```
+
+Home Assistant runs with `network_mode: host`, so it does **not** join the compose
+bridge network — the service name `home-assistant` will not resolve from this
+container. Use `host.docker.internal`, which `docker-compose.yml` already maps to
+`host-gateway` for this service; unlike a hardcoded LAN IP it survives the host's
+address changing.
+
+For local development outside Docker, point it at the LAN address instead
+(e.g. `http://192.168.68.87:8123`).
 
 Both are read server-side only; the token never reaches the browser. When either is
 unset the dialog reports no targets and the Clean button hides itself.
