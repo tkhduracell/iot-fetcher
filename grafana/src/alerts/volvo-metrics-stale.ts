@@ -21,6 +21,13 @@ import { reduceExpr, thresholdExpr, vmAlertQuery } from './helpers.ts';
  * rule fires even when data is fresh. `sum` collapses the count to a single
  * `{}` series that shares vector(0)'s label set, so `or` drops the fallback
  * whenever real data exists.
+ *
+ * `noData`/`execErr` are both `KeepLast`, not `Alerting`/`Error`. Grafana Cloud
+ * reaches this VM datasource directly over the internet (home rpi5 behind
+ * Caddy), so brief network blips surface as transient DatasourceError/NoData
+ * and would otherwise page on every flake. Real staleness is signalled by the
+ * `count = 0` *value* (never by an error or empty frame, thanks to vector(0)),
+ * so holding the last state through a transient error can't mask it.
  */
 export function volvoMetricsStale(): alerting.RuleBuilder {
   return new alerting.RuleBuilder('Volvo XC40 data saknas')
@@ -28,8 +35,8 @@ export function volvoMetricsStale(): alerting.RuleBuilder {
     .ruleGroup('Irisgatan')
     .condition('C')
     .forDuration('0s')
-    .noDataState('Alerting')
-    .execErrState('Error')
+    .noDataState('KeepLast')
+    .execErrState('KeepLast')
     .annotations({
       __dashboardUid__: 'irisgatan-v3',
       __panelId__: '44',
