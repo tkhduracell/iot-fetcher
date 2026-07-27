@@ -35,15 +35,22 @@ const CLEAN_PREFIX = 'Städa ';
 const EMPTY_VALUES = new Set(['unknown', 'unavailable', 'none', '']);
 
 // Emits {"floors": [{entity_id, name}], "rooms": [...]} in a single call.
-export const TARGETS_TEMPLATE =
-  `{% set ns = namespace(floors=[], rooms=[]) %}` +
-  `{% for e in label_entities('${FLOOR_LABEL}') %}` +
-  `{% set ns.floors = ns.floors + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] %}` +
-  `{% endfor %}` +
-  `{% for e in label_entities('${ROOM_LABEL}') %}` +
-  `{% set ns.rooms = ns.rooms + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] %}` +
-  `{% endfor %}` +
-  `{{ {'floors': ns.floors, 'rooms': ns.rooms} | tojson }}`;
+//
+// MUST stay a single template literal. When this was built by concatenating
+// several literals with `+`, the production minifier folded them into one string
+// and silently dropped the whole floors block, leaving unbalanced Jinja that HA
+// rejected with a 400 — while dev and unit tests, which run against source rather
+// than the bundle, kept passing. Do not split this back up.
+// The `{%-`/`-%}` markers strip the newlines so only the final JSON is emitted.
+export const TARGETS_TEMPLATE = `
+{%- set ns = namespace(floors=[], rooms=[]) -%}
+{%- for e in label_entities('${FLOOR_LABEL}') -%}
+{%- set ns.floors = ns.floors + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] -%}
+{%- endfor -%}
+{%- for e in label_entities('${ROOM_LABEL}') -%}
+{%- set ns.rooms = ns.rooms + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] -%}
+{%- endfor -%}
+{{ {'floors': ns.floors, 'rooms': ns.rooms} | tojson }}`;
 
 export const STATUS_TEMPLATE =
   `{{ {` +

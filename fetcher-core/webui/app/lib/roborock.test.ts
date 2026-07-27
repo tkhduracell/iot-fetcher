@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  TARGETS_TEMPLATE,
   parseTargets,
   parseStatus,
   isAllowedTarget,
@@ -77,6 +78,33 @@ describe('parseStatus', () => {
   it('surfaces a real error string', () => {
     const raw = '{"battery": "42", "error": "stuck", "room": "Office", "state": "error", "status": "error"}';
     expect(parseStatus(raw).error).toBe('stuck');
+  });
+});
+
+describe('TARGETS_TEMPLATE', () => {
+  // A production minifier once folded this template's concatenated parts and
+  // dropped the entire floors block, producing unbalanced Jinja that Home
+  // Assistant rejected with a 400. Nothing caught it because the source was
+  // fine — only the bundle was broken. These assert the shape stays intact.
+  it('queries both labels', () => {
+    expect(TARGETS_TEMPLATE).toContain("label_entities('roborock_floor')");
+    expect(TARGETS_TEMPLATE).toContain("label_entities('roborock_room')");
+  });
+
+  it('builds both accumulators and balances every block', () => {
+    expect(TARGETS_TEMPLATE).toContain('ns.floors = ns.floors +');
+    expect(TARGETS_TEMPLATE).toContain('ns.rooms = ns.rooms +');
+
+    const opens = TARGETS_TEMPLATE.match(/\{%-?\s*for\b/g) ?? [];
+    const closes = TARGETS_TEMPLATE.match(/\{%-?\s*endfor\b/g) ?? [];
+    expect(opens).toHaveLength(2);
+    expect(closes).toHaveLength(2);
+  });
+
+  it('emits both keys in its output expression', () => {
+    expect(TARGETS_TEMPLATE).toContain("'floors': ns.floors");
+    expect(TARGETS_TEMPLATE).toContain("'rooms': ns.rooms");
+    expect(TARGETS_TEMPLATE).toContain('tojson');
   });
 });
 
