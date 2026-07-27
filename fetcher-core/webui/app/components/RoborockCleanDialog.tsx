@@ -85,10 +85,10 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
       onClick={() => start(target)}
       disabled={pending !== null}
       className={[
-        'rounded-xl font-semibold text-white transition-colors disabled:opacity-50',
+        'rounded-xl font-semibold text-white transition-colors disabled:opacity-50 min-w-0 break-words',
         large
-          ? 'bg-green-700 hover:bg-green-600 px-6 py-6 text-xl'
-          : 'bg-gray-700 hover:bg-gray-600 px-4 py-5 text-lg',
+          ? 'bg-green-700 hover:bg-green-600 px-4 py-6 text-lg sm:px-6 sm:text-xl'
+          : 'bg-gray-700 hover:bg-gray-600 px-3 py-5 text-base sm:px-4 sm:text-lg',
       ].join(' ')}
     >
       {pending === target.entity_id ? 'Starting…' : target.name}
@@ -111,7 +111,7 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
       </div>
 
       {/* Targets */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5">
         {hasTargets ? (
           <>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
@@ -124,7 +124,7 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
             <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
               Rooms
             </h3>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {targets.rooms.map(r => renderTarget(r, false))}
             </div>
           </>
