@@ -8,6 +8,15 @@ export type RoborockTargets = {
   rooms: RoborockTarget[];
 };
 
+export type RoborockTargetsResponse = RoborockTargets & {
+  /**
+   * False when HOMEASSISTANT_URL/TOKEN are unset. That is a deliberate opt-out
+   * rather than a failure, and is what lets the client tell "no Home Assistant
+   * here" apart from "Home Assistant has not reported its labels yet".
+   */
+  configured: boolean;
+};
+
 export type RoborockStatus = {
   state: string;
   status: string;
@@ -86,6 +95,26 @@ export function parseStatus(raw: string): RoborockStatus {
     room: optionalString(parsed?.room),
     error: optionalString(parsed?.error),
   };
+}
+
+/**
+ * Whether the dashboard should keep retrying the targets fetch in the background.
+ *
+ * An empty target set means two very different things. Home Assistant may not be
+ * configured at all — deliberate, so stop asking. Or it is configured but has not
+ * reported any labelled automations yet, which is exactly what happens while HA is
+ * still starting up and its Roborock entities have not registered. Only the second
+ * case should retry; without it the Clean button hides itself after a reboot and
+ * stays hidden until somebody reloads the wall tablet by hand.
+ */
+export function shouldRetryTargets(state: {
+  configured: boolean;
+  isEmpty: boolean;
+  lastFetchFailed: boolean;
+}): boolean {
+  if (state.lastFetchFailed) return true;
+  if (!state.configured) return false;
+  return state.isEmpty;
 }
 
 /**

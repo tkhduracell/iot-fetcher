@@ -3,6 +3,7 @@ import {
   parseTargets,
   parseStatus,
   isAllowedTarget,
+  shouldRetryTargets,
   stripCleanPrefix,
   RoborockTargets,
 } from './roborock';
@@ -76,6 +77,28 @@ describe('parseStatus', () => {
   it('surfaces a real error string', () => {
     const raw = '{"battery": "42", "error": "stuck", "room": "Office", "state": "error", "status": "error"}';
     expect(parseStatus(raw).error).toBe('stuck');
+  });
+});
+
+describe('shouldRetryTargets', () => {
+  it('retries after a failed fetch so a transient HA outage self-heals', () => {
+    expect(shouldRetryTargets({ configured: true, isEmpty: true, lastFetchFailed: true })).toBe(true);
+    // Even with targets already known — the next fetch may be the one that matters.
+    expect(shouldRetryTargets({ configured: true, isEmpty: false, lastFetchFailed: true })).toBe(true);
+  });
+
+  it('retries when HA is configured but has reported no labels yet', () => {
+    // This is the post-reboot case: HA's HTTP API is up before its Roborock
+    // entities register, so label_entities() renders to an empty list.
+    expect(shouldRetryTargets({ configured: true, isEmpty: true, lastFetchFailed: false })).toBe(true);
+  });
+
+  it('does not retry when Home Assistant is deliberately unconfigured', () => {
+    expect(shouldRetryTargets({ configured: false, isEmpty: true, lastFetchFailed: false })).toBe(false);
+  });
+
+  it('stops retrying once targets are known', () => {
+    expect(shouldRetryTargets({ configured: true, isEmpty: false, lastFetchFailed: false })).toBe(false);
   });
 });
 
