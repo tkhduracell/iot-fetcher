@@ -56,10 +56,10 @@ webui/
 - `GET /sonos/*` - Proxy to Sonos API
 
 ### Roborock API
-- `GET /roborock/zones` - List available cleaning zones/rooms
-- `POST /roborock/clean` - Start cleaning (full clean or zone-specific)
-  - Body: `{}` for full clean
-  - Body: `{"zone_id": "1"}` for zone-specific clean
+- `GET /roborock/targets` - List available floors and rooms from Home Assistant
+- `GET /roborock/status` - Get vacuum status from Home Assistant
+- `POST /roborock/trigger` - Trigger vacuum clean via Home Assistant
+- `POST /roborock/dock` - Return vacuum to dock via Home Assistant
 
 ### File Upload
 - `POST /upload` - Upload files
@@ -127,31 +127,40 @@ python web.py
 
 ## Roborock Integration
 
-The Roborock integration allows you to:
-- List available cleaning zones/rooms
+The Roborock clean dialog is driven by Home Assistant. It allows you to:
+- View available floors and rooms configured in Home Assistant
 - Start full vacuum cleaning
-- Start zone-specific cleaning
+- Start floor-specific or room-specific cleaning
+- Check vacuum status and dock it
 
 **Requirements:**
-- Valid Roborock account credentials
-- Device must be connected to Roborock cloud service
+- Home Assistant instance running with Roborock integration configured
+- Long-lived access token for authentication
 
-**API Usage Examples:**
+**Configuration:**
 
-```bash
-# Get available zones
-curl http://localhost:8080/roborock/zones
+Add to `fetcher-core/webui/.env` (loaded by `docker-compose.local.yml`):
 
-# Start full clean
-curl -X POST http://localhost:8080/roborock/clean \
-     -H "Content-Type: application/json" \
-     -d '{}'
-
-# Clean specific zone
-curl -X POST http://localhost:8080/roborock/clean \
-     -H "Content-Type: application/json" \
-     -d '{"zone_id": "5"}'
 ```
+HOMEASSISTANT_URL=http://host.docker.internal:8123
+HOMEASSISTANT_TOKEN=<long-lived access token>
+```
+
+Home Assistant runs with `network_mode: host`, so it does **not** join the compose
+bridge network — the service name `home-assistant` will not resolve from this
+container. Use `host.docker.internal`, which `docker-compose.yml` already maps to
+`host-gateway` for this service; unlike a hardcoded LAN IP it survives the host's
+address changing.
+
+For local development outside Docker, point it at the LAN address instead
+(e.g. `http://192.168.68.87:8123`).
+
+Both are read server-side only; the token never reaches the browser. When either is
+unset the dialog reports no targets and the Clean button hides itself.
+
+Floors and rooms are discovered from the `roborock_floor` and `roborock_room` HA
+labels — run `scripts/roborock-ha-provision.mjs` to create them. To add a room later,
+label its automation in Home Assistant; no code change is needed.
 
 ## License
 
