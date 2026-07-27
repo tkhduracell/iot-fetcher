@@ -6,7 +6,7 @@ aiohttp==3.13.5
     # via plugp100
 aiosignal==1.4.0
     # via aiohttp
-anyio==4.13.0
+anyio==4.14.2
     # via httpx
 attrs==26.1.0
     # via aiohttp
