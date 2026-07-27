@@ -8,6 +8,15 @@ export type RoborockTargets = {
   rooms: RoborockTarget[];
 };
 
+export type RoborockTargetsResponse = RoborockTargets & {
+  /**
+   * False when HOMEASSISTANT_URL/TOKEN are unset. That is a deliberate opt-out
+   * rather than a failure, and is what lets the client tell "no Home Assistant
+   * here" apart from "Home Assistant has not reported its labels yet".
+   */
+  configured: boolean;
+};
+
 export type RoborockStatus = {
   state: string;
   status: string;
@@ -26,15 +35,22 @@ const CLEAN_PREFIX = 'Städa ';
 const EMPTY_VALUES = new Set(['unknown', 'unavailable', 'none', '']);
 
 // Emits {"floors": [{entity_id, name}], "rooms": [...]} in a single call.
-export const TARGETS_TEMPLATE =
-  `{% set ns = namespace(floors=[], rooms=[]) %}` +
-  `{% for e in label_entities('${FLOOR_LABEL}') %}` +
-  `{% set ns.floors = ns.floors + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] %}` +
-  `{% endfor %}` +
-  `{% for e in label_entities('${ROOM_LABEL}') %}` +
-  `{% set ns.rooms = ns.rooms + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] %}` +
-  `{% endfor %}` +
-  `{{ {'floors': ns.floors, 'rooms': ns.rooms} | tojson }}`;
+//
+// MUST stay a single template literal. When this was built by concatenating
+// several literals with `+`, the production minifier folded them into one string
+// and silently dropped the whole floors block, leaving unbalanced Jinja that HA
+// rejected with a 400 — while dev and unit tests, which run against source rather
+// than the bundle, kept passing. Do not split this back up.
+// The `{%-`/`-%}` markers strip the newlines so only the final JSON is emitted.
+export const TARGETS_TEMPLATE = `
+{%- set ns = namespace(floors=[], rooms=[]) -%}
+{%- for e in label_entities('${FLOOR_LABEL}') -%}
+{%- set ns.floors = ns.floors + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] -%}
+{%- endfor -%}
+{%- for e in label_entities('${ROOM_LABEL}') -%}
+{%- set ns.rooms = ns.rooms + [{'entity_id': e, 'name': state_attr(e, 'friendly_name')}] -%}
+{%- endfor -%}
+{{ {'floors': ns.floors, 'rooms': ns.rooms} | tojson }}`;
 
 export const STATUS_TEMPLATE =
   `{{ {` +
@@ -86,6 +102,26 @@ export function parseStatus(raw: string): RoborockStatus {
     room: optionalString(parsed?.room),
     error: optionalString(parsed?.error),
   };
+}
+
+/**
+ * Whether the dashboard should keep retrying the targets fetch in the background.
+ *
+ * An empty target set means two very different things. Home Assistant may not be
+ * configured at all — deliberate, so stop asking. Or it is configured but has not
+ * reported any labelled automations yet, which is exactly what happens while HA is
+ * still starting up and its Roborock entities have not registered. Only the second
+ * case should retry; without it the Clean button hides itself after a reboot and
+ * stays hidden until somebody reloads the wall tablet by hand.
+ */
+export function shouldRetryTargets(state: {
+  configured: boolean;
+  isEmpty: boolean;
+  lastFetchFailed: boolean;
+}): boolean {
+  if (state.lastFetchFailed) return true;
+  if (!state.configured) return false;
+  return state.isEmpty;
 }
 
 /**

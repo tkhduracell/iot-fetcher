@@ -77,6 +77,8 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
     }
   };
 
+  const hasTargets = targets.floors.length > 0 || targets.rooms.length > 0;
+
   const renderTarget = (target: RoborockTarget, large: boolean) => (
     <button
       key={target.entity_id}
@@ -110,19 +112,31 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
 
       {/* Targets */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
-          Whole floor
-        </h3>
-        <div className="grid grid-cols-2 gap-3 mb-8">
-          {targets.floors.map(f => renderTarget(f, true))}
-        </div>
+        {hasTargets ? (
+          <>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+              Whole floor
+            </h3>
+            <div className="grid grid-cols-2 gap-3 mb-8">
+              {targets.floors.map(f => renderTarget(f, true))}
+            </div>
 
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
-          Rooms
-        </h3>
-        <div className="grid grid-cols-3 gap-3">
-          {targets.rooms.map(r => renderTarget(r, false))}
-        </div>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+              Rooms
+            </h3>
+            <div className="grid grid-cols-3 gap-3">
+              {targets.rooms.map(r => renderTarget(r, false))}
+            </div>
+          </>
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-2">
+            <span className="text-gray-300">No cleaning targets available</span>
+            <span className="text-sm text-gray-500 max-w-md">
+              Home Assistant reported no labelled automations. If it is still starting
+              up this resolves on its own — the list refreshes automatically.
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Status footer */}
