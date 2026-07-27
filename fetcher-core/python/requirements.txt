@@ -137,7 +137,7 @@ tplinkrouterc6u==5.23.0
     # via iot-fetcher (pyproject.toml)
 tuya-connector-python==0.1.2
     # via iot-fetcher (pyproject.toml)
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via reactivex
 typish==1.9.3
     # via jsons
