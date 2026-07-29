@@ -73,7 +73,7 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 }
 
 {$HA_DOMAIN} {
-	@denied not remote_ip 192.168.68.0/24 185.176.29.48
+	@denied not remote_ip 192.168.68.0/24 10.8.0.0/24 185.176.29.48
 	abort @denied
 
 	header {
