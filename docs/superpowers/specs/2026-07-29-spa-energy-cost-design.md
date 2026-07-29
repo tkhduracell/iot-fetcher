@@ -259,40 +259,74 @@ Only the trailing-12-month panel spans the backfill; the other two are recent-wi
 
 ### 7. Stacked energy breakdown (Energi row)
 
-A stacked panel splitting household energy into pool + car + spa + other.
+Battery charging is treated as a **consumer**, not as part of the total. That resolves
+what would otherwise be an ill-defined "other": energy stored is energy that went
+somewhere, and at 0.80 kW average (≈19 kWh/day) it is the single largest item on the
+list — larger than the spa.
 
-| Series | Source |
-|---|---|
-| Pool | `pool_iqpump_motordata_power` + `aqua_temp_power_usage` (measured) |
-| Car | `ha_wallbox_pulsar_max_sn_992144_charging_power_value` (measured) |
-| Spa | modelled, per §5 |
-| Other | total − the three above |
+Energy balance, all in kW:
 
-**Open question — what "total" means here.** `tibber_power` is *grid import only*: it
-averages 2455 W over the last 7 days and never goes negative (min −1 W); export lives
-in `tibber_powerProduction`, averaging 90 W. The house also has PV
-(`sigenergy_pv_power_power_kw`) and a battery (`sigenergy_battery_power_to/from_battery_kw`),
-so **house consumption ≠ grid import**.
+```
+sinks = pool + car + spa + battery_charge + other
+      = pv_ac + grid_import + battery_discharge − grid_export
+```
 
-That makes "other" ill-defined at the edges: if the spa runs at midday on solar, grid
-import can be near zero while the modelled spa term is ~2.7 kW, driving "other" negative.
+so `other = pv_ac + grid_import + battery_discharge − grid_export
+            − pool − car − spa − battery_charge`.
 
-Two options, to settle before implementing:
+The battery appears on both sides (discharge as a source, charge as a sink); over time
+the two net out to the round-trip loss, which lands in `other`.
 
-1. **True consumption** — `grid_import + pv_self_consumed + battery_discharge −
-   battery_charge`. Physically correct, "other" stays positive, but it is a derived
-   quantity and no such series exists yet.
-2. **Grid import** (`tibber_power`) — matches what is actually billed, consistent with
-   the cost framing elsewhere, but needs "other" clamped at 0 and a description saying
-   solar-covered load is excluded by construction.
+| Series | Source | Unit |
+|---|---|---|
+| Pool | `pool_iqpump_motordata_power` + `aqua_temp_power_usage` | W (**see scale bug**) |
+| Car | `ha_wallbox_pulsar_max_sn_992144_charging_power_value` | **kW** |
+| Spa | modelled, per §5 | W |
+| Battery charge | `sigenergy_battery_power_to_battery_kw` | kW |
+| Grid import | `sigenergy_grid_power_power_from_grid_kw` | kW |
+| Grid export | `sigenergy_grid_power_power_to_grid_kw` | kW |
+| PV | `sigenergy_pv_power_power_kw{string="total"}` | kW |
+| Battery discharge | `sigenergy_battery_power_from_battery_kw` | kW |
 
-Recommendation: option 1 for a panel titled *energy usage*, since the question being
-asked is "where does our power go", not "what did we import". Note `sigenergy_pv_power_power_kw`
-carries a `string` label whose `total` value (0.35 kW avg) is inconsistent with
-`string_1` alone (0.74 kW avg) — resolve which series is authoritative before use.
+**Units are mixed — normalise to W (or kW) explicitly per term.** This is the most
+likely source of a silent 1000× error.
 
-Spa is ~11.8 kWh/day against ~59 kWh/day of grid import, so roughly 20% — large enough
-that mis-defining the total is visible.
+**Use Sigenergy, not Tibber, for the balance.** `sigenergy_grid_power_power_from_grid_kw`
+averages 2.458 kW against Tibber's 2.455 kW over 7 days — a 0.1% match — and Sigenergy
+additionally knows PV and battery, so one source keeps sign conventions consistent.
+Tibber remains the source for *cost*, since it is the billing meter.
+
+**PV: use `string="total"`.** The per-string series are panel-side DC and drop out at
+night (`string_1` has 6 829 samples vs `total`'s 10 004, which is why its average looks
+higher). In daylight `string_1` reads ~13% above `total` — the DC→AC inverter loss.
+`total` is AC output and is sampled continuously, which is what the balance needs.
+`string_4` is ~0 and can be ignored.
+
+**Blocked on the `aqua_temp_power_usage` scale bug** — see below. Until that is settled
+the pool term is 10× too large and would dominate the chart.
+
+Adding kW-scale terms with different label sets (`host`, `string`, `device`) requires
+`sum()`/`sum without(...)` per term before they can be combined, or the expression
+silently returns empty — as it did while drafting this.
+
+### 8. `aqua_temp_power_usage` is 10× too high (pre-existing bug)
+
+`aquatemp.py:188` derives `power_usage = T07 × T14` (compressor current × inverter plate
+AC voltage). Observed peak is **29 260** while whole-house grid import peaks at
+**14 292 W** — the pool heat pump cannot draw twice the entire house. The 7-day average
+of 8 578 would be 206 kWh/day.
+
+Divided by 10: 2 926 W peak, 858 W average ≈ 20.6 kWh/day, which is right for a pool
+heat pump. Either T07 is deci-amps or T14 is deci-volts; the product is 10× either way.
+
+**Consequence:** `poolCostExpr` divides by 1000 assuming watts, so the existing
+*Pool kostnad* and *Pool kostnad i år* panels overstate heat-pump cost by 10×.
+
+Verify T07/T14 raw units against the AquaTemp API before changing anything, then decide
+whether to correct at the writer (historical data stays wrong, or needs a backfill/rename)
+or to compensate in the query (history reads correctly, but the metric stays misleading
+for any future consumer). Tracked separately; not a prerequisite for the spa panels,
+which do not use this metric.
 
 ## Testing
 
@@ -307,6 +341,7 @@ that mis-defining the total is visible.
 
 ## Out of scope
 
+- Fixing `aqua_temp_power_usage` (§8) — identified here, tracked separately.
 - Reconstructing heater history from the L2 power signature (would remove the ~5% idle
   overestimate; rejected as unnecessary complexity).
 - Recalibrating jet2 (n=6, weakest of the three).
