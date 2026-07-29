@@ -77,6 +77,11 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 	abort @denied
 
 	header {
+		# Apply after the upstream response headers are written, otherwise
+		# Home Assistant's own X-Frame-Options / X-Content-Type-Options are
+		# appended alongside ours and each is sent twice.
+		defer
+
 		X-Frame-Options "SAMEORIGIN"
 		X-Content-Type-Options "nosniff"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
