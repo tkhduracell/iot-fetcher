@@ -73,10 +73,15 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 }
 
 {$HA_DOMAIN} {
-	@denied not remote_ip 192.168.68.0/24 185.176.29.48
+	@denied not remote_ip 192.168.68.0/24 10.8.0.0/24 185.176.29.48
 	abort @denied
 
 	header {
+		# Apply after the upstream response headers are written, otherwise
+		# Home Assistant's own X-Frame-Options / X-Content-Type-Options are
+		# appended alongside ours and each is sent twice.
+		defer
+
 		X-Frame-Options "SAMEORIGIN"
 		X-Content-Type-Options "nosniff"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"

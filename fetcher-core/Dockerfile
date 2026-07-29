@@ -37,13 +37,6 @@ RUN if [ "$PYDEBUGGER" = "1" ]; then \
 # Copy Python scheduler
 COPY python/ ./python
 
-# Python deps for roborock sidecar
-COPY roborock-sidecar/pyproject.toml roborock-sidecar/uv.lock roborock-sidecar/
-RUN uv pip install --system --no-cache -r roborock-sidecar/pyproject.toml
-
-# Copy roborock sidecar
-COPY roborock-sidecar/ ./roborock-sidecar
-
 # Copy Next.js standalone build
 COPY --from=frontend-build /app/.next/standalone ./webui
 COPY --from=frontend-build /app/.next/static ./webui/.next/static

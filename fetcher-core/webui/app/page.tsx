@@ -9,6 +9,7 @@ import PomodoroButton from './components/PomodoroButton';
 import SpeakersButton from './components/SpeakersButton';
 import useAutoReload from './hooks/useAutoReload';
 import EnergyPriceBar from './components/EnergyPriceBar';
+import WeatherBar from './components/WeatherBar';
 import SonosWidget from './components/SonosWidget';
 import { values } from './lib/values';
 import { Config, ConfigRow } from './lib/types';
@@ -16,7 +17,7 @@ import { Config, ConfigRow } from './lib/types';
 const Row: React.FC<{row: ConfigRow; rowIdx: number; onOpen: (row: number, col: number) => void;}> = ({ row, rowIdx, onOpen }) => (
   <div className="flex flex-row gap-1 min-h-[13.8vh]">
     {row.map((item, colIdx) => (
-      <div className="flex-1 cursor-pointer" key={`${item.measurement}-${item.field}-${item.filter ? JSON.stringify(item.filter) : ''}`} onClick={() => onOpen(rowIdx, colIdx)}>
+      <div className="flex-1 min-w-0 cursor-pointer" key={`${item.measurement}-${item.field}-${item.title}`} onClick={() => onOpen(rowIdx, colIdx)}>
         <LatestValue {...item} colCount={row.length} />
       </div>
     ))}
@@ -39,9 +40,9 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1">
-      <div className="flex items-center gap-2 mx-1 my-2">
+      <div className="flex items-center flex-wrap gap-2 mx-1 my-2">
         <h1 className="text-3xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
-        <div className='flex flex-grow-1 gap-1.5 justify-end'>
+        <div className='flex grow gap-1.5 justify-end'>
           <SpeakersButton />
           <PomodoroButton />
           <RoborockCleanButton />
@@ -50,6 +51,7 @@ export default function DashboardPage() {
       </div>
       <div className="w-full py-0 flex flex-col gap-1.5">
         <Grid values={values} onOpen={openFullscreen} />
+        <WeatherBar />
         <EnergyPriceBar />
         <SonosWidget />
       </div>

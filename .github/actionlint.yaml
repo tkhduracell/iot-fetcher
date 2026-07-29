@@ -1,0 +1,3 @@
+ignore:
+  # Balena deploy step is temporarily disabled with `if: false`
+  - 'build-fetcher-core\.yml:.*constant expression "false" in condition'

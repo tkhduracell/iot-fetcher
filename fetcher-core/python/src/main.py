@@ -10,13 +10,12 @@ import schedule
 from deco import deco
 from elpris import elpris
 from ngenic import ngenic
-from sigenergy import sigenergy
 from aqualink import aqualink
 from airquality import airquality
 from aquatemp import aquatemp
 from tapo import tapo
 from sonos import sonos
-from backup_influx import backup_influx
+from backup_vm import backup_vm
 from eufy import eufy, eufy_snapshot
 
 logging.basicConfig(level=logging.INFO,
@@ -46,10 +45,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'sigenergy', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_influx', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_vm', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [deco, elpris, ngenic, sigenergy, aqualink, aquatemp, airquality, tapo, sonos, backup_influx, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, aqualink, aquatemp, airquality, tapo, sonos, backup_vm, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -58,7 +57,7 @@ def main():
     logging.info("Starting the scheduler...")
     schedule.every(1).minutes.do(with_timeout(aqualink))
     schedule.every(5).minutes.do(with_timeout(ngenic))
-    schedule.every(1).minutes.do(with_timeout(sigenergy))
+    # sigenergy now handled by the sigenergy-bridge Go service
     # schedule.every(5).minutes.do(with_timeout(balboa))
     schedule.every(5).minutes.do(with_timeout(aquatemp))
     schedule.every(5).minutes.do(with_timeout(deco))
@@ -66,7 +65,11 @@ def main():
     schedule.every(5).minutes.do(with_timeout(eufy))
     schedule.every(1).minutes.do(with_timeout(sonos))
 
-    schedule.every(6).hours.at(':05').do(with_timeout(elpris))
+    # Primary: run right before the pool-pump-planner fires at 14:15 local,
+    # so day-ahead prices are fresh. Backup every 6h in case the primary is
+    # missed (container down, job slip, etc.).
+    schedule.every().day.at('14:03').do(with_timeout(elpris))
+    schedule.every(6).hours.do(with_timeout(elpris))
     schedule.every(1).hours.at(':05').do(with_timeout(airquality))
     # schedule.every(1).hours.at(':10').do(with_timeout(balboa_control))  # Disabled SPA module
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
@@ -75,7 +78,7 @@ def main():
     schedule.run_all(delay_seconds=10)
 
     # Avoid this from running every startup
-    schedule.every(12).hours.at(':10').do(with_timeout(backup_influx))
+    schedule.every(12).hours.at(':10').do(with_timeout(backup_vm, timeout_seconds=3600))
 
     while 1:
         schedule.run_pending()

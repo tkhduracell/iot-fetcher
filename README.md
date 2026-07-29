@@ -9,7 +9,7 @@ The `iot_fetcher` project is designed to collect and process data from various I
   - Elpris - Fetches energy price in Sweden SE 1-4
   - Ngenic - Fetches temperature and settings from Ngenic
   - Tapo - Connects to TP-Link Tapo smart devices to fetch power state, energy usage, and device metrics
-  - **InfluxDB Backup** - Automated backup system that exports all buckets to Google Cloud Storage every 12 hours
+  - **VictoriaMetrics Backup** - Automated backup that streams `/api/v1/export/native` to Google Cloud Storage every 12 hours
 
 ## Environment Variables
 
@@ -30,42 +30,38 @@ Run TAPO module individually for testing:
 docker run --rm --env-file .env iot-fetcher:latest -- tapo
 ```
 
-## InfluxDB Backup & Restore
+## VictoriaMetrics Backup & Restore
 
 ### Automated Backups
-- **Schedule**: Runs automatically every 12 hours
-- **Storage**: Google Cloud Storage with date-based folders (`backup/YYYY-MM-DD/`)
-- **Process**: Exports all buckets sequentially, compresses with gzip, uploads to GCS
-- **Memory optimized**: Processes one bucket at a time to minimize memory usage
+- **Schedule**: Runs automatically every 12 hours (at `:10` past the hour)
+- **Storage**: Google Cloud Storage, path templated via `GOOGLE_BACKUP_URI`
+- **Process**: Streams VM's `/api/v1/export/native` → gzip → GCS (single file per run)
+- **Filename**: `vm-export-YYYYMMDDTHHMMSSZ.native.gz`
 
 ### Environment Variables Required
 ```bash
-GOOGLE_BACKUP_URI=gcs://your-bucket/backup/%Y-%m-%d/
+INFLUX_HOST=http://database:8181        # VictoriaMetrics HTTP endpoint
+INFLUX_TOKEN=...                        # only needed if VM is behind vmauth
+GOOGLE_BACKUP_URI=gcs://your-bucket/vm-backups/%Y%m%dT%H/
 GOOGLE_SERVICE_ACCOUNT='{"type":"service_account",...}'
 ```
 
 ### Manual Backup
 ```bash
 # Run backup manually inside the container
-docker exec iot-fetcher python python/src/main.py backup_influx
+docker exec iot-fetcher python python/src/main.py backup_vm
 ```
 
 ### Restore from Backup
 ```bash
-# Download backup from GCS (on host machine)
-gsutil cp gs://your-bucket/backup/2025-08-20/bucket_name_timestamp.tar.gz ./backup.tar.gz
+# Download backup from GCS
+gsutil cp gs://your-bucket/vm-backups/20260422T12/vm-export-20260422T120500Z.native.gz ./vm-export.native.gz
 
-# Extract backup locally
-tar -xzf backup.tar.gz
-
-# Copy extracted backup into container
-docker cp ./backup_bucket_name iot-fetcher:/tmp/backup_bucket_name
-
-# Restore inside the container using influx CLI to new bucket
-docker exec iot-fetcher influx restore /tmp/backup_bucket_name -o your-org -b your-bucket-old
-
-# Migrate from new restored bucket into old one
-docker exec iot-fetcher influx query -o your-org -q 'from(bucket: "you-bucket-old") |> range(start: -5y, stop: now()) |> to(bucket: "your-bucket")'
+# Stream into VM's import endpoint (ungzip on the fly)
+gunzip -c vm-export.native.gz | curl -X POST \
+  --data-binary @- \
+  -H "Content-Type: application/octet-stream" \
+  "http://database:8181/api/v1/import/native"
 ```
 
 ## TP-Link Tapo Integration

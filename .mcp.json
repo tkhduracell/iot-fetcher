@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/homeassistant-ai/ha-mcp@be864b5d685f167334487d4fe83324afbb4999ca",
+        "ha-mcp"
+      ],
+      "env": {
+        "HOMEASSISTANT_URL": "${HOMEASSISTANT_URL}",
+        "HOMEASSISTANT_TOKEN": "${HOMEASSISTANT_TOKEN}"
+      }
+    }
+  }
+}

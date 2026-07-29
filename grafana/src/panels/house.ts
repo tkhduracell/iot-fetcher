@@ -64,11 +64,15 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .insertNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayAndColor('temperature_C', 'Utomhustemperatur', 'blue'),
+      overrideDisplayAndColor('Marktemperatur', 'Marktemperatur', 'orange'),
     ])
     .withTarget(
       vmMetric('A', 'ngenic_node_sensor_measurement_value', 'temperature_C', {
         where: `"node_type" = 'CONTROLLER'`,
       }),
+    )
+    .withTarget(
+      vmExpr('B', 'avg_over_time(ha_soil_sensor_temperature_value[$__interval])', 'Marktemperatur'),
     )
     .gridPos({ h: 7, w: 8, x: 12, y: 1 });
 
@@ -88,9 +92,9 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('30m')
     .gridPos({ h: 7, w: 4, x: 20, y: 1 });
 
-  // Ngenic Innegivare - Relativ Luftfuktighet (timeseries)
+  // Luftfuktighet Inomhus (timeseries) - Ngenic indoor sensor + HA dehumidifier
   const humidity = new TimeseriesBuilder()
-    .title('Ngenic Innegivare - Relativ Luftfuktighet')
+    .title('Luftfuktighet Inomhus')
     .datasource(VM_DS)
     .unit('humidity')
     .axisSoftMin(40)
@@ -100,11 +104,17 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .legend(legendBottom())
     .tooltip(tooltipMulti())
     .insertNulls(SPAN_NULLS_MS)
-    .overrides([overrideDisplayName('humidity_relative_percent', 'Relativ fuktighet')])
     .withTarget(
       vmMetric('A', 'ngenic_node_sensor_measurement_value', 'humidity_relative_percent', {
         where: `"node_type" = 'SENSOR'`,
-      }),
+      }).legendFormat('Hallen'),
+    )
+    .withTarget(
+      vmExpr(
+        'B',
+        'avg(ha_avfuktare_humidity_target_current_humidity_value{}) by (friendly_name)',
+        'Tvättstuga',
+      ),
     )
     .gridPos({ h: 7, w: 8, x: 12, y: 8 });
 
@@ -126,52 +136,6 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     )
     .timeFrom('7d/d')
     .gridPos({ h: 7, w: 4, x: 20, y: 8 });
-
-  // Ngenic Batteri (timeseries, 30d) - aggregated by node type
-  const sensorBattery = new TimeseriesBuilder()
-    .title('Ngenic Batteri')
-    .datasource(VM_DS)
-    .unit('percent')
-    .min(0)
-    .max(100)
-    .interval('1h')
-    .colorScheme(paletteColor())
-    .thresholds(greenThreshold())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
-    .overrides([
-      overrideDisplayName('SENSOR', 'Innegivare'),
-      overrideDisplayName('CONTROLLER', 'Styrenhet'),
-    ])
-    .withTarget(
-      vmExpr('A', 'avg by (node_type) (avg_over_time(ngenic_node_battery_value[$__interval]))', '{{node_type}}'),
-    )
-    .timeFrom('30d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 15 });
-
-  // Ngenic Radiosignal (timeseries, 30d) - aggregated by node type
-  const sensorSignal = new TimeseriesBuilder()
-    .title('Ngenic Radiosignal')
-    .datasource(VM_DS)
-    .unit('percent')
-    .min(0)
-    .max(100)
-    .interval('1h')
-    .colorScheme(paletteColor())
-    .thresholds(greenThreshold())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
-    .overrides([
-      overrideDisplayName('SENSOR', 'Innegivare'),
-      overrideDisplayName('CONTROLLER', 'Styrenhet'),
-    ])
-    .withTarget(
-      vmExpr('A', 'avg by (node_type) (avg_over_time(ngenic_node_radio_signal_value[$__interval]))', '{{node_type}}'),
-    )
-    .timeFrom('30d/d')
-    .gridPos({ h: 7, w: 12, x: 12, y: 15 });
 
   // Sovrum (timeseries) - bedroom climate temperature
   const bedroomTemp = new TimeseriesBuilder()
@@ -203,7 +167,7 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .timeFrom('30m')
     .gridPos({ h: 7, w: 4, x: 8, y: 8 });
 
-  return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi, bedroomTemp, bedroomStat, sensorBattery, sensorSignal];
+  return [indoorTemp, indoorStat, outdoorTemp, outdoorStat, humidity, aqi, bedroomTemp, bedroomStat];
 }
 
 export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
@@ -219,10 +183,21 @@ export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
     .tooltip(tooltipMulti())
     .insertNulls(SPAN_NULLS_MS)
     .withTarget(
-      vmExpr('A', 'last_over_time(tapo_cloud_device_device_count[$__interval])', '{{device_alias}}'),
+      vmExpr(
+        'A',
+        'sum(tapo_cloud_device_device_count{device_type="HOMEWIFISYSTEM"}[$__interval]) by (device_model)',
+        'WiFi: {{device_model}}',
+      ),
+    )
+    .withTarget(
+      vmExpr(
+        'B',
+        'sum(tapo_cloud_device_device_count{device_type!="HOMEWIFISYSTEM"}[$__interval]) by (device_type)',
+        'Other: {{device_type}}',
+      ),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 87 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 136 });
 
   return [tapoOnline];
 }

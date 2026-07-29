@@ -17,10 +17,20 @@ CODES = {
     'T03': 'temp_outgoing',
     'T05': 'temp_ambient',
     'R02': 'temp_target',
-    'T12': 'power_usage',
     'power': 'power_mode',
-    'Manual-mute': 'silenced'
+    'Manual-mute': 'silenced',
 }
+
+# Codes we fetch but don't emit as their own fields — used only as inputs
+# to the derived `power_usage` metric (compressor current × supply voltage).
+# Per the radical-squared/aquatemp HA integration's per-device entity map
+# (entity_description.1442284873216843776.json), T07 is "Compressor current
+# Detect [A]" and T14 is "Inverter plate AC voltage [V]". The legacy default
+# parameter map said T06=amper / T13=volt, which is correct for older units
+# but NOT this device — verified live: T07 reports 9.5, T14 reports 222 (V).
+DERIVATION_CODES = ('T07', 'T14')
+
+PROTOCOL_CODES = list(CODES.keys()) + list(DERIVATION_CODES)
 
 
 def aquatemp():
@@ -103,7 +113,7 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[Dict[str, str]]]
     deviceData_response = requests.post(
         f"{cloudurl}/app/device/getDataByCode?lang=en", headers=headers, json={
             'deviceCode': deviceCode,
-            'protocalCodes': list(CODES.keys()),
+            'protocalCodes': PROTOCOL_CODES,
             'appId': '14',
         }, timeout=30)
     if deviceData_response.status_code != 200:
@@ -147,21 +157,36 @@ def _aquatemp():
                 f"[aquatemp] Device {deviceCode} has no data, skipping.")
             continue
 
+        # Collect every returned value first so we can both write the
+        # straightforward fields and derive composites (e.g. power = I × V).
+        values: Dict[str, float] = {}
+        for deviceDataObject in deviceData:
+            code = deviceDataObject['code']
+            raw = deviceDataObject.get('value')
+            if raw in (None, ''):
+                logger.warning(
+                    f"[aquatemp] Device {deviceCode} has no value for {code}, skipping.")
+                continue
+            values[code] = float(raw)
+
         p = Point('aqua_temp')\
             .tag('device_name', device['deviceNickName'])\
             .tag('device_id', device['deviceId'])\
             .tag('device_model', device['custModel'])
 
         has_fields = False
-        for deviceDataObject in deviceData:
-            metricName = CODES.get(
-                deviceDataObject['code'], 'unknown_' + deviceDataObject['code'])
-            if deviceDataObject.get('value'):
-                p = p.field(metricName, float(deviceDataObject['value']))
+        for code, metricName in CODES.items():
+            if code in values:
+                p = p.field(metricName, values[code])
                 has_fields = True
-            else:
-                logger.warning(
-                    f"[aquatemp] Device {deviceCode} has no value for {metricName}, skipping.")
+
+        # Derived input power: compressor current (T07, A) × inverter plate
+        # AC voltage (T14, V). Stored under the same `power_usage` field name
+        # as before but now reflects real instantaneous draw instead of the
+        # previous T12-as-power misread (T12 is actually fan target RPM).
+        if 'T07' in values and 'T14' in values:
+            p = p.field('power_usage', values['T07'] * values['T14'])
+            has_fields = True
 
         if has_fields:
             points.append(p)

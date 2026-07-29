@@ -7,7 +7,8 @@ import SparklineChart from './SparklineChart';
 function valueSizeClass(colCount: number) {
   if (colCount <= 1) return 'text-7xl md:text-8xl';
   if (colCount === 2) return 'text-6xl md:text-7xl';
-  return 'text-5xl md:text-6xl';
+  if (colCount === 3) return 'text-5xl md:text-6xl';
+  return 'text-3xl md:text-6xl';
 }
 
 function titleSizeClass(colCount: number) {
@@ -26,6 +27,7 @@ const LatestValue: React.FC<LatestValueProps> = (props) => {
     measurement: props.measurement,
     field: props.field,
     filter: props.filter as Record<string, string>,
+    expr: props.expr,
     sparkline: sparkline || '',
   });
 

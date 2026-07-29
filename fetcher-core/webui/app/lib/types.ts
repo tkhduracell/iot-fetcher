@@ -4,6 +4,9 @@ export type ConfigValue = {
   measurement: string;
   field: string;
   filter?: Record<string, any>;
+  // Optional PromQL selector expression. When set, overrides the default
+  // `${measurement}_${field}{filter}` selector wrapped by last_over_time / avg_over_time.
+  expr?: string;
   title: string;
   unit: string;
   window?: "5m" | "60m" ;
@@ -77,16 +80,4 @@ export type SonosTrack = {
   type?: string;
   stationName?: string;
   absoluteAlbumArtUri?: string;
-};
-
-export type RoborockZone = {
-  zone_id: string;
-  zone_name: string;
-  segment_id: number;
-  iot_id: string;
-  map_name: string;
-  map_flag: number;
-  device_id: string;
-  device_name: string;
-  device_product_id: string;
 };

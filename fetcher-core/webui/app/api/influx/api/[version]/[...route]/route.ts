@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { mockInstantResult, mockRangeResult, shouldMockOnError } from '../../../../../lib/influxMock';
 
 const ALLOWED_ROUTES: Record<string, string[]> = {
   v1: ['query', 'query_range', 'labels', 'label'],
@@ -23,6 +24,22 @@ function fallbackResponse(version: string, route: string): NextResponse {
   return new NextResponse('', { status: 200 });
 }
 
+function mockResponse(version: string, route: string, searchParams: URLSearchParams): NextResponse {
+  if (version === 'v1' && route === 'query') {
+    return NextResponse.json(mockInstantResult(searchParams.get('query') ?? ''));
+  }
+  if (version === 'v1' && route === 'query_range') {
+    const nowIso = new Date().toISOString();
+    return NextResponse.json(mockRangeResult(
+      searchParams.get('query') ?? '',
+      searchParams.get('start') ?? nowIso,
+      searchParams.get('end') ?? nowIso,
+      searchParams.get('step') ?? '5m',
+    ));
+  }
+  return fallbackResponse(version, route);
+}
+
 async function handleRequest(
   request: NextRequest,
   { params }: { params: Promise<{ version: string; route: string[] }> }
@@ -44,6 +61,9 @@ async function handleRequest(
 
   if (!influxHost || !influxToken) {
     console.warn('influx/api: missing env vars', { influxHost: !!influxHost, influxToken: !!influxToken });
+    if (shouldMockOnError()) {
+      return mockResponse(version, route, request.nextUrl.searchParams);
+    }
     return fallbackResponse(version, route);
   }
 
@@ -69,26 +89,34 @@ async function handleRequest(
   const searchParams = request.nextUrl.searchParams.toString();
   const fullUrl = searchParams ? `${url}?${searchParams}` : url;
 
-  const resp = await fetch(fullUrl, {
-    method: request.method,
-    headers,
-    body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.arrayBuffer() : undefined,
-    signal: AbortSignal.timeout(30000),
-    cache: 'no-store',
-  });
+  try {
+    const resp = await fetch(fullUrl, {
+      method: request.method,
+      headers,
+      body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.arrayBuffer() : undefined,
+      signal: AbortSignal.timeout(30000),
+      cache: 'no-store',
+    });
 
-  const body = await resp.arrayBuffer();
-  const responseHeaders = new Headers();
-  resp.headers.forEach((value, key) => {
-    if (!EXCLUDED_HEADERS.has(key.toLowerCase())) {
-      responseHeaders.set(key, value);
+    const body = await resp.arrayBuffer();
+    const responseHeaders = new Headers();
+    resp.headers.forEach((value, key) => {
+      if (!EXCLUDED_HEADERS.has(key.toLowerCase())) {
+        responseHeaders.set(key, value);
+      }
+    });
+
+    return new NextResponse(body, {
+      status: resp.status,
+      headers: responseHeaders,
+    });
+  } catch (e) {
+    console.warn(`influx/api: request to ${fullUrl} failed`, e);
+    if (shouldMockOnError()) {
+      return mockResponse(version, route, request.nextUrl.searchParams);
     }
-  });
-
-  return new NextResponse(body, {
-    status: resp.status,
-    headers: responseHeaders,
-  });
+    return new NextResponse('Upstream Influx/VictoriaMetrics request failed', { status: 502 });
+  }
 }
 
 export const GET = handleRequest;

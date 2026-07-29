@@ -5,6 +5,7 @@ volumes:
   garmin-tokens:
   home-assistant-config:
   caddy-data:
+  gdrive-rag-data:
 
 services:
   database:
@@ -14,10 +15,13 @@ services:
     # No ports exposed - only accessible via database-auth (vmauth) for security
     volumes:
       - victoria-metrics:/victoria-metrics-data
+      - ./victoria-metrics/vmscrape.yml:/etc/vmscrape.yml:ro
     command:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=3y
       - -httpListenAddr=:8181
+      - -dedup.minScrapeInterval=10s
+      - -promscrape.config=/etc/vmscrape.yml
 
   database-auth:
     image: victoriametrics/vmauth:latest
@@ -69,6 +73,8 @@ services:
   iot-fetcher:
     image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
     restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -76,6 +82,38 @@ services:
     depends_on:
       - database-auth
       - sonos-http-api
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  pool-pump-planner:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/pool-pump-planner:latest
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
+    depends_on:
+      - database-auth
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  sigenergy-bridge:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/sigenergy-bridge:latest
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - database-auth
+      - home-assistant
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  gdrive-rag:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/gdrive-rag:latest
+    hostname: gdrive-rag
+    restart: unless-stopped
+    volumes:
+      - gdrive-rag-data:/data
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"

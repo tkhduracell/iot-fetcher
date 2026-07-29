@@ -393,7 +393,7 @@ wheels = [
 
 [[package]]
 name = "google-cloud-storage"
-version = "3.10.1"
+version = "3.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-api-core" },
@@ -403,9 +403,9 @@ dependencies = [
     { name = "google-resumable-media" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4c/47/205eb8e9a1739b5345843e5a425775cbdc472cc38e7eda082ba5b8d02450/google_cloud_storage-3.10.1.tar.gz", hash = "sha256:97db9aa4460727982040edd2bd13ff3d5e2260b5331ad22895802da1fc2a5286", size = 17309950, upload-time = "2026-03-23T09:35:23.409Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/ac/60b4cb0a6c8c6bb7cedb8971ba5e34a94096acf76e2cc242bcf1e6fc5c49/google_cloud_storage-3.12.1.tar.gz", hash = "sha256:1d81491c7663bc26c5056d00b834356f2253b910ef467f9cf9928a87fca1e04b", size = 17339353, upload-time = "2026-07-08T17:03:59.142Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/ff/ca9ab2417fa913d75aae38bf40bf856bb2749a604b2e0f701b37cfcd23cc/google_cloud_storage-3.10.1-py3-none-any.whl", hash = "sha256:a72f656759b7b99bda700f901adcb3425a828d4a29f911bc26b3ea79c5b1217f", size = 324453, upload-time = "2026-03-23T09:35:21.368Z" },
+    { url = "https://files.pythonhosted.org/packages/80/6e/ca176e95bafac0fe7befeee7e0420e686de147571cd2908e308c5fe71bda/google_cloud_storage-3.12.1-py3-none-any.whl", hash = "sha256:9297ae0c2ce3f5400b1f2bb3a3e6d2cd256614366e03cd30600871df8e903afb", size = 340845, upload-time = "2026-07-08T17:03:31.418Z" },
 ]
 
 [[package]]
@@ -546,7 +546,7 @@ wheels = [
 
 [[package]]
 name = "influxdb3-python"
-version = "0.18.0"
+version = "0.20.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -555,9 +555,9 @@ dependencies = [
     { name = "reactivex" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4d/d9/bf0a0012ac01aa8addb49df4860f2f4aa592ac37f42e2d1e8ecaea6412d5/influxdb3_python-0.18.0.tar.gz", hash = "sha256:9ffe285fc9711820264f77ba4a03524df5cddbab3ebfa90967e88db2e89fbba6", size = 98718, upload-time = "2026-02-19T12:32:22.017Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/f0/3fb234e83316e439a91d4d7ee5a2f569b9b81e5a709618c4168dca3a087b/influxdb3_python-0.20.0.tar.gz", hash = "sha256:f1e28c2f4f244d48006beeb82be7aea82ebdd3b3e1807250d124b6f1d53c5943", size = 102084, upload-time = "2026-06-11T06:49:53.012Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/19/bc67948fd69a69c218e9470cabe805c74610f3a4433d64216d2f370bb255/influxdb3_python-0.18.0-py3-none-any.whl", hash = "sha256:ff293152a817dc46179987c60aff51c1edd502428571335f1aa7e7644b7a97d2", size = 95201, upload-time = "2026-02-19T12:32:20.289Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/2f/06961cdb1d38d0cdb3c6876970db227e69824a293896af6d1eb983fa1534/influxdb3_python-0.20.0-py3-none-any.whl", hash = "sha256:0914f05c2ed9b96f2962fb3d410068dda9c411b562dab22fae1d6c6599a37927", size = 86330, upload-time = "2026-06-11T06:49:52.016Z" },
 ]
 
 [[package]]
@@ -571,29 +571,25 @@ dependencies = [
     { name = "ngenicpy" },
     { name = "plugp100" },
     { name = "pybalboa" },
-    { name = "pymodbustcp" },
     { name = "pytz" },
     { name = "requests" },
     { name = "schedule" },
-    { name = "sigenapi" },
     { name = "tplinkrouterc6u" },
     { name = "tuya-connector-python" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "google-cloud-storage", specifier = "==3.10.1" },
+    { name = "google-cloud-storage", specifier = "==3.12.1" },
     { name = "iaqualink", specifier = "==0.6.0" },
-    { name = "influxdb3-python", specifier = "==0.18.0" },
+    { name = "influxdb3-python", specifier = "==0.20.0" },
     { name = "ngenicpy", specifier = "==0.5.2" },
     { name = "plugp100", specifier = "==5.1.7" },
     { name = "pybalboa", specifier = "==1.1.4" },
-    { name = "pymodbustcp", specifier = "==0.3.0" },
-    { name = "pytz", specifier = ">=2024.2" },
-    { name = "requests", specifier = "==2.33.1" },
+    { name = "pytz", specifier = ">=2026.3.post1" },
+    { name = "requests", specifier = "==2.34.2" },
     { name = "schedule", specifier = "==1.2.2" },
-    { name = "sigenapi", specifier = "==1.0.0" },
-    { name = "tplinkrouterc6u", specifier = "==5.18.0" },
+    { name = "tplinkrouterc6u", specifier = "==5.23.0" },
     { name = "tuya-connector-python", specifier = "==0.1.2" },
 ]
 
@@ -932,15 +928,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pymodbustcp"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/c6/d3f3842696607a09f6cf3c2a668c0e05731caf3013b118ecd75deddc548c/pyModbusTCP-0.3.0.tar.gz", hash = "sha256:893a4d88f6a63af21bd35b2b22061355e74005ea27fefc104e8f9bdb4ce81a04", size = 31478, upload-time = "2024-09-04T15:11:00.047Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/0f/343d4902b01989131aa7ef8a9aa253731c16814c789e49f5ff9b4bb66334/pyModbusTCP-0.3.0-py3-none-any.whl", hash = "sha256:8b0086fa7ed4bd1bf6956d56a0979937008c48091f052310ad8826647fe30180", size = 24898, upload-time = "2024-09-04T15:10:58.524Z" },
-]
-
-[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -954,11 +941,11 @@ wheels = [
 
 [[package]]
 name = "pytz"
-version = "2026.1.post1"
+version = "2026.3.post1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/56/db/b8721d71d945e6a8ac63c0fc900b2067181dbb50805958d4d4661cf7d277/pytz-2026.1.post1.tar.gz", hash = "sha256:3378dde6a0c3d26719182142c56e60c7f9af7e968076f31aae569d72a0358ee1", size = 321088, upload-time = "2026-03-03T07:47:50.683Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/48/fb042503b6ca6cd271261dc559fd6432f7d8c713153e9ec5c591af4dfc1c/pytz-2026.3.post1.tar.gz", hash = "sha256:2211d3fcf9a797d3405cac96ac7f61d80e6a644f72a3309607282fe8a2010c5d", size = 319745, upload-time = "2026-07-25T15:12:07.385Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/99/781fe0c827be2742bcc775efefccb3b048a3a9c6ce9aec0cbf4a101677e5/pytz-2026.1.post1-py2.py3-none-any.whl", hash = "sha256:f2fd16142fda348286a75e1a524be810bb05d444e5a081f37f7affc635035f7a", size = 510489, upload-time = "2026-03-03T07:47:49.167Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/7b/39c34ca613b0b198cb866466651b26b045e2009864c5183c979a3b83f383/pytz-2026.3.post1-py2.py3-none-any.whl", hash = "sha256:dd95840dd199baea12d9cc096a1d452caa6596a1c1e4b5f3dbd1541855d5e815", size = 508283, upload-time = "2026-07-25T15:12:05.782Z" },
 ]
 
 [[package]]
@@ -975,7 +962,7 @@ wheels = [
 
 [[package]]
 name = "requests"
-version = "2.33.1"
+version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -983,9 +970,9 @@ dependencies = [
     { name = "idna" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/a4/98b9c7c6428a668bf7e42ebb7c79d576a1c3c1e3ae2d47e674b468388871/requests-2.33.1.tar.gz", hash = "sha256:18817f8c57c6263968bc123d237e3b8b08ac046f5456bd1e307ee8f4250d3517", size = 134120, upload-time = "2026-03-30T16:09:15.531Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed", size = 142856, upload-time = "2026-05-14T19:25:27.735Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/8e/7540e8a2036f79a125c1d2ebadf69ed7901608859186c856fa0388ef4197/requests-2.33.1-py3-none-any.whl", hash = "sha256:4e6d1ef462f3626a1f0a0a9c42dd93c63bad33f9f1c1937509b8c5c8718ab56a", size = 64947, upload-time = "2026-03-30T16:09:13.83Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl", hash = "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0", size = 73075, upload-time = "2026-05-14T19:25:26.443Z" },
 ]
 
 [[package]]
@@ -1016,15 +1003,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sigenapi"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ba/78/24f37cf5cb7557e4265997ee6e03d49768dc803683f80dbb0f6037f63308/sigenapi-1.0.0.tar.gz", hash = "sha256:8b1de148b0acbd38e99bdb16b04aeb59eb5fc38fb86cd3e9311b30183dc98051", size = 3353, upload-time = "2024-09-21T10:57:00.65Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6f/14/77726efabcbdaa9a9886258d2c6a046d6026a92c5d9c44ff0972ad495f44/sigenapi-1.0.0-py3-none-any.whl", hash = "sha256:b52120ada8bd7c999000d311d6f4fab18a47d6a23af9d345553d9522dbb23963", size = 3488, upload-time = "2024-09-21T10:56:59.266Z" },
-]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1035,16 +1013,16 @@ wheels = [
 
 [[package]]
 name = "tplinkrouterc6u"
-version = "5.18.0"
+version = "5.23.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "macaddress" },
     { name = "pycryptodome" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/78/474bb0320482ef6918514c44e90c858c712bc40d4863d1097b82a972b3ab/tplinkrouterc6u-5.18.0.tar.gz", hash = "sha256:13a8ff2e241d0eb94d56515da96aca842bdec0ef6ff284509fc601980cf6b5b3", size = 126279, upload-time = "2026-04-09T10:35:27.063Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/0d/e0deceed89e7a741cd7ea8bb4319b03bbf97bc5e684606fb4aeaceec936e/tplinkrouterc6u-5.23.0.tar.gz", hash = "sha256:b3a7fd05ef9f5b0691df3b9b97d8bc3c578c79cf6cbec26859c5117c14267d22", size = 141478, upload-time = "2026-06-09T11:17:51.455Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/60/38/dfdd8a70bde32652faece6dbcfaed6e15157fb3e34dd03b36adc7ed2e8d2/tplinkrouterc6u-5.18.0-py3-none-any.whl", hash = "sha256:0038c60e76a0f449166ba50431906bcea060576d1c89ef7d16a3592f7012939f", size = 146494, upload-time = "2026-04-09T10:35:25.623Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/97/c729e0a1cd197232e038d5336401db5e5e535b5e440ea7470c1d179d67b4/tplinkrouterc6u-5.23.0-py3-none-any.whl", hash = "sha256:b4d5448eb489a93523bc60f83e66c9f2f738f92ddf10aa1fdd12f18453085141", size = 162996, upload-time = "2026-06-09T11:17:50.267Z" },
 ]
 
 [[package]]

@@ -6,3 +6,6 @@ services:
 
   ai-assistant:
     build: ./ai-assistant
+
+  pool-pump-planner:
+    build: ./pool-pump-planner

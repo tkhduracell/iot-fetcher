@@ -1,0 +1,8 @@
+# VictoriaMetrics native scrape config (-promscrape.config).
+# Targets are resolved via docker DNS on the iot-fetcher_default network.
+scrape_configs:
+  - job_name: 'wud'
+    scrape_interval: 60s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['wud:3000']
