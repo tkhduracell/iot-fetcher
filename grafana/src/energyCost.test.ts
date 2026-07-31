@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { accumulatedCostExpr, loadedPriceExpr } from './energyCost.ts';
+import { accumulatedCostExpr, loadedPriceExpr, spaPowerWattsExpr, spaCostExpr, SPA_JET_W, SPA_HEATER_W, SPA_CIRC_W } from './energyCost.ts';
 
 test('loadedPriceExpr applies fees then VAT to the SE4 spot price', () => {
   assert.equal(
@@ -38,4 +38,28 @@ test('accumulatedCostExpr reproduces the existing pool YTD expression', () => {
     accumulatedCostExpr(power, { step: '15m', stepMinutes: 15, range: '$__range' }),
     expected,
   );
+});
+
+test('spa wattage constants match the calibrated model', () => {
+  assert.equal(SPA_JET_W, 2000);
+  assert.equal(SPA_HEATER_W, 3000);
+  assert.equal(SPA_CIRC_W, 80);
+});
+
+test('spaPowerWattsExpr sums each component with a label-safe zero fallback', () => {
+  assert.equal(
+    spaPowerWattsExpr('5m'),
+    '((sum(avg_over_time(spa_pump_1_value[5m])) or vector(0)) * 2000' +
+    ' + (sum(avg_over_time(spa_pump_2_value[5m])) or vector(0)) * 2000' +
+    ' + (max(avg_over_time(spa_heater_on_value[5m])) or vector(0)) * 3000' +
+    ' + (sum(avg_over_time(spa_circulation_pump_value[5m])) or vector(0)) * 80)',
+  );
+});
+
+test('spaCostExpr wraps the power model in the loaded price integration', () => {
+  const expr = spaCostExpr({ step: '15m', stepMinutes: 15, range: '$__range' });
+  assert.ok(expr.startsWith('sum_over_time(('));
+  assert.ok(expr.includes('spa_heater_on_value[15m]'));
+  assert.ok(expr.includes('+ 0.6184) * 1.25'));
+  assert.ok(expr.endsWith(')[$__range:15m]) * 15 / 60'));
 });
