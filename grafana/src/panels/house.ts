@@ -197,7 +197,7 @@ export function tapoPanels(): cog.Builder<dashboard.Panel>[] {
       ),
     )
     .timeFrom('7d/d')
-    .gridPos({ h: 7, w: 12, x: 0, y: 136 });
+    .gridPos({ h: 7, w: 12, x: 0, y: 144 });
 
   return [tapoOnline];
 }
