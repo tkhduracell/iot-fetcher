@@ -121,8 +121,16 @@ That would split the data into two incompatible eras. A dedicated binary sensor
 sidesteps the enum path entirely — binary sensors already round-trip correctly, which
 is why `spa_circulation_pump_value` works.
 
-The exporter enum fix still ships, independently, because it repairs Temp Range and
-`spa_climate_state_text`.
+The exporter enum fix still ships, independently, because it makes
+`spa_climate_hvac_action_value` a real signal instead of a constant 0.
+
+**Correction (2026-08-04):** an earlier draft of this spec claimed the enum fix would
+also repair `spa_temperature_range_state_text` ("Temp Range") and `spa_climate_state_text`.
+It does not. Those come from the entity's own *state*, handled by `_process_state()` in
+`__init__.py:67`, which is a separate code path from `_process_attribute()` in
+`attributes.py`. The Temp Range panel will still plot a flat line after this deploys.
+Fixing it needs the same enum treatment applied to `_process_state` (e.g. `high`/`low`
+for `select` entities) and is tracked separately.
 
 ## Design
 
@@ -143,7 +151,11 @@ drying = 4, fan = 5, preheating = 6, defrosting = 7
 
 Because this changes what a `0` means retroactively (old `0` = "off", and old heating
 periods have no `_value` at all), the spa panels deliberately do not depend on this
-series. It is a correctness fix for other entities.
+series.
+
+Scope note: this fix covers attribute values only (`_process_attribute` in
+`attributes.py`). Entity *state* values go through `_process_state` in `__init__.py` and
+are unaffected — see the correction under "Why not fix `hvac_action` and use it directly".
 
 ### 2. `spa_heater_on` — forward
 
