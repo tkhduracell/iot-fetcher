@@ -162,39 +162,58 @@ binary_sensor:
 Exported via the Victoria Metrics panel in HA with metric name `spa_heater_on`,
 yielding `spa_heater_on_value` ∈ {0,1}.
 
-Note this forward signal *does* distinguish heating from idle (it tests for `heating`
-specifically), while backfilled history does not. The discontinuity is ~5% of heater
-hours at the boundary date and is documented in the panel description.
+This forward signal distinguishes heating from idle — it tests for `heating`
+specifically — which turns out to be the property the whole design depends on. See §3.
 
-### 3. `spa_heater_on` — backfill
+### 3. `spa_heater_on` — backfill: ABANDONED (2026-08-04)
 
-One-time script, `scripts/backfill-spa-heater.sh` (or Python under `fetcher-core`),
-run manually:
+**Decision: no backfill. `spa_heater_on` starts when the template sensor goes live.**
+The panels show heater cost from that date forward and nothing before it. The script was
+written, validated, and reverted (`3e3670b`, reverted in `ff73321`). Nothing was ever
+written to VictoriaMetrics.
 
-1. Query `spa_climate_hvac_action_state_text` sample timestamps over the retention window.
-2. Derive on/off intervals: a sample present ⇒ on, at the exporter's ~60 s cadence.
-3. Emit `spa_heater_on,run=backfill value=0|1` in Influx line protocol with explicit
-   timestamps at 1-minute resolution.
-4. POST to VM's `/write` through vmauth, the same path the exporter uses.
+The plan was to reconstruct history from the exporter quirk: `hvac_action="off"` maps to
+the number 0 and lands in `..._value`, while `heating`/`idle` have no numeric mapping and
+land in `..._state_text`, so the *presence* of a `state_text` sample means "not off".
 
-Must support `--dry-run` printing a summary (interval count, total on-hours, date range)
-before any write. Writing to production VM is a mutating, hard-to-reverse action and
-needs explicit confirmation on the real run.
+**The mechanism works.** Against ground truth on 2026-08-01 it recovered **329 of 329**
+HA `heating` minutes with only 2 minutes of edge slop (333 reconstructed vs 331 actual
+non-off). The trick is sound.
 
-**Label-set hazard.** Backfilled samples carry `run="backfill"`; live samples from the
-HA exporter carry no `run` label. Those are two *different* series, so a bare
-`spa_heater_on_value` selector returns both, and any `sum()` over them double-counts in
-any period where both exist. This is the same label-set trap documented in the
-`vm-or-vector0-alert-gotcha` and `vm-or-combines-same-label-series` memories.
+**The assumption behind it does not.** "Not off" is `heating` **+** `idle`, and idle
+draws no power. This spec originally assumed idle was ~5% of heater hours, measured over
+a 10-day summer window where it genuinely was 0.7%. That window is unrepresentative.
+Fraction of reconstructed-ON minutes actually drawing (L2 > 1500 W), per 14-day window
+across the intended backfill range:
 
-Mitigations, both required:
+```
+72%  56%  52%  48%  68%  82%  64%  71%  62%  68%  64%
+```
 
-- The backfill must **stop strictly before** the first live sample's timestamp, so the
-  two series never overlap in time. The dry-run output must print both boundary
-  timestamps for inspection.
-- Panels aggregate with `max without(run) (spa_heater_on_value)` — `max` not `sum`, so
-  an accidental overlap degrades to "on" rather than to a 2× spike that would silently
-  double the modelled heater energy.
+April is worst at 48%. Detail for 2026-04-17 shows repeated contiguous 10–15 minute
+reconstructed-ON stretches (one of 70 minutes) at a median L2 of 23–117 W — sustained
+non-heating, not boundary noise.
+
+A raw backfill would therefore overstate heater energy by roughly **1.6× in bad months**.
+The heater is ~83% of modelled spa energy, so that error would dominate the metric.
+
+**Why a power-gated backfill was also rejected:** L2 is not exclusively the spa. On
+2026-08-01, 25.7% of HA-`off` minutes still exceeded 1500 W from unrelated household
+loads, so gating on "L2 looks high" would import false heating periods. Distinguishing
+the heater's specific ~2749 W step from other loads reliably enough to label 200k points
+is a bigger problem than the history is worth.
+
+**Consequences to keep in mind:**
+
+- Until the template sensor exists, `spa_heater_on_value` has no data at all. The panels
+  degrade gracefully — `or vector(0)` makes the heater term contribute 0 — so spa cost
+  currently shows jets + circulation pump only, roughly 17% of true cost. The panel
+  descriptions should say so until the sensor is live.
+- The `run="backfill"` label, and the `max without(run)` aggregation it required, are no
+  longer needed. `spaPowerWattsExpr` still uses `max(...)` for the heater term, which is
+  harmless and remains the safer choice if a backfill is ever revisited.
+- If history is ever wanted, the honest route is a proper NILM disaggregation of L2, not
+  the state-presence trick.
 
 ### 4. Shared cost constants
 
