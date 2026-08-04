@@ -69,7 +69,12 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
     'Modellerad elkostnad för spabadet: jetpumpar 2000 W, värmare 3000 W, ' +
     'cirkulationspump 80 W (uppmätt). Pris = spotpris (SE4) + nätavgift + ' +
     'energiskatt + moms 25%. Cirkulationspumpens värde inkluderar ozonaggregatet, ' +
-    'som styrs tillsammans med pumpen.';
+    'som styrs tillsammans med pumpen.\n\n' +
+    '**Värmaren är ännu inte med i beloppet nedan.** Signalen `spa_heater_on` finns ' +
+    'inte i VictoriaMetrics förrän en Home Assistant-mallsensor skapats för hand. ' +
+    'Värmaren står för ~83% av spabadets modellerade energi, så summan täcker just nu ' +
+    'bara jetpumpar + cirkulationspump och underskattar den verkliga kostnaden kraftigt ' +
+    '(grovt sett en sjättedel av den faktiska).';
 
   const spaCostLastMonth = new StatBuilder()
     .title('Spa kostnad senaste månaden')
@@ -114,6 +119,12 @@ export function spaPanels(): cog.Builder<dashboard.Panel>[] {
 
   // avg_over_time × 24 rather than sum_over_time × sample-interval: robust to the
   // exporter's irregular ~60 s cadence.
+  //
+  // Asymmetric with the cost expressions during an exporter outage: avg_over_time
+  // extrapolates the last observed duty cycle across the gap (overstating runtime),
+  // while spaPowerWattsExpr's `sum(...) * W` collapses a sample-less window to 0 W
+  // (understating cost). Neither is "more correct" — they just fail in opposite
+  // directions when the exporter is down.
   const circRuntime = new StatBuilder()
     .title('Cirkulationspump drifttid 24h')
     .description('Antal timmar cirkulationspumpen varit igång det senaste dygnet.')

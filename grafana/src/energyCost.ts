@@ -53,14 +53,24 @@ export const SPA_CIRC_W = 80;
  *
  * Every term is aggregated before `or vector(0)` so the fallback shares the empty
  * label set and is dropped when real data exists. The heater uses `max` rather than
- * `sum` because backfilled (run="backfill") and live samples are separate series.
+ * `sum` in case a backfill is ever revisited and produces a second series alongside
+ * live samples — harmless today since only one series exists.
+ *
+ * The circulation-pump term deliberately has NO `or vector(0)` fallback:
+ * `spa_circulation_pump_value` is present whenever the spa is monitored at all, so
+ * omitting its fallback means the whole sum yields no point (not a real 0) for any
+ * window where the spa was not yet monitored — e.g. before 2026-03-02, while the
+ * price series (and thus the other `or vector(0)` terms) already has data back to
+ * 2026-01-01. The other terms keep `or vector(0)` so an individual missing component
+ * (e.g. a jet that never ran that window) still contributes 0 rather than voiding
+ * the whole expression.
  */
 export function spaPowerWattsExpr(window: string): string {
   return (
     `((sum(avg_over_time(spa_pump_1_value[${window}])) or vector(0)) * ${SPA_JET_W}` +
     ` + (sum(avg_over_time(spa_pump_2_value[${window}])) or vector(0)) * ${SPA_JET_W}` +
     ` + (max(avg_over_time(spa_heater_on_value[${window}])) or vector(0)) * ${SPA_HEATER_W}` +
-    ` + (sum(avg_over_time(spa_circulation_pump_value[${window}])) or vector(0)) * ${SPA_CIRC_W})`
+    ` + sum(avg_over_time(spa_circulation_pump_value[${window}])) * ${SPA_CIRC_W})`
   );
 }
 

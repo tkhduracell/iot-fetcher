@@ -4,9 +4,9 @@
 
 **Goal:** Model the Neptun Utö spa's power draw from its Home Assistant state signals, price it with the Swedish grid+tax loading, and surface cost and runtime panels in Grafana.
 
-**Architecture:** Cost is computed at query time in MetricsQL inside the Grafana TypeScript SDK — there is no vmalert container, so VictoriaMetrics cannot evaluate recording rules. The fee/VAT constants currently local to the pool panels are extracted into a shared module and reused. Heater state gets a dedicated `spa_heater_on` metric, backfilled once from a quirk in the existing exporter data and written live by a Home Assistant template binary sensor.
+**Architecture:** Cost is computed at query time in MetricsQL inside the Grafana TypeScript SDK — there is no vmalert container, so VictoriaMetrics cannot evaluate recording rules. The fee/VAT constants currently local to the pool panels are extracted into a shared module and reused. Heater state gets a dedicated `spa_heater_on` metric, written live by a Home Assistant template binary sensor. **Update (2026-08-04):** the one-time backfill described below was written, validated, and then abandoned — see Task 4 and spec §3. `spa_heater_on` is forward-only; there is no history before the template sensor goes live.
 
-**Tech Stack:** TypeScript (Node 25, `--experimental-strip-types`), `@grafana/grafana-foundation-sdk`, `node:test`, MetricsQL/VictoriaMetrics, Python 3 for the backfill script.
+**Tech Stack:** TypeScript (Node 25, `--experimental-strip-types`), `@grafana/grafana-foundation-sdk`, `node:test`, MetricsQL/VictoriaMetrics. (Python 3 was used for the backfill script in Task 4, which was reverted — see that task.)
 
 Full background, evidence and rationale: `docs/superpowers/specs/2026-07-29-spa-energy-cost-design.md`.
 
@@ -488,7 +488,15 @@ git commit -m "feat(grafana): add spa cost and circ runtime panels" -m "Cost for
 
 ---
 
-### Task 4: `spa_heater_on` backfill script
+### Task 4: `spa_heater_on` backfill script — ABANDONED (2026-08-04)
+
+> **This task is not work to do.** It was executed, validated against ground truth, and
+> then reverted (`3e3670b` → `ff73321`): the state-presence trick conflated `heating`
+> with `idle`, which draws no power and turned out to be 30–50% of "not off" time
+> (not the ~5% assumed below) — a raw backfill would have overstated heater energy by
+> roughly 1.6× in bad months. Nothing was ever written to VictoriaMetrics. Full
+> rationale: `docs/superpowers/specs/2026-07-29-spa-energy-cost-design.md` §3. Kept
+> below verbatim as the historical record of what was tried.
 
 Reconstructs heater history from the exporter quirk described in the spec: for
 `climate.bp2100g0`, `hvac_action="off"` is written as `value=0` while `heating`/`idle`
@@ -655,8 +663,15 @@ production VictoriaMetrics is a mutating action outside this plan's autonomy.
 Commit there, not in `iot_fetcher`.
 
 This does **not** feed the spa panels — they read `spa_heater_on`. It is an independent
-correctness fix that repairs `spa_temperature_range_state_text` ("Temp Range", currently
-plotting a flat 0) and `spa_climate_state_text`.
+correctness fix that makes `spa_climate_hvac_action_value` a real signal instead of a
+constant 0.
+
+**Correction (2026-08-04):** an earlier draft of this plan claimed this fix also repairs
+`spa_temperature_range_state_text` ("Temp Range", currently plotting a flat 0) and
+`spa_climate_state_text`. It does not — those come from the entity's own *state*,
+handled by `_process_state()` in `__init__.py`, a separate code path from
+`_process_attribute()` in `attributes.py` that this task changes. The Temp Range panel
+stays flat after this deploys. See spec §3 for detail.
 
 **Files:**
 - Modify: `custom_components/victoria_metrics/const.py`

@@ -109,8 +109,8 @@ This is a one-time reconstruction input, not a permanent query strategy — see 
 |---|---|---|
 | Wattage constants | jets 2000 W, heater 3000 W (nameplate-ish), circ 80 W (measured) | User's call. Round and defensible; heater 3000 vs measured 2749 overstates ~9%. |
 | Heater representation | New `spa_heater_on` (0/1) metric | Avoids overloading the climate attribute series and keeps synthetic data separate. |
-| Heater history | One-time backfill, `run="backfill"` label | Matches the pool-planner convention already in the repo. |
-| heating vs idle | Not distinguished; non-`off` counts as on | Simpler, reproducible from state alone. Overstates heater hours ~5%, partially offsetting the 3000 W constant being ~9% high. |
+| Heater history | ABANDONED — no backfill. Forward-only from template-sensor go-live | The backfill was written, validated, and reverted; the state-presence trick conflated `heating` with `idle`. See §3. |
+| heating vs idle | Distinguished — template sensor tests `hvac_action == 'heating'` specifically | Idle draws no power and measured 30–50% of "not off" time across the intended backfill range (not the ~5% originally assumed below, which was measured over an unrepresentative 10-day summer window). See §3. |
 | Cost computation | Query-time PromQL in Grafana | No vmalert container exists, so VM cannot evaluate recording rules; adding one would be new infra *and* would only compute forward. Query-time also gets full history for free. |
 
 ### Why not fix `hvac_action` and use it directly
@@ -255,8 +255,11 @@ spa_cost_SEK = spa_power_W / 1000
 ```
 
 Integration follows the existing `poolCostExpr` shape (`pool.ts:225-228`):
-`sum_over_time((...)[$__interval:5m]) * 5 / 60`. A 5 m subquery step suits both the
-~60 s state cadence and the 15 min price cadence.
+`sum_over_time((...)[range:step]) * stepMinutes / 60`. Unlike the pool panels' 5m step,
+the implementation uses 15m for the last-30-days stat (`spaCostLastMonth`) and 1h for
+the trailing-12-month bars (`spaCostPerMonth`) — the coarser step keeps the point count
+under VM's per-series limit over a year-long range, and since the price series is only
+15-minutely, nothing is lost by not resampling more finely than that.
 
 The four state series carry different label sets, so each term needs `sum()` to drop
 labels before they can be added — the same reason `poolCostYTD` uses `sum()`.
@@ -269,11 +272,19 @@ Added to `grafana/src/panels/spa.ts`:
 |---|---|---|
 | Spa kostnad senaste månaden | Stat | Total spa cost, `now-30d` → `now` |
 | Spa kostnad per månad | Timeseries (bars) | Monthly cost, trailing 12 months, `interval('1M')` |
-| Cirkulationspump drifttid 24h | Stat | `sum_over_time(spa_circulation_pump_value[24h])` scaled to hours, unit `h` |
+| Cirkulationspump drifttid 24h | Stat | `avg_over_time(spa_circulation_pump_value[24h]) * 24` (duty cycle × 24h — robust to the exporter's irregular ~60s cadence; see comment in `spa.ts`), unit `h` |
 
-Caveat for the 12-month panel: VM retention and the spa data itself only reach ~150
-days, so the earlier months will be empty rather than zero. `insertNulls` / `spanNulls`
-must be set so the gap reads as "no data", not "no cost".
+Caveat for the 12-month panel: the spa data itself only reaches back to 2026-03-02, so
+earlier months must render as empty, not zero. This is **not** an `insertNulls`/
+`spanNulls` concern — those only smooth over true gaps in an otherwise-real series, and
+a month with no spa monitoring is not a gap here: `energy_price_SEK_per_kWh` already has
+data from 2026-01-01, so every term in `spaPowerWattsExpr` that keeps its own
+`or vector(0)` fallback would produce a real `0` for Jan–Feb regardless of `insertNulls`.
+The actual fix is at the query level: the circulation-pump term deliberately has no
+`or vector(0)` fallback, since `spa_circulation_pump_value` is present whenever the spa
+is monitored at all — so the whole additive expression yields no point before the spa
+was monitored, and Grafana naturally renders that as an empty bar with no extra panel
+config needed.
 
 Swedish titles and descriptions matching the existing pool panels. Descriptions state
 the modelled wattages and that circ is measured, not nameplate.
@@ -286,7 +297,9 @@ Docker/WUD 160→168). `grafana/src/dashboard.test.ts` asserts panels fall withi
 row bounds and will catch any mistake. The §7 panel lands in the Energi row, which must
 also be checked for a free band before placing it.
 
-Only the trailing-12-month panel spans the backfill; the other two are recent-window.
+There is no backfill to span (§3) — the trailing-12-month panel simply reaches back to
+when spa monitoring began (2026-03-02); the other two panels use short recent windows
+where the empty-vs-zero distinction above never arises.
 
 ### 7. Stacked energy breakdown (Energi row)
 
@@ -362,19 +375,24 @@ which do not use this metric.
 ## Testing
 
 - `grafana/src/dashboard.test.ts` — existing row-bounds assertion covers the renumbering.
-- Backfill `--dry-run` output reviewed before the real write.
-- Post-backfill: re-run the duty-cycle check — `spa_heater_on_value` over the last 10
-  days must land at ~14.3%, matching HA.
-- Cross-check one known heating session (2026-07-28 15:31–15:53 UTC) resolves to 1.
+- `grafana/src/energyCost.test.ts` — asserts the exact `spaPowerWattsExpr`/`spaCostExpr`
+  strings, including that the circ term deliberately omits the `or vector(0)` fallback
+  (§6).
 - `npm run build` in `grafana/` (`GRAFANA_SKIP_UPLOAD=1`) to render JSON without deploying.
 - Spot-check modelled cost for a day against `tibber_accumulatedCost` — the spa is a
   subset, so spa cost must be materially below house total. Order-of-magnitude only.
+- No backfill testing applies — the backfill was abandoned (§3). Once the template
+  sensor is live, spot-check `spa_heater_on_value` against a known HA heating session.
 
 ## Out of scope
 
 - Fixing `aqua_temp_power_usage` (§8) — identified here, tracked separately.
-- Reconstructing heater history from the L2 power signature (would remove the ~5% idle
-  overestimate; rejected as unnecessary complexity).
+- Reconstructing heater history from the L2 power signature — rejected in §3, but not
+  for the reason originally stated here. The blocker isn't the ~5% idle overestimate
+  this bullet used to cite (that figure was disproved; idle measured 30–50%, see §3).
+  It's that L2 carries unrelated household load — 25.7% of HA-`off` minutes exceeded
+  1500 W on 2026-08-01 — so a power threshold can't cleanly separate the heater's
+  ~2749 W step from other loads on that phase.
 - Recalibrating jet2 (n=6, weakest of the three).
 - Any vmalert/recording-rule infrastructure.
 - Standby/controller baseline draw — not separately identified, unmodelled.

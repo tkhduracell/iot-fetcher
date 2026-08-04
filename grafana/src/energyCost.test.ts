@@ -46,13 +46,18 @@ test('spa wattage constants match the calibrated model', () => {
   assert.equal(SPA_CIRC_W, 80);
 });
 
-test('spaPowerWattsExpr sums each component with a label-safe zero fallback', () => {
+test('spaPowerWattsExpr sums each component with a label-safe zero fallback, except circ', () => {
+  // The circulation-pump term has no `or vector(0)` fallback on purpose: it is the
+  // metric present whenever the spa is monitored at all, so leaving it bare makes
+  // the whole expression yield no point (not a real 0) for any window before the
+  // spa was monitored, even though the price series (and the other terms' `or
+  // vector(0)`) already has data further back.
   assert.equal(
     spaPowerWattsExpr('5m'),
     '((sum(avg_over_time(spa_pump_1_value[5m])) or vector(0)) * 2000' +
     ' + (sum(avg_over_time(spa_pump_2_value[5m])) or vector(0)) * 2000' +
     ' + (max(avg_over_time(spa_heater_on_value[5m])) or vector(0)) * 3000' +
-    ' + (sum(avg_over_time(spa_circulation_pump_value[5m])) or vector(0)) * 80)',
+    ' + sum(avg_over_time(spa_circulation_pump_value[5m])) * 80)',
   );
 });
 
