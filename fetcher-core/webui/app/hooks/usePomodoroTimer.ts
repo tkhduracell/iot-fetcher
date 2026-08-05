@@ -83,7 +83,10 @@ const WORK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatouserco
 const BREAK_COMPLETE_SOUND = 'https://public-assets.content-platform.envatousercontent.com/dc07756a-54e3-4851-acc4-9fce465ee255/54252202-2ca1-45b3-963c-a3747597aac5/preview.m4a';
 
 const workCompleteAudio = typeof window !== 'undefined' ? new Audio(WORK_COMPLETE_SOUND) : null;
+if (workCompleteAudio) workCompleteAudio.preload = 'auto';
+
 const breakCompleteAudio = typeof window !== 'undefined' ? new Audio(BREAK_COMPLETE_SOUND) : null;
+if (breakCompleteAudio) breakCompleteAudio.preload = 'auto';
 
 const SONOS_SPEAKER = 'Kontor';
 const SONOS_VOLUME = 40;
@@ -117,8 +120,25 @@ export interface PomodoroTimerActions {
 
 function playSound(audio: HTMLAudioElement | null) {
   if (!audio) return;
-  audio.currentTime = 0;
-  audio.play().catch(err => console.error('Failed to play sound:', err));
+  // Ensure audio is loaded before playing
+  if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    // Audio not ready, wait for it to load then play
+    const playWhenReady = () => {
+      audio.currentTime = 0;
+      audio.play().catch(() => {
+        // Silently handle playback errors - audio may be blocked by browser autoplay policy
+      });
+      audio.removeEventListener('canplaythrough', playWhenReady);
+    };
+    audio.addEventListener('canplaythrough', playWhenReady);
+    audio.load();
+  } else {
+    // Audio is ready, play immediately
+    audio.currentTime = 0;
+    audio.play().catch(() => {
+      // Silently handle playback errors - audio may be blocked by browser autoplay policy
+    });
+  }
 }
 
 function timerReducer(state: TimerState, action: TimerAction): TimerState {
