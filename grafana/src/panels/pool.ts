@@ -13,6 +13,7 @@ import {
   overrideDisplayAndColor, overrideDisplayName,
   SPAN_NULLS_MS,
 } from '../helpers.ts';
+import { accumulatedCostExpr } from '../energyCost.ts';
 
 export function poolPanels(): cog.Builder<dashboard.Panel>[] {
   // Vattentemperatur - Poolvärmepump (timeseries, 3 queries)
@@ -220,12 +221,12 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
   // sum() collapses incidental label variants (e.g. a stray device="00" series
   // alongside the real device="17") that show up over a YTD range so the
   // legend stays a single line per pump.
-  const POOL_COST_FEES = '0.6184'; // 0.2584 transferfee + 0.36 energiskatt
-  const POOL_COST_VAT = '1.25';    // 25% moms applied on top of spot+fees
   const poolCostExpr = (powerMetric: string): string =>
-    `sum_over_time((sum(avg_over_time(${powerMetric}[5m])) / 1000 * ` +
-    `(scalar(avg_over_time(energy_price_SEK_per_kWh{area="SE4"}[5m])) + ${POOL_COST_FEES}) * ${POOL_COST_VAT}` +
-    `)[$__interval:5m]) * 5 / 60`;
+    accumulatedCostExpr(`sum(avg_over_time(${powerMetric}[5m]))`, {
+      step: '5m',
+      stepMinutes: 5,
+      range: '$__interval',
+    });
 
   const poolCostDaily = new TimeseriesBuilder()
     .title('Pool kostnad per dag')
@@ -272,11 +273,11 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .thresholds(greenThreshold())
     .withTarget(vmExpr(
       'A',
-      'sum_over_time((' +
+      accumulatedCostExpr(
         '((sum(avg_over_time(pool_iqpump_motordata_power[15m])) or vector(0)) + ' +
-        '(sum(avg_over_time(aqua_temp_power_usage[15m])) or vector(0))) / 1000 * ' +
-        `(scalar(avg_over_time(energy_price_SEK_per_kWh{area="SE4"}[15m])) + ${POOL_COST_FEES}) * ${POOL_COST_VAT}` +
-      ')[$__range:15m]) * 15 / 60',
+        '(sum(avg_over_time(aqua_temp_power_usage[15m])) or vector(0)))',
+        { step: '15m', stepMinutes: 15, range: '$__range' },
+      ),
       'YTD',
     ))
     .timeFrom('now/y')

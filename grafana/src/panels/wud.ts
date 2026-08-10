@@ -91,7 +91,7 @@ export function wudPanels(): cog.Builder<dashboard.Panel>[] {
       { id: 'mappings', value: statusMapping },
       { id: 'custom.cellOptions', value: { type: 'color-text' } },
     ])
-    .gridPos({ h: 8, w: 12, x: 0, y: 161 });
+    .gridPos({ h: 8, w: 12, x: 0, y: 169 });
 
   // 📊 Distribution of watched containers by Docker status.
   const byStatus = new PieChartBuilder()
@@ -104,7 +104,7 @@ export function wudPanels(): cog.Builder<dashboard.Panel>[] {
       { build: () => ({ displayMode: 'list', placement: 'right', showLegend: true, values: ['value'] }) } as any,
     )
     .withTarget(vmExpr('A', 'count by (status) (wud_containers)', '{{status}}').instant())
-    .gridPos({ h: 8, w: 6, x: 12, y: 161 });
+    .gridPos({ h: 8, w: 6, x: 12, y: 169 });
 
   // 🔄 Containers with an image update available, per name. Empty = everything current.
   const updates = new StatBuilder()
@@ -119,7 +119,7 @@ export function wudPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr('A', 'count by (name) (wud_containers{update_available="true"})', '{{name}}').instant(),
     )
-    .gridPos({ h: 8, w: 6, x: 18, y: 161 });
+    .gridPos({ h: 8, w: 6, x: 18, y: 169 });
 
   return [inventory, byStatus, updates];
 }

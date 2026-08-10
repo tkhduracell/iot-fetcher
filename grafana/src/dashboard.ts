@@ -60,44 +60,44 @@ export function buildDashboard() {
   }
 
   // Energi row
-  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 77 }));
+  builder.withRow(new RowBuilder('Energi').gridPos({ h: 1, w: 24, x: 0, y: 85 }));
   for (const panel of energyPanels()) {
     builder.withPanel(panel);
   }
 
   // Volvo XC40 row
-  builder.withRow(new RowBuilder('Volvo XC40').gridPos({ h: 1, w: 24, x: 0, y: 108 }));
+  builder.withRow(new RowBuilder('Volvo XC40').gridPos({ h: 1, w: 24, x: 0, y: 116 }));
   for (const panel of volvoPanels()) {
     builder.withPanel(panel);
   }
 
   // Navimow row
-  builder.withRow(new RowBuilder('Navimow').gridPos({ h: 1, w: 24, x: 0, y: 117 }));
+  builder.withRow(new RowBuilder('Navimow').gridPos({ h: 1, w: 24, x: 0, y: 125 }));
   for (const panel of navimowPanels()) {
     builder.withPanel(panel);
   }
 
   // Eufy Cameras row (collapsed)
-  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 126 });
+  const eufyRow = new RowBuilder('Eufy Cameras').collapsed(true).gridPos({ h: 1, w: 24, x: 0, y: 134 });
   for (const panel of eufyPanels()) {
     eufyRow.withPanel(panel);
   }
   builder.withRow(eufyRow);
 
   // Tapo row
-  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 135 }));
+  builder.withRow(new RowBuilder('Tapo').gridPos({ h: 1, w: 24, x: 0, y: 143 }));
   for (const panel of tapoPanels()) {
     builder.withPanel(panel);
   }
 
   // System row (meta metrics)
-  builder.withRow(new RowBuilder('System').gridPos({ h: 1, w: 24, x: 0, y: 143 }));
+  builder.withRow(new RowBuilder('System').gridPos({ h: 1, w: 24, x: 0, y: 151 }));
   for (const panel of systemPanels()) {
     builder.withPanel(panel);
   }
 
   // Docker / WUD row (container update monitoring via What's Up Docker)
-  builder.withRow(new RowBuilder('Docker / WUD').gridPos({ h: 1, w: 24, x: 0, y: 160 }));
+  builder.withRow(new RowBuilder('Docker / WUD').gridPos({ h: 1, w: 24, x: 0, y: 168 }));
   for (const panel of wudPanels()) {
     builder.withPanel(panel);
   }
