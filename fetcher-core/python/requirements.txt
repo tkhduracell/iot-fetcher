@@ -141,7 +141,7 @@ typing-extensions==4.16.0
     # via reactivex
 typish==1.9.3
     # via jsons
-urllib3==2.6.3
+urllib3==2.7.0
     # via
     #   influxdb3-python
     #   plugp100
