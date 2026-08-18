@@ -21,5 +21,9 @@ For anything involving metrics, PromQL, or series shape, use the `victoria-metri
 - In Grafana dashboards, use `$__interval` with `spanNulls` instead of hardcoded lookback windows
 - Update the Grafana dashboard via the conversion script (`convert_dashboard.py`), not by editing JSON directly
 
+# Pull requests
+- GitHub's native auto-merge is unavailable (private repo, free plan) — `enable_pr_auto_merge` will fail. To land a PR once CI passes, use the `auto-merge` skill / `scripts/gh-automerge.sh`.
+- `main` is squash-only, linear history: `title (#N)`.
+
 # CI / GitHub Actions
 - To suppress actionlint warnings, use `.github/actionlint.yaml` with an `ignore:` pattern — inline comments like `# actionlint:ignore:rule` don't work
