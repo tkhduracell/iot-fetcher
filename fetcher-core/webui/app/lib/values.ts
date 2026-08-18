@@ -10,7 +10,9 @@ export const values: Config = [
     ],
     [
         { measurement: 'spa_climate', field: 'current_temperature_value', title: '🛁 Spa Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 45 },
-        { measurement: 'pool_temperature', field: 'value', title: '🏊 Pool Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 30 },
+        // Poolens Sonoff-givare (pool_temperature_value) är trasig och rapporterar 0 °C.
+        // Visa ingående vattentemperatur till poolvärmepumpen istället tills givaren bytts ut.
+        { measurement: 'aqua_temp', field: 'temp_incoming', title: '🏊 Pool Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 35 },
         { measurement: 'pool_iqpump_motordata', field: 'speed', title: '💦 Poolpump', unit: 'RPM', decimals: 0, sparkline: '24h', sparklineMin: 0, sparklineMax: 3000 },
     ],
     [
