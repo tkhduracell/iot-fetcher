@@ -84,18 +84,6 @@ export function overrideDisplayName(fieldName: string, displayName: string): {
   };
 }
 
-export function overrideColor(fieldName: string, color: string): {
-  matcher: dashboard.MatcherConfig;
-  properties: dashboard.DynamicConfigValue[];
-} {
-  return {
-    matcher: { id: 'byName', options: fieldName },
-    properties: [
-      { id: 'color', value: { fixedColor: color, mode: 'fixed' } },
-    ],
-  };
-}
-
 export function overrideDisplayAndColor(
   fieldName: string,
   displayName: string,
