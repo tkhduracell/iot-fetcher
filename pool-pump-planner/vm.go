@@ -42,10 +42,6 @@ func (c *Config) vmBaseURL() string {
 	return ""
 }
 
-func (c *Config) queryPromInstant(promql, lookbackDelta string) ([]promResult, error) {
-	return c.queryPromInstantAt(promql, time.Time{}, lookbackDelta)
-}
-
 func (c *Config) queryPromInstantAt(promql string, at time.Time, lookbackDelta string) ([]promResult, error) {
 	base := c.vmBaseURL()
 	if base == "" {
@@ -219,10 +215,6 @@ func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
 		return 0, false
 	}
 	return result[0].Values[0].Value, true
-}
-
-func (c *Config) fetchWaterTemp() (float64, bool) {
-	return c.fetchWaterTempAt(time.Time{})
 }
 
 // deletePlanForDate removes any existing live-plan points tagged with the
