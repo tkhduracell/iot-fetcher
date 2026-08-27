@@ -4,10 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "requests==2.34.2",
-    "pybalboa==1.1.4",
-    "pytz>=2026.3.post1",
     "influxdb3-python==0.20.0",
-    "tuya-connector-python==0.1.2",
     "schedule==1.2.2",
     "google-cloud-storage==3.12.1",
     "ngenicpy==0.5.2",
