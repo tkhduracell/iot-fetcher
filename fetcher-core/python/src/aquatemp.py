@@ -4,7 +4,6 @@ import logging
 import hashlib
 
 from typing import Dict, List, Optional, Tuple
-from pprint import pformat
 from influx import write_influx, Point
 
 from _decorators import memoize_for_hours

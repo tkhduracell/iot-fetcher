@@ -1,7 +1,7 @@
 import os
 import requests
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from influx import write_influx, Point
 

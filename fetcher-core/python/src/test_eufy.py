@@ -11,7 +11,6 @@ import json
 import os
 import sys
 import time
-from hashlib import md5
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes

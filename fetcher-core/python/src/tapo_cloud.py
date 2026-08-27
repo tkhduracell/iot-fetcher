@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import aiohttp
-from typing import List, Dict, Any
+from typing import List
 
 from plugp100.api.discovery.cloud_client import CloudClient
 from plugp100.devices.factory import connect, DeviceConnectConfiguration
