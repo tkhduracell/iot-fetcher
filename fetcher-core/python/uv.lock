@@ -570,12 +570,9 @@ dependencies = [
     { name = "influxdb3-python" },
     { name = "ngenicpy" },
     { name = "plugp100" },
-    { name = "pybalboa" },
-    { name = "pytz" },
     { name = "requests" },
     { name = "schedule" },
     { name = "tplinkrouterc6u" },
-    { name = "tuya-connector-python" },
 ]
 
 [package.metadata]
@@ -585,12 +582,9 @@ requires-dist = [
     { name = "influxdb3-python", specifier = "==0.20.0" },
     { name = "ngenicpy", specifier = "==0.5.2" },
     { name = "plugp100", specifier = "==5.1.7" },
-    { name = "pybalboa", specifier = "==1.1.4" },
-    { name = "pytz", specifier = ">=2026.3.post1" },
     { name = "requests", specifier = "==2.34.2" },
     { name = "schedule", specifier = "==1.2.2" },
     { name = "tplinkrouterc6u", specifier = "==5.23.0" },
-    { name = "tuya-connector-python", specifier = "==0.1.2" },
 ]
 
 [[package]]
@@ -880,15 +874,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pybalboa"
-version = "1.1.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ad/d5/f865e83cfac4c231e0393f814dde0f673a388e229c0ceef12296ff804e8a/pybalboa-1.1.4.tar.gz", hash = "sha256:a8638dff66aebb2699cb29a236eca8ef1ba85481defe1a9bcbf39a06a8f98fe8", size = 22391, upload-time = "2026-02-17T19:06:20.633Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/52/af34b9cdc969ca6b88f0440af2034b9040d7fcfa10fa63d14e928c331423/pybalboa-1.1.4-py3-none-any.whl", hash = "sha256:60093fc63e2805912509c508bf4ac2daefc6162847576bd8a51e63ff16cefa3d", size = 24416, upload-time = "2026-02-17T19:06:19.767Z" },
-]
-
-[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -937,15 +922,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
-]
-
-[[package]]
-name = "pytz"
-version = "2026.3.post1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fb/48/fb042503b6ca6cd271261dc559fd6432f7d8c713153e9ec5c591af4dfc1c/pytz-2026.3.post1.tar.gz", hash = "sha256:2211d3fcf9a797d3405cac96ac7f61d80e6a644f72a3309607282fe8a2010c5d", size = 319745, upload-time = "2026-07-25T15:12:07.385Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/7b/39c34ca613b0b198cb866466651b26b045e2009864c5183c979a3b83f383/pytz-2026.3.post1-py2.py3-none-any.whl", hash = "sha256:dd95840dd199baea12d9cc096a1d452caa6596a1c1e4b5f3dbd1541855d5e815", size = 508283, upload-time = "2026-07-25T15:12:05.782Z" },
 ]
 
 [[package]]
@@ -1026,20 +1002,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tuya-connector-python"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pycryptodome" },
-    { name = "requests" },
-    { name = "websocket-client" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/3c/d3d750fc81a87aaec9082b13fe270e5e6ff9b3432791989042d46b251447/tuya-connector-python-0.1.2.tar.gz", hash = "sha256:84a8fa9b22d839e8ff0c3a45b36df6194b3dfb1b2dd31b9203eb7f94e3303d7e", size = 9091, upload-time = "2021-11-08T11:12:46.476Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6b/f9/27a340f4472f6ada8da4ef30178cd32a55775ce6ada55ca4aa901652477d/tuya_connector_python-0.1.2-py3-none-any.whl", hash = "sha256:42cde44cf9af86d187f89b2f0c121a1104a0c7b7ca16bc46bbc6b470d299afdf", size = 9918, upload-time = "2021-11-08T11:12:44.604Z" },
-]
-
-[[package]]
 name = "typing-extensions"
 version = "4.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1063,15 +1025,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
-]
-
-[[package]]
-name = "websocket-client"
-version = "1.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]

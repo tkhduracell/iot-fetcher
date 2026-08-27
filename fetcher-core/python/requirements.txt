@@ -103,18 +103,12 @@ pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
-pybalboa==1.1.4
-    # via iot-fetcher (pyproject.toml)
 pycparser==3.0
     # via cffi
 pycryptodome==3.23.0
-    # via
-    #   tplinkrouterc6u
-    #   tuya-connector-python
+    # via tplinkrouterc6u
 python-dateutil==2.9.0.post0
     # via influxdb3-python
-pytz==2026.3.post1
-    # via iot-fetcher (pyproject.toml)
 reactivex==4.1.0
     # via influxdb3-python
 requests==2.34.2
@@ -124,7 +118,6 @@ requests==2.34.2
     #   google-cloud-storage
     #   plugp100
     #   tplinkrouterc6u
-    #   tuya-connector-python
 scapy==2.7.0
     # via plugp100
 schedule==1.2.2
@@ -135,8 +128,6 @@ six==1.17.0
     # via python-dateutil
 tplinkrouterc6u==5.23.0
     # via iot-fetcher (pyproject.toml)
-tuya-connector-python==0.1.2
-    # via iot-fetcher (pyproject.toml)
 typing-extensions==4.16.0
     # via reactivex
 typish==1.9.3
@@ -146,7 +137,5 @@ urllib3==2.7.0
     #   influxdb3-python
     #   plugp100
     #   requests
-websocket-client==1.9.0
-    # via tuya-connector-python
 yarl==1.23.0
     # via aiohttp

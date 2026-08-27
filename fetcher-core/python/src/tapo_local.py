@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from typing import List, Dict, Any
+from typing import List
 
 from plugp100.discovery.tapo_discovery import TapoDiscovery
 from plugp100.common.credentials import AuthCredential
