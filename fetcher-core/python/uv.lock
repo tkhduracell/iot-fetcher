@@ -277,6 +277,18 @@ wheels = [
 ]
 
 [[package]]
+name = "ecdsa"
+version = "0.19.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/ca/8de7744cb3bc966c85430ca2d0fcaeea872507c6a4cf6e007f7fe269ed9d/ecdsa-0.19.2.tar.gz", hash = "sha256:62635b0ac1ca2e027f82122b5b81cb706edc38cd91c63dda28e4f3455a2bf930", size = 202432, upload-time = "2026-03-26T09:58:17.675Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/79/119091c98e2bf49e24ed9f3ae69f816d715d2904aefa6a2baa039a2ba0b0/ecdsa-0.19.2-py2.py3-none-any.whl", hash = "sha256:840f5dc5e375c68f36c1a7a5b9caad28f95daa65185c9253c0c08dd952bb7399", size = 150818, upload-time = "2026-03-26T09:58:15.808Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -584,7 +596,7 @@ requires-dist = [
     { name = "iaqualink", specifier = "==0.6.0" },
     { name = "influxdb3-python", specifier = "==0.20.0" },
     { name = "ngenicpy", specifier = "==0.5.2" },
-    { name = "plugp100", specifier = "==5.1.7" },
+    { name = "plugp100", specifier = "==6.0.1" },
     { name = "pybalboa", specifier = "==1.1.4" },
     { name = "pytz", specifier = ">=2026.3.post1" },
     { name = "requests", specifier = "==2.34.2" },
@@ -708,22 +720,33 @@ wheels = [
 ]
 
 [[package]]
+name = "passlib"
+version = "1.7.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/06/9da9ee59a67fae7761aab3ccc84fa4f3f33f125b370f1ccdb915bf967c11/passlib-1.7.4.tar.gz", hash = "sha256:defd50f72b65c5402ab2c573830a6978e5f202ad0d984793c8dde2c4152ebe04", size = 689844, upload-time = "2020-10-08T19:00:52.121Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/a4/ab6b7589382ca3df236e03faa71deac88cae040af60c071a78d254a62172/passlib-1.7.4-py2.py3-none-any.whl", hash = "sha256:aa6bca462b8d8bda89c70b382f0c298a20b5560af6cbfa2dce410c0a2fb669f1", size = 525554, upload-time = "2020-10-08T19:00:49.856Z" },
+]
+
+[[package]]
 name = "plugp100"
-version = "5.1.7"
+version = "6.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "certifi" },
     { name = "cryptography" },
+    { name = "ecdsa" },
     { name = "jsons" },
+    { name = "passlib" },
     { name = "requests" },
     { name = "scapy" },
     { name = "semantic-version" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/f5/4cea14be2bda0fc78cad961f7f85fb9d91ab5d89734948a455079d96a7f3/plugp100-5.1.7.tar.gz", hash = "sha256:c0883b9f786e174f89141242b5562fdb203bce5debde1294b59671d7885e599e", size = 60408, upload-time = "2026-03-13T07:46:27.854Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/84/fa/6ecadde6c0671219d36064c22c083ba0ab4f61a3e5cdc51181baef34cf05/plugp100-6.0.1.tar.gz", hash = "sha256:91d3816b4ec12d70285ae40dab5dd972236e050e5ed94c1978d7a906d29c80e2", size = 75945, upload-time = "2026-08-11T07:17:27.992Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/26/ded00b818244b3748903b918563efadb37bbdf2201c6337bbb7353eb5bdf/plugp100-5.1.7-py3-none-any.whl", hash = "sha256:c5a797370b8df10fc97439bf423ed6a8203b9fa73d03087d49d159425b841310", size = 90790, upload-time = "2026-03-13T07:46:26.624Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/c7/1ec69f52a833f76b54de23f16d5ac91e26c6390a8456e070c960d78c1370/plugp100-6.0.1-py3-none-any.whl", hash = "sha256:1bf3ba60c1e295cf81df9ab009b041d16cda4396814b719ef132422d983406b0", size = 111275, upload-time = "2026-08-11T07:17:26.8Z" },
 ]
 
 [[package]]
