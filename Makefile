@@ -1,8 +1,8 @@
-build-fetcher: 
-	(cd ./fetcher-code && make build)
+build-fetcher:
+	(cd ./fetcher-core && make build)
 
 push-fetcher: build-fetcher
-	(cd ./fetcher-code && make push)
+	(cd ./fetcher-core && make push)
 
 build-proxy:
 	(cd ./https-proxy && make build)
