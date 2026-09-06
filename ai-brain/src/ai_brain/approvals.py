@@ -20,6 +20,15 @@ Two properties are worth stating because the tests pin them:
 * **Nothing silent.** Every terminal outcome -- executed, failed, rejected,
   blocked, expired -- drops a note into the brain's inbox, so the agent reads
   what became of its request on its next cycle instead of assuming.
+* **A stored pending proposal always has a reactable message.** ``SlackOut.post``
+  returns ``"queued"`` when Slack was unreachable and the text went to the retry
+  outbox instead. Storing that as the proposal's ``slack_ts`` would be the worst
+  of both worlds: the queue later delivers the message with a real ``ts`` that
+  nothing writes back, so Filip's checkmark matches no proposal and the request
+  sits pending for 24h and expires -- silently, on the one gate the whole design
+  rests on. A queued post is therefore a *failed* proposal: it is written
+  terminal, the note explains why, and ``propose`` raises so the model gets an
+  error and can simply propose again on a later cycle.
 """
 
 from __future__ import annotations
@@ -63,6 +72,10 @@ STATUSES = frozenset(
         "expired",
     }
 )
+
+# What ``SlackOut.post`` returns when the post failed and was queued instead.
+QUEUED = "queued"
+UNREACHABLE = "slack unavailable, not proposed"
 
 APPROVE_EMOJI = "white_check_mark"
 REJECT_EMOJI = "x"
@@ -126,16 +139,20 @@ class Approvals:
             status=PENDING,
         )
         if self.on_message is not None:
-            # A Slack client that failed to post, or a stub that returns nothing,
-            # must not put ``null`` in the outbox: the field is typed ``str``
-            # and ``_find_pending`` uses "" as "no message to react to".
             posted = await self.on_message(
                 topic,
                 f"Proposal {proposal.id} ({kind}): {reason}\n\n"
                 f"```{json.dumps(payload)}```\n"
                 "React ✅ to approve, ❌ to reject.",
             )
-            proposal.slack_ts = posted or ""
+            # "queued" means Slack was down and the text went to the retry
+            # outbox; an empty return means a client that posted nothing at
+            # all. Neither leaves a message anyone can react to, so neither may
+            # become a pending proposal.
+            if not posted or posted == QUEUED:
+                self._finish(proposal, "failed", UNREACHABLE)
+                raise RuntimeError("slack unavailable")
+            proposal.slack_ts = posted
         self._store(proposal)
         return proposal
 

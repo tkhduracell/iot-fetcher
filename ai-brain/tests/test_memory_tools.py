@@ -45,7 +45,15 @@ def test_expert_sees_fewer_tools_than_brain(registry):
     expert = {s.name for s in registry.specs_for("energy")}
     assert {"rewrite_goals", "rewrite_identity"} <= brain
     assert brain - expert == {"rewrite_goals", "rewrite_identity"}
-    shared = {"append_journal", "write_fact", "read_fact", "list_facts", "send_note", "end_cycle"}
+    shared = {
+        "append_journal",
+        "write_fact",
+        "read_fact",
+        "delete_fact",
+        "list_facts",
+        "send_note",
+        "end_cycle",
+    }
     assert shared <= expert
 
 
@@ -118,3 +126,31 @@ async def test_rewrite_goals_and_identity_from_brain(registry, make_ctx, brain_d
     assert brain_dir.goals_text() == "# Goals\n- rest"
     assert (await call(registry, ctx, "rewrite_identity", body="I am the brain"))["ok"] is True
     assert brain_dir.persona_text() == "I am the brain"
+
+
+async def test_delete_fact_roundtrip(registry, make_ctx, brain_dir):
+    ctx = make_ctx("brain")
+    await call(registry, ctx, "write_fact", name="pool", body="28C")
+    out = await call(registry, ctx, "delete_fact", name="pool")
+
+    assert out["deleted"] == "pool"
+    assert brain_dir.list_facts() == []
+    assert (await call(registry, ctx, "list_facts"))["result"] == []
+
+
+async def test_delete_fact_errors_on_a_missing_fact(registry, make_ctx):
+    out = await call(registry, make_ctx("brain"), "delete_fact", name="never-written")
+    assert "no such fact" in out["error"]
+
+
+async def test_delete_fact_refuses_a_path(registry, make_ctx):
+    out = await call(registry, make_ctx("brain"), "delete_fact", name="../escape")
+    assert "error" in out
+
+
+async def test_an_expert_may_delete_its_own_facts(registry, make_ctx, expert_dir):
+    """Every loop curates its own memory; pruning is not a brain-only power."""
+    ctx = make_ctx("energy")
+    await call(registry, ctx, "write_fact", name="usage", body="high")
+    assert (await call(registry, ctx, "delete_fact", name="usage"))["deleted"] == "usage"
+    assert expert_dir.list_facts() == []

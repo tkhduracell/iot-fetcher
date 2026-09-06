@@ -34,6 +34,13 @@ async def _read_fact(ctx: ToolContext, args: dict) -> str:
     return ok(ctx.memory.read_fact(str(args["name"])))
 
 
+async def _delete_fact(ctx: ToolContext, args: dict) -> str:
+    name = str(args["name"])
+    if not ctx.memory.delete_fact(name):
+        return err(f"no such fact: {name}")
+    return ok({"deleted": name})
+
+
 async def _list_facts(ctx: ToolContext, args: dict) -> str:
     return ok(ctx.memory.list_facts())
 
@@ -108,6 +115,19 @@ def register_memory_tools(registry: ToolRegistry) -> None:
                 parameters=_schema({"name": {"type": "string"}}, ["name"]),
             ),
             _read_fact,
+            None,
+        ),
+        (
+            ToolSpec(
+                name="delete_fact",
+                description=(
+                    "Delete one stored fact by name. Use it when consolidating: overwriting "
+                    "a fact you no longer need still leaves it taking up a slot, so remove "
+                    "it instead. Errors when no such fact exists."
+                ),
+                parameters=_schema({"name": {"type": "string"}}, ["name"]),
+            ),
+            _delete_fact,
             None,
         ),
         (

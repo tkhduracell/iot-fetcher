@@ -224,18 +224,89 @@ async def test_an_executing_proposal_is_not_pending_and_ignores_a_reaction(
     assert executors.calls == []
 
 
-async def test_a_none_slack_ts_is_stored_as_empty_string(brain_dir, executors, moving_clock):
-    """on_message returning None must not put ``null`` in the outbox."""
+async def test_a_post_that_returns_nothing_is_not_left_pending(
+    brain_dir, executors, moving_clock
+):
+    """A client that posted nothing leaves no message to react to."""
 
     async def posts_nothing(topic: str, text: str) -> str | None:
         return None
 
     approvals = Approvals(brain_dir, executors, moving_clock, on_message=posts_nothing)
-    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    with pytest.raises(RuntimeError, match="slack unavailable"):
+        await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
 
-    assert p.slack_ts == ""
-    stored = json.loads((brain_dir.outbox_dir / f"{p.id}.json").read_text())
-    assert stored["slack_ts"] == ""
+    assert approvals.pending() == []
+
+
+async def test_a_queued_post_is_recorded_failed_not_pending(
+    brain_dir, executors, moving_clock
+):
+    """Slack was down, so there is no message anyone can react to.
+
+    ``SlackOut.post`` returns "queued" when the text went to the retry outbox
+    instead. Storing that as slack_ts would leave a pending proposal whose
+    identity matches no Slack message: flush_queue later delivers the text and
+    Slack assigns a real ts that nothing writes back, so Filip's checkmark
+    matches nothing and the proposal silently expires after 24h.
+    """
+
+    async def queues(topic: str, text: str) -> str:
+        return "queued"
+
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=queues)
+    with pytest.raises(RuntimeError, match="slack unavailable"):
+        await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    assert approvals.pending() == []
+    stored = [json.loads(path.read_text()) for path in brain_dir.outbox_dir.glob("*.json")]
+    assert len(stored) == 1
+    assert stored[0]["status"] == "failed"
+    assert stored[0]["result"] == "slack unavailable, not proposed"
+    assert stored[0]["slack_ts"] == ""
+    assert notes(brain_dir) == [
+        f"proposal {stored[0]['id']} failed: slack unavailable, not proposed"
+    ]
+    assert executors.calls == []
+
+
+async def test_a_queued_post_makes_the_propose_tool_return_an_error(
+    brain_dir, executors, moving_clock
+):
+    """The model must see err(...) so it can simply propose again later."""
+
+    async def queues(topic: str, text: str) -> str:
+        return "queued"
+
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=queues)
+    registry = ToolRegistry()
+    register_propose_tool(registry)
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories={"brain": brain_dir},
+        settings=load_settings({}),
+        wake=lambda name: None,
+        extras={"approvals": approvals},
+    )
+    out = json.loads(
+        await registry.dispatch(
+            ctx,
+            ToolCall(
+                id="1",
+                name="propose",
+                args={
+                    "kind": "sonos_say",
+                    "payload": {"text": "hi"},
+                    "reason": "why",
+                    "topic": "#home",
+                },
+            ),
+        )
+    )
+
+    assert "slack unavailable" in out["error"]
+    assert approvals.pending() == []
 
 
 async def test_x_rejects_without_executing(approvals, executors, brain_dir):

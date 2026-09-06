@@ -619,3 +619,90 @@ async def test_cancellation_does_not_lose_the_journal_when_slack_is_wired(make_l
 
     assert "[cancelled]" in brain_dir.journal_text(1)
     assert loop.cycle_counts["cancelled"] == 1
+
+
+# -- a slow provider must not cost the cycle ---------------------------------
+
+
+async def test_cycle_stays_ok_when_the_second_provider_answers(
+    brain_dir, expert_dir, registry, wall, tmp_path
+):
+    """A first provider that hangs is the fallback's cue, not a failed cycle.
+
+    The loop's own timeout is a multiple of the per-call one, so the chain has
+    room to give up on the slow provider and let the next one answer.
+    """
+
+    class Slow(FakeProvider):
+        async def complete(self, messages, tools, max_tokens):
+            await asyncio.sleep(5)
+            raise AssertionError("unreachable")
+
+    slow = Slow("fake:slow", script=[])
+    fast = FakeProvider(
+        "fake:fast",
+        [
+            Reply(
+                text="done",
+                tool_calls=(
+                    ToolCall(
+                        id="c",
+                        name="end_cycle",
+                        args={"next_wake_minutes": 30, "summary": "all quiet"},
+                    ),
+                ),
+                usage=Usage(prompt_tokens=10, completion_tokens=5),
+                model="fake:fast",
+            )
+        ],
+    )
+    ledger = Ledger(
+        {
+            "fake:slow": Limits(rpm=100, tpm=1_000_000, rpd=1000),
+            "fake:fast": Limits(rpm=100, tpm=1_000_000, rpd=1000),
+        },
+        tmp_path / "ledger.json",
+        clock=wall,
+    )
+    chain = ProviderChain([slow, fast], ledger, clock=wall, call_timeout_s=0.01)
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories={"brain": brain_dir, "energy": expert_dir},
+        settings=load_settings({}),
+        wake=lambda name: None,
+    )
+    loop = AgentLoop(
+        name="brain",
+        memory=brain_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="brain",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+        call_timeout_s=0.01,
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert result.model == "fake:fast"
+    # The abandoned calls were still charged to the slow key.
+    assert ledger.snapshot()["buckets"]["fake:slow"]["requests_day"] == 2
+
+
+async def test_finish_prunes_the_journal(make_loop, brain_dir, wall):
+    """Pruning runs in the finally, before the next cycle reads needs_compaction."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.fromtimestamp(wall(), UTC)
+    stale = (now - timedelta(days=40)).strftime("%Y-%m-%d")
+    (brain_dir.journal_dir / f"{stale}.md").write_text("old\n", encoding="utf-8")
+
+    loop, _ = make_loop([reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="s"))])
+    await loop.run_cycle()
+
+    assert not (brain_dir.journal_dir / f"{stale}.md").exists()

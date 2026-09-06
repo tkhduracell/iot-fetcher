@@ -37,6 +37,11 @@ async def _propose(ctx: ToolContext, args: dict) -> str:
         )
     except ValueError as exc:
         return err(str(exc))
+    except RuntimeError as exc:
+        # Slack was unreachable, so there is no message for a human to react
+        # to and nothing was left pending. Saying so plainly is what lets the
+        # model try again on a later cycle instead of assuming it asked.
+        return err(f"{exc}; nothing was proposed, try again on a later cycle")
     return ok({"id": proposal.id, "status": proposal.status})
 
 

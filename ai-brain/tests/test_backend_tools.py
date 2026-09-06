@@ -6,7 +6,7 @@ import respx
 
 from ai_brain.config import load_settings
 from ai_brain.llm import ToolCall
-from ai_brain.tools import ToolContext, ToolRegistry, wrap_external
+from ai_brain.tools import ToolContext, ToolRegistry, web, wrap_external
 from ai_brain.tools.backend import register_backend_tools
 from ai_brain.tools.web import validate_public_url
 
@@ -657,3 +657,85 @@ async def test_vm_metrics_refuses_a_long_pattern(registry, ctx):
 
     assert out["error"] == "vm_metrics: pattern too long (max 128)"
     assert route.call_count == 0
+
+
+# --- web_fetch body limits ------------------------------------------------
+
+
+@respx.mock
+async def test_web_fetch_stops_reading_at_the_byte_cap(registry, ctx, monkeypatch):
+    """A 1 MB body must be cut while streaming, never decoded in full.
+
+    The old code applied MAX_CHARS to the *decoded* text, so the whole body was
+    downloaded, unescaped and run through three regexes before all but 20 kB
+    was discarded -- a fetched page could point the model at an ISO and OOM the
+    Pi. The cap has to bite on bytes, before any of that.
+    """
+    body = "a" * 1_000_000
+    respx.get("https://example.com/huge").mock(
+        return_value=httpx.Response(
+            200, text=body, headers={"content-type": "text/plain; charset=utf-8"}
+        )
+    )
+
+    # Watch what the streaming helper actually hands back, so this fails if the
+    # cap ever moves back to being applied after a full-body decode.
+    seen: list[int] = []
+    real_stream = web.stream
+
+    async def spy(*args, **kwargs):
+        response, raw, truncated, problem = await real_stream(*args, **kwargs)
+        seen.append(len(raw))
+        return response, raw, truncated, problem
+
+    monkeypatch.setattr(web, "stream", spy)
+    out = await call(registry, ctx, "web_fetch", url="https://example.com/huge")
+
+    assert seen == [web.MAX_BYTES]  # never the 1_000_000 the server offered
+    assert out["truncated"] is True
+    inner = out["text"].removeprefix('<external source="web">').removesuffix("</external>")
+    assert len(inner) == web.MAX_CHARS
+
+
+@respx.mock
+async def test_web_fetch_refuses_a_binary_content_type(registry, ctx):
+    respx.get("https://example.com/blob").mock(
+        return_value=httpx.Response(
+            200, content=b"\x00\x01\x02", headers={"content-type": "application/octet-stream"}
+        )
+    )
+    out = await call(registry, ctx, "web_fetch", url="https://example.com/blob")
+
+    assert "application/octet-stream" in out["error"]
+    assert "text" in out["error"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/html; charset=utf-8",
+        "text/plain",
+        "application/json",
+        "application/xml",
+        "application/xhtml+xml",
+    ],
+)
+async def test_web_fetch_accepts_readable_content_types(registry, ctx, content_type):
+    respx.get("https://example.com/ok").mock(
+        return_value=httpx.Response(200, text="<p>hello</p>", headers={"content-type": content_type})
+    )
+    out = await call(registry, ctx, "web_fetch", url="https://example.com/ok")
+
+    assert "hello" in out["text"]
+
+
+@respx.mock
+async def test_web_fetch_accepts_a_response_without_a_content_type(registry, ctx):
+    """A server that says nothing is not a reason to refuse readable text."""
+    respx.get("https://example.com/bare").mock(
+        return_value=httpx.Response(200, text="<p>hello</p>", headers={"content-type": ""})
+    )
+    out = await call(registry, ctx, "web_fetch", url="https://example.com/bare")
+
+    assert "hello" in out["text"]

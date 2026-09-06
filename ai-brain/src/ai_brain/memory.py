@@ -165,6 +165,20 @@ class MemoryDir:
             return None
         return path.read_text(encoding="utf-8")
 
+    def delete_fact(self, name: str) -> bool:
+        """Remove one fact. Returns False when there was nothing to remove.
+
+        Without this the fact count is a one-way ratchet: the compaction hint
+        tells the agent to prune, ``write_fact`` can only overwrite, and an
+        overwritten fact still counts -- so once past ``MAX_FACTS`` the hint
+        could never be satisfied and never stopped firing.
+        """
+        path = self.facts_dir / f"{safe_name(name)}.md"
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
+
     def list_facts(self) -> list[str]:
         if not self.facts_dir.exists():
             return []
@@ -202,6 +216,39 @@ class MemoryDir:
             if note.path.exists():
                 os.replace(note.path, self.done_dir / note.path.name)
 
+    def prune_journal(self, keep_days: int = 30) -> int:
+        """Delete journal files older than ``keep_days``, by their filename date.
+
+        The journal grows by one file a day forever, so without this the
+        ``needs_compaction`` journal rule latches true on day 31 and stays
+        true for the life of the volume. The filename is the date, which makes
+        this independent of mtime -- a file rewritten by an editor is still as
+        old as the day it describes. A name that is not a date is left alone.
+
+        ``keep_days`` is a count of files kept, not an age: today plus the
+        previous ``keep_days - 1`` days survive. That boundary is deliberate --
+        keeping today *and* 30 days behind it would leave 31 files, one over
+        ``MAX_JOURNAL_FILES``, so the prune would run and the compaction hint
+        would still be latched on.
+        """
+        if not self.journal_dir.exists():
+            return 0
+        cutoff = (self.clock() - timedelta(days=keep_days - 1)).date()
+        removed = 0
+        for path in self.journal_dir.glob("*.md"):
+            try:
+                # A filename date carries no time or zone; .date() is the
+                # whole point, and the comparison below is date-to-date.
+                day = datetime.strptime(  # noqa: DTZ007 - a filename date has no zone
+                    path.stem, "%Y-%m-%d"
+                ).date()
+            except ValueError:
+                continue
+            if day < cutoff:
+                path.unlink()
+                removed += 1
+        return removed
+
     def purge_done(self, older_than_days: int = 30) -> int:
         if not self.done_dir.exists():
             return 0
@@ -233,6 +280,14 @@ class MemoryDir:
     # -- housekeeping --------------------------------------------------
 
     def needs_compaction(self) -> bool:
+        """Whether to append the compaction hint to this cycle's system prompt.
+
+        Both rules must be *clearable*, or the hint latches on forever and
+        costs prompt tokens on every round of every cycle from then on. The
+        journal side clears because ``prune_journal`` runs in the loop's
+        finally before the next cycle asks; the facts side clears because
+        ``delete_fact`` exists.
+        """
         journal_files = len(list(self.journal_dir.glob("*.md"))) if self.journal_dir.exists() else 0
         return len(self.list_facts()) > MAX_FACTS or journal_files > MAX_JOURNAL_FILES
 

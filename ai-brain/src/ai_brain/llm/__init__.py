@@ -11,10 +11,19 @@ key is fine but busy, so it is backed off. ``server``/``timeout`` are usually
 transient, so the same provider gets one more try before we move on. A
 ``bad_request`` is our own bug -- falling through would just repeat it against
 every key in the chain, so it is re-raised immediately.
+
+The per-call timeout lives here rather than around ``complete``. A budget on
+the whole chain lets a first provider that hangs eat the fallback's time --
+exactly the wrong outcome on a free tier where the first model is the one that
+503s. Bounding one call instead means every provider gets its own timeout, and
+a timed-out call is *recorded* in the ledger before it is retried: the request
+reached Google and may well have been billed, so counting it conservatively is
+the only way ``ai_brain_ledger_remaining`` stays honest.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -34,6 +43,12 @@ ErrorKind = Literal["not_found", "rate_limited", "server", "timeout", "bad_reque
 # server/timeout are worth one more shot at the same provider before we burn a
 # fallback key on what is probably a blip.
 RETRYABLE: frozenset[str] = frozenset({"server", "timeout"})
+
+# Seconds one provider call may take. Also what a timed-out call is charged:
+# we never saw a usage block, so we assume the request was as expensive as the
+# loop's own max_tokens rather than free.
+DEFAULT_CALL_TIMEOUT_S = 60
+TIMEOUT_CHARGE_TOKENS = 4000
 
 
 @dataclass(frozen=True)
@@ -116,13 +131,19 @@ class ProviderChain:
         providers: list[Provider],
         ledger: Ledger,
         clock: Callable[[], float] = time.time,
+        call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
     ):
         self.providers = list(providers)
         self.ledger = ledger
         self._clock = clock
+        self.call_timeout_s = call_timeout_s
 
     @staticmethod
-    def from_settings(settings: Settings, ledger: Ledger) -> ProviderChain:
+    def from_settings(
+        settings: Settings,
+        ledger: Ledger,
+        call_timeout_s: float | None = None,
+    ) -> ProviderChain:
         providers: list[Provider] = []
         for entry in settings.llm_chain:
             name, _, model = entry.partition(":")
@@ -138,7 +159,9 @@ class ProviderChain:
                 providers.append(FakeProvider(entry, script=[]))
             else:
                 raise ValueError(f"provider '{name}' not implemented")
-        return ProviderChain(providers, ledger)
+        if call_timeout_s is None:
+            call_timeout_s = getattr(settings, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S)
+        return ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
 
     async def complete(
         self,
@@ -184,7 +207,22 @@ class ProviderChain:
         key = provider.key
         for attempt in (1, 2):
             try:
-                reply = await provider.complete(messages, tools, max_tokens)
+                reply = await asyncio.wait_for(
+                    provider.complete(messages, tools, max_tokens),
+                    timeout=self.call_timeout_s,
+                )
+            except TimeoutError:
+                # The request was sent and may already have been billed, so
+                # charge it before deciding what to do next -- an unrecorded
+                # spend makes the remaining-budget metric overstate the truth.
+                self.ledger.record(key, TIMEOUT_CHARGE_TOKENS, 0)
+                err = ProviderError(
+                    f"call exceeded {self.call_timeout_s}s", kind="timeout"
+                )
+                log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
+                if attempt == 1:
+                    continue
+                return None
             except ProviderError as err:
                 if err.kind == "bad_request":
                     # Our payload is wrong; every other key would reject it too.

@@ -1,6 +1,8 @@
+from datetime import timedelta
+
 import pytest
 
-from ai_brain.memory import safe_name
+from ai_brain.memory import MemoryDir, safe_name
 
 
 def test_safe_name_rejects_paths():
@@ -112,3 +114,66 @@ def test_brain_seed_creates_identity_and_goals(brain_dir, tmp_path):
     brain_dir.rewrite_goals("- a goal")
     brain_dir.seed_from(seed)
     assert brain_dir.goals_text() == "- a goal"
+
+
+# --- pruning: the compaction trigger must be clearable ---------------------
+
+
+def test_delete_fact_roundtrip(brain_dir):
+    brain_dir.write_fact("pool", "Pool is 28C")
+    assert brain_dir.delete_fact("pool") is True
+    assert brain_dir.read_fact("pool") is None
+    assert brain_dir.list_facts() == []
+
+
+def test_delete_fact_reports_a_missing_fact(brain_dir):
+    assert brain_dir.delete_fact("never-written") is False
+
+
+def test_delete_fact_validates_the_name(brain_dir):
+    with pytest.raises(ValueError):
+        brain_dir.delete_fact("../etc/passwd")
+
+
+def test_delete_fact_clears_the_compaction_trigger(brain_dir):
+    """Overwriting a fact still counts, so without delete the latch never opens."""
+    for i in range(41):
+        brain_dir.write_fact(f"f{i}", "x")
+    assert brain_dir.needs_compaction()
+
+    brain_dir.delete_fact("f0")
+    assert len(brain_dir.list_facts()) == 40
+    assert not brain_dir.needs_compaction()
+
+
+def test_prune_journal_removes_old_files_and_keeps_recent_ones(brain_dir, clock):
+    now = clock.state["now"]
+    old = (now - timedelta(days=31)).strftime("%Y-%m-%d")
+    recent = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    for day in (old, recent):
+        (brain_dir.journal_dir / f"{day}.md").write_text("07:00  a line\n", encoding="utf-8")
+    (brain_dir.journal_dir / "notes.md").write_text("not a date\n", encoding="utf-8")
+
+    assert brain_dir.prune_journal() == 1
+    assert sorted(p.name for p in brain_dir.journal_dir.glob("*.md")) == [
+        f"{recent}.md",
+        "notes.md",
+    ]
+
+
+def test_prune_journal_clears_the_compaction_trigger(brain_dir, clock):
+    """The journal grows a file a day forever; on day 31 the hint must not latch."""
+    now = clock.state["now"]
+    for i in range(40):
+        day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        (brain_dir.journal_dir / f"{day}.md").write_text("x\n", encoding="utf-8")
+    assert brain_dir.needs_compaction()
+
+    brain_dir.prune_journal()
+    assert len(list(brain_dir.journal_dir.glob("*.md"))) <= 30
+    assert not brain_dir.needs_compaction()
+
+
+def test_prune_journal_on_a_missing_directory(tmp_path, clock):
+    fresh = MemoryDir(tmp_path / "nothing", "brain", is_brain=True, clock=clock)
+    assert fresh.prune_journal() == 0

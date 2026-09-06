@@ -2,8 +2,12 @@
 
 A cycle is deliberately bounded on every axis that could otherwise run away:
 ``max_rounds`` caps how many times the model may come back for more tools,
-``call_timeout_s`` caps a single provider call, and the wake the model asks for
-is clamped into a sane band. Whatever happens, the cycle ends the same way --
+``call_timeout_s`` caps a single provider call *inside the chain*, and the wake
+the model asks for is clamped into a sane band. The loop keeps an outer bound
+too, but a generous multiple of the per-call one (``CHAIN_TIMEOUT_FACTOR``):
+it is the backstop for a chain that hangs somewhere other than a provider
+call, not a second budget that could starve the fallback provider of its own
+timeout. Whatever happens, the cycle ends the same way --
 a journal line, the inbox archived, the per-cycle scratch state cleared -- so
 the next cycle starts from a clean, readable state.
 
@@ -41,6 +45,10 @@ MAX_WAKE_S = 12 * 3600
 # conversation is resent in full on every round. This is the loop's backstop,
 # not the tools' budget: deliberately generous, and only ever a last resort.
 MAX_TOOL_RESULT_CHARS = 16_000
+
+# The chain gives each provider ``call_timeout_s`` and may try two providers
+# twice each, so the loop's own bound has to leave room for all of them.
+CHAIN_TIMEOUT_FACTOR = 4
 
 Status = Literal["ok", "no_budget", "error", "timeout", "paused", "cancelled"]
 
@@ -125,7 +133,7 @@ class AgentLoop:
                         MAX_TOKENS,
                         self.priority,
                     ),
-                    timeout=self.call_timeout_s,
+                    timeout=self.call_timeout_s * CHAIN_TIMEOUT_FACTOR,
                 )
                 rounds += 1
                 model = reply.model
@@ -151,7 +159,10 @@ class AgentLoop:
                 minutes, summary = ended
                 next_wake_s = _clamp_wake(minutes, self.heartbeat_s)
         except TimeoutError:
-            status, summary = "timeout", f"provider call exceeded {self.call_timeout_s}s"
+            status, summary = (
+                "timeout",
+                f"chain exceeded {self.call_timeout_s * CHAIN_TIMEOUT_FACTOR}s",
+            )
             log.warning("[%s] cycle timed out after %d round(s)", self.name, rounds)
         except ChainExhausted as exc:
             status, summary = "no_budget", "no provider budget left"
@@ -237,6 +248,9 @@ class AgentLoop:
             self.memory.append_journal(f"[{status}] model={model or '-'} rounds={rounds} {summary}")
             self.memory.mark_done(notes)
             self.memory.purge_done()
+            # Before the next cycle reads needs_compaction(): pruning here is
+            # what keeps the journal rule clearable rather than a one-way latch.
+            self.memory.prune_journal()
         except Exception:
             log.exception("[%s] could not write back memory", self.name)
 

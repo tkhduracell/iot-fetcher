@@ -76,6 +76,55 @@ async def request(
     return None, f"{label}: backend returned HTTP {response.status_code}"
 
 
+async def stream(
+    ctx: ToolContext,
+    method: str,
+    url: str,
+    *,
+    label: str,
+    max_bytes: int,
+    max_redirects: int | None = None,
+    allow_redirect_response: bool = False,
+    **kwargs: Any,
+) -> tuple[httpx.Response | None, bytes, bool, str | None]:
+    """Like ``request``, but stop reading the body after ``max_bytes``.
+
+    Returns ``(response, body, truncated, error)``. The body is read chunk by
+    chunk and abandoned the moment the cap is reached, so a caller can be
+    pointed at a huge file without the process ever holding it -- which
+    ``response.read()`` cannot promise. Headers are available before any of the
+    body arrives, so a caller may also refuse on Content-Type and read nothing.
+    """
+    kwargs.setdefault("timeout", TIMEOUT_S)
+    body = bytearray()
+    truncated = False
+    try:
+        async with (
+            client_for(ctx, max_redirects=max_redirects) as client,
+            client.stream(method, url, **kwargs) as response,
+        ):
+            usable = response.is_success or (
+                allow_redirect_response
+                and response.is_redirect
+                and "location" in response.headers
+            )
+            if not usable:
+                return None, b"", False, f"{label}: backend returned HTTP {response.status_code}"
+            if response.is_redirect:
+                # The caller only wants the Location header; reading a
+                # redirect's body would be pointless bytes.
+                return response, b"", False, None
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) >= max_bytes:
+                    truncated = True
+                    del body[max_bytes:]
+                    break
+    except httpx.HTTPError as exc:
+        return None, b"", False, f"{label}: {type(exc).__name__}: {exc}"
+    return response, bytes(body), truncated, None
+
+
 def decode_json(response: httpx.Response, label: str) -> tuple[Any, str | None]:
     try:
         return response.json(), None
