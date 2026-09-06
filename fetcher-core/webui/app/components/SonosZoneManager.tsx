@@ -32,7 +32,9 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [error, setError] = useState<string | null>(null);
   const [volumeEditing, setVolumeEditing] = useState<string | null>(null);
   const [localVolumes, setLocalVolumes] = useState<Map<string, number>>(new Map());
-  const [sayOpen, setSayOpen] = useState<string | null>(null);
+  const [announceOpen, setAnnounceOpen] = useState(false);
+  const [announceRoom, setAnnounceRoom] = useState('');
+  const [announceVolume, setAnnounceVolume] = useState(40);
   const [sayText, setSayText] = useState('');
   const [saySending, setSaySending] = useState(false);
   const volumeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,7 +43,9 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (volumeEditing) {
+        if (announceOpen) {
+          closeAnnounce();
+        } else if (volumeEditing) {
           setVolumeEditing(null);
         } else {
           onClose();
@@ -50,7 +54,7 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose, volumeEditing]);
+  }, [onClose, volumeEditing, announceOpen]);
 
   // Build optimistic zone view: real zones + pending moves applied
   const optimisticZones = useCallback((): (SonosZone & { pendingSpeakers?: PendingMove[] })[] => {
@@ -190,21 +194,52 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const displayZones = optimisticZones();
   const hasPending = pendingMoves.length > 0;
 
-  const handleSay = async (roomName: string) => {
-    if (!sayText.trim()) return;
+  // Every speaker in the house, so an announcement can target a grouped room
+  // too — not just the unassigned ones the old per-chip Say button covered.
+  const allSpeakers = zones
+    .flatMap(z => z.members)
+    .filter((m, i, arr) => arr.findIndex(x => x.uuid === m.uuid) === i)
+    .sort((a, b) => a.roomName.localeCompare(b.roomName, 'sv'));
+
+  const openAnnounce = () => {
+    setAnnounceRoom(prev => (prev && allSpeakers.some(sp => sp.roomName === prev))
+      ? prev
+      : (allSpeakers[0]?.roomName ?? ''));
+    setSayText('');
+    setError(null);
+    setAnnounceOpen(true);
+  };
+
+  const closeAnnounce = () => {
+    setAnnounceOpen(false);
+    setSayText('');
+    setError(null);
+  };
+
+  const handleSay = async () => {
+    const room = announceRoom;
+    if (!room || !sayText.trim()) return;
     setSaySending(true);
     try {
-      await fetch(`/sonos/${encodeURIComponent(roomName)}/say/${encodeURIComponent(sayText.trim())}`);
+      // node-sonos-http-api: /{room}/say/{text}/{volume} — an all-digit second
+      // parameter is taken as the announcement volume (it restores the
+      // previous volume afterwards), so no separate volume call is needed.
+      const resp = await fetch(
+        `/sonos/${encodeURIComponent(room)}/say/${encodeURIComponent(sayText.trim())}/${announceVolume}`
+      );
+      if (!resp.ok) throw new Error(`Announce failed (${resp.status})`);
+      setSayText('');
+      setAnnounceOpen(false);
+      setError(null);
     } catch (err) {
       console.error('TTS error:', err);
+      setError(err instanceof Error ? err.message : 'Announce failed');
     } finally {
       setSaySending(false);
-      setSayOpen(null);
-      setSayText('');
     }
   };
 
-  const renderSpeakerChip = (speaker: SonosMember, zoneUuid: string, isPending: boolean, isZonePlaying?: boolean, showSay?: boolean) => {
+  const renderSpeakerChip = (speaker: SonosMember, zoneUuid: string, isPending: boolean, isZonePlaying?: boolean) => {
     const isDragging = dragState?.speakerUuid === speaker.uuid;
     const displayVolume = localVolumes.get(speaker.uuid) ?? speaker.state.volume;
     const isEditing = volumeEditing === speaker.uuid;
@@ -267,36 +302,6 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             className="absolute inset-0 w-full opacity-0 cursor-pointer"
           />
         </div>
-        {showSay && !isPending && (
-          sayOpen === speaker.uuid ? (
-            <div className="mt-2 flex gap-1.5" onPointerDown={(e) => e.stopPropagation()}>
-              <input
-                type="text"
-                value={sayText}
-                onChange={(e) => setSayText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleSay(speaker.roomName); if (e.key === 'Escape') { setSayOpen(null); setSayText(''); } }}
-                placeholder="Type message..."
-                autoFocus
-                className="flex-1 min-w-0 bg-gray-600 text-white text-xs rounded px-2 py-1 outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <button
-                onClick={() => handleSay(speaker.roomName)}
-                disabled={saySending || !sayText.trim()}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs rounded px-2 py-1 flex-shrink-0"
-              >
-                {saySending ? '...' : 'Send'}
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={(e) => { e.stopPropagation(); setSayOpen(speaker.uuid); setSayText(''); }}
-              onPointerDown={(e) => e.stopPropagation()}
-              className="mt-2 w-full text-xs text-gray-400 hover:text-white bg-gray-600 hover:bg-gray-500 rounded py-1 transition-colors"
-            >
-              Say
-            </button>
-          )
-        )}
       </div>
     );
   };
@@ -310,7 +315,10 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     >
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-        <h2 className="text-xl font-semibold text-white">Sonos Speakers</h2>
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-xl font-semibold text-white">Sonos Speakers</h2>
+          <p className="text-xs text-gray-400">Drag and drop speakers to move them between groups.</p>
+        </div>
         <div className="flex items-center gap-3">
           {error && (
             <span className="text-sm text-red-400">{error}</span>
@@ -359,7 +367,7 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
               <>
                 {soloZones.map(zone => {
                   const speaker = zone.members[0];
-                  return renderSpeakerChip(speaker, zone.uuid, false, false, true);
+                  return renderSpeakerChip(speaker, zone.uuid, false, false);
                 })}
                 {pendingInSidebar.map(move => {
                   const originalSpeaker = zones.flatMap(z => z.members).find(m => m.uuid === move.speakerUuid);
@@ -369,6 +377,18 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
               </>
             );
           })()}
+
+          {/* Announce to any speaker — replaces the per-speaker Say buttons */}
+          <button
+            onClick={openAnnounce}
+            disabled={allSpeakers.length === 0}
+            className="mt-auto w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white font-semibold rounded-lg px-4 py-3 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M18 3a1 1 0 00-1.447-.894L8.763 6H5a3 3 0 000 6h.28l1.771 5.316A1 1 0 008 18h1a1 1 0 001-1v-4.382l6.553 3.276A1 1 0 0018 15V3z" />
+            </svg>
+            Announce
+          </button>
         </div>
 
         {/* Zone columns */}
@@ -439,6 +459,95 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           </div>
         </div>
       </div>
+
+      {/* Announce dialog — centered, above the speaker panel */}
+      {announceOpen && createPortal(
+        <div
+          className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={closeAnnounce}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="announce-title"
+            className="w-full max-w-md bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-6 flex flex-col gap-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 id="announce-title" className="text-lg font-semibold text-white">Announce</h3>
+              <button
+                onClick={closeAnnounce}
+                aria-label="Close"
+                className="w-8 h-8 rounded-full bg-gray-700 hover:bg-gray-600 text-white flex items-center justify-center transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Speaker</span>
+              <select
+                value={announceRoom}
+                onChange={(e) => setAnnounceRoom(e.target.value)}
+                className="w-full bg-gray-700 text-white rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-green-500 cursor-pointer"
+              >
+                {allSpeakers.map(sp => (
+                  <option key={sp.uuid} value={sp.roomName}>{sp.roomName}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Volume</span>
+                <span className="text-sm text-gray-300 tabular-nums">{announceVolume}</span>
+              </div>
+              <div className="relative h-8 rounded-full">
+                <div className="absolute inset-0 bg-gray-600 rounded-full overflow-hidden pointer-events-none">
+                  <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${announceVolume}%` }} />
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={announceVolume}
+                  onChange={(e) => setAnnounceVolume(Number(e.target.value))}
+                  aria-label="Announcement volume"
+                  className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                />
+              </div>
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Message</span>
+              <textarea
+                value={sayText}
+                onChange={(e) => setSayText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSay(); }
+                }}
+                rows={3}
+                autoFocus
+                placeholder="Middagen är klar!"
+                className="w-full resize-none bg-gray-700 text-white rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-green-500 placeholder:text-gray-500"
+              />
+            </label>
+
+            {error && <span className="text-sm text-red-400">{error}</span>}
+
+            <button
+              onClick={handleSay}
+              disabled={saySending || !sayText.trim() || !announceRoom}
+              className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white font-semibold rounded-lg px-4 py-3 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400"
+            >
+              {saySending ? 'Sending...' : 'Send'}
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* Drag overlay */}
       {dragState && createPortal(
