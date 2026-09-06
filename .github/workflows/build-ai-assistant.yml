@@ -17,7 +17,9 @@ on:
 
 jobs:
   build-ai-assistant:
-    runs-on: ubuntu-latest
+    # Native arm64: these images are arm64-only (see #456), so an amd64
+    # runner would build them under QEMU. Free for public repos.
+    runs-on: ubuntu-24.04-arm
 
     permissions:
       contents: 'read'
