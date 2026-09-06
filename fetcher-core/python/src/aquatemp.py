@@ -68,8 +68,9 @@ def getToken() -> Optional[Tuple[str, str]]:
         return None
 
     resp = login_response.json()
-    token = resp.get('objectResult', {}).get('x-token')
-    user_id = resp.get('objectResult', {}).get('userId')
+    login_result = resp.get('objectResult') or {}
+    token = login_result.get('x-token')
+    user_id = login_result.get('userId')
 
     if not token:
         logger.error(
@@ -88,7 +89,7 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
         logger.error(
             f"[aquatemp] Failed to fetch device list: {devices_response.text}")
         return []
-    devices_response = devices_response.json().get('objectResult', [])
+    devices_response = devices_response.json().get('objectResult') or []
     logger.info(f"[aquatemp] Found {len(devices_response)} devices")
 
     devices_response_share = requests.post(
@@ -100,7 +101,7 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
         logger.error(
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
         return []
-    devices_response_share = devices_response_share.json().get('objectResult', [])
+    devices_response_share = devices_response_share.json().get('objectResult') or []
     logger.info(
         f"[aquatemp] Found {len(devices_response_share)} shared devices")
 
@@ -121,7 +122,9 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[Dict[str, str]]]
             f"[aquatemp] Failed to fetch device data: {deviceData_response.text}")
         return None
 
-    return deviceData_response.json().get('objectResult', [])
+    # `objectResult` can be null (not just absent) — coerce so callers
+    # always iterate a list.
+    return deviceData_response.json().get('objectResult') or []
 
 
 def _aquatemp():
@@ -169,10 +172,24 @@ def _aquatemp():
                 continue
             values[code] = float(raw)
 
+        # Shared devices (the pump is shared to this account) return null for
+        # deviceNickName/custModel, so fall back to other identifying fields
+        # rather than tagging with None.
+        # NB: don't fall back to `nickName` — on shared devices that field
+        # holds the sharing account's email address, which we don't want
+        # ending up in a metric tag.
+        device_name = (device.get('deviceNickName')
+                       or device.get('deviceName')
+                       or device.get('displayName')
+                       or deviceCode)
+        device_model = (device.get('custModel')
+                        or device.get('model')
+                        or 'unknown')
+
         p = Point('aqua_temp')\
-            .tag('device_name', device['deviceNickName'])\
-            .tag('device_id', device['deviceId'])\
-            .tag('device_model', device['custModel'])
+            .tag('device_name', device_name)\
+            .tag('device_id', device.get('deviceId') or deviceCode)\
+            .tag('device_model', device_model)
 
         has_fields = False
         for code, metricName in CODES.items():
