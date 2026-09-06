@@ -9,10 +9,15 @@ export const values: Config = [
         { measurement: 'air_quality', field: 'aqi', title: '😶‍🌫️ Luftkvalitet', unit: 'AQI⁺', window: '60m', range: '-1h', sparkline: '24h', sparklineMin: 0, sparklineMax: 150 },
     ],
     [
-        { measurement: 'spa_climate', field: 'current_temperature_value', title: '🛁 Spa Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 45 },
+        // Spa och pool rapporterar glest: poolpumpen sover i timmar (uppmätt
+        // lucka på 5 h) och spa-värdet kommer via HA→VM-bryggan. Standardfönstret
+        // på 15 min ger därför tom ruta. Ta senaste värdet under dygnet i stället.
+        { measurement: 'spa_climate', field: 'current_temperature_value', title: '🛁 Spa Temperatur', unit: '°C', range: '-24h', sparkline: '24h', sparklineMin: 0, sparklineMax: 45 },
         // Poolens Sonoff-givare (pool_temperature_value) är trasig och rapporterar 0 °C.
         // Visa ingående vattentemperatur till poolvärmepumpen istället tills givaren bytts ut.
-        { measurement: 'aqua_temp', field: 'temp_incoming', title: '🏊 Pool Temperatur', unit: '°C', sparkline: '24h', sparklineMin: 0, sparklineMax: 35 },
+        // Två serier finns under samma device_id efter WiFi-modulbytet; den utan
+        // device_name slutade rapportera och skulle annars kunna visas i stället.
+        { measurement: 'aqua_temp', field: 'temp_incoming', filter: { device_name: '0C7FEDCC1862' }, title: '🏊 Pool Temperatur', unit: '°C', range: '-24h', sparkline: '24h', sparklineMin: 0, sparklineMax: 35 },
         { measurement: 'pool_iqpump_motordata', field: 'speed', title: '💦 Poolpump', unit: 'RPM', decimals: 0, sparkline: '24h', sparklineMin: 0, sparklineMax: 3000 },
     ],
     [
