@@ -42,7 +42,7 @@ def ngenic_backfill():
         return
     try:
         _ngenic_backfill()
-    except:
+    except Exception:
         logger.exception("[ngenic] Failed to execute ngenic backfill")
 
 
@@ -60,10 +60,35 @@ def _get_last_ngenic_timestamp() -> Optional[datetime]:
         results = data.get("data", {}).get("result", [])
         if not results:
             return None
-        ts = float(results[0]["value"][1])
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
+        # One series per node — back-fill from the oldest, otherwise nodes
+        # lagging behind the first-returned series never get filled.
+        stamps = []
+        for r in results:
+            try:
+                stamps.append(float(r["value"][1]))
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+        if not stamps:
+            return None
+        return datetime.fromtimestamp(min(stamps), tz=timezone.utc)
     except Exception as e:
         logger.warning("[ngenic] Failed to query last timestamp: %s", e)
+        return None
+
+
+def _parse_measurement_time(time_str: str) -> Optional[datetime]:
+    """Parse Ngenic's measurement timestamps.
+
+    The API returns e.g. "2026-09-06T08:43:09 Etc/UTC" — an ISO datetime and a
+    space-separated IANA zone name. strptime("%Z") does NOT accept IANA names
+    (only abbreviations like UTC/GMT), so parse the datetime half and treat the
+    zone as UTC, which is all the API has ever emitted.
+    """
+    try:
+        head = time_str.split(" ", 1)[0]
+        return datetime.fromisoformat(head).replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError, IndexError):
+        logger.warning("[ngenic] Unparseable measurement time %r, skipping", time_str)
         return None
 
 
@@ -122,15 +147,19 @@ def _ngenic_backfill():
 
                     points: List[Point] = []
                     for m in measurements:
-                        if not m.get("hasValue", False):
+                        # Measurement is not a dict — it has no .get(); read the
+                        # underlying JSON, which also survives missing keys.
+                        raw = m.json() if hasattr(m, "json") else dict(m)
+                        if not raw.get("hasValue", False):
                             continue
-                        time_str = m["time"]  # "2026-03-07T18:38:43 Etc/UTC"
-                        ts = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S %Z").replace(tzinfo=timezone.utc)
+                        ts = _parse_measurement_time(raw.get("time"))
+                        if ts is None:
+                            continue
                         points.append(
                             Point("ngenic_node_sensor_measurement_value")
                             .tag("node", node.uuid())
                             .tag("node_type", node_type.name)
-                            .field(mtype.value, float(m["value"]))
+                            .field(mtype.value, float(raw["value"]))
                             .time(int(ts.timestamp()))
                         )
 

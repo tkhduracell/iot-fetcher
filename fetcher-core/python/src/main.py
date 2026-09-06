@@ -52,9 +52,6 @@ def main():
                 m()
         return
 
-    logging.info("Running ngenic backfill check...")
-    ngenic_backfill()
-
     logging.info("Starting the scheduler...")
     schedule.every(1).minutes.do(with_timeout(aqualink))
     schedule.every(5).minutes.do(with_timeout(ngenic))
@@ -72,6 +69,12 @@ def main():
     schedule.every(6).hours.do(with_timeout(elpris))
     schedule.every(1).hours.at(':05').do(with_timeout(airquality))
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
+
+    # Backfill runs once at startup, but through the scheduler and wrapped in
+    # with_timeout like every other job — called inline it would block every
+    # fetcher behind a potentially long (up to 30 days of chunked API calls)
+    # sequential fetch.
+    schedule.every(1).days.do(with_timeout(ngenic_backfill, timeout_seconds=1800))
 
     logging.info("Starting the scheduler, running all...")
     schedule.run_all(delay_seconds=10)
