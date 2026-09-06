@@ -144,11 +144,12 @@ export function getRunner(
     subAgents,
   };
   if (tools.length > 0) {
-    // Force the model to call tools rather than respond with text-only greetings.
-    // Gemini preview models often ignore tools on first turn without this.
+    // Encourage the model to use tools on the first turn instead of replying with
+    // a text-only greeting. Using AUTO here allows the model to return natural
+    // language responses on later turns, avoiding infinite tool-calling loops.
     agentConfig.generateContentConfig = {
       toolConfig: {
-        functionCallingConfig: { mode: FunctionCallingConfigMode.ANY },
+        functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO },
       },
     };
   }
