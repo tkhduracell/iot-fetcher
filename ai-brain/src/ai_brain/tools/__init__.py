@@ -60,6 +60,17 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
+def wrap_external(source: str, text: str) -> str:
+    """Fence text that came from outside this system.
+
+    A metric name is ours; a Drive document, a web page and a friendly name a
+    human typed into Home Assistant are not. Anything in the second group is
+    data the model reads, never instructions it follows, so it is handed over
+    inside an ``<external>`` element that says where it came from.
+    """
+    return f'<external source="{source}">{text}</external>'
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
