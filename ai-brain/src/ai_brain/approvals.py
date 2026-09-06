@@ -10,7 +10,13 @@ Two properties are worth stating because the tests pin them:
 
 * **Exactly once.** ``on_reaction`` only acts on a proposal whose stored status
   is still ``pending``. Slack delivers duplicates and a human can double-tap,
-  and neither may make the speaker talk twice.
+  and neither may make the speaker talk twice. Because an executor is awaited,
+  two deliveries can be in flight at once, so the transition out of ``pending``
+  is persisted as ``executing`` *before* the await, under a per-proposal lock:
+  the second caller finds a non-pending file and stops. A process that dies
+  mid-execution leaves the proposal ``executing`` forever, which is the safe
+  side of the trade -- it is neither retried nor re-approved by a later
+  reaction, and it never shows up as pending again.
 * **Nothing silent.** Every terminal outcome -- executed, failed, rejected,
   blocked, expired -- drops a note into the brain's inbox, so the agent reads
   what became of its request on its next cycle instead of assuming.
@@ -18,6 +24,7 @@ Two properties are worth stating because the tests pin them:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -39,6 +46,23 @@ KINDS: dict[str, tuple[str, ...]] = {
     "sonos_say": ("text",),
     "ha_todo_add": ("item",),
 }
+
+# The only status ``pending()`` reports and the only one a reaction may act on.
+# Everything else -- including the transient ``executing`` -- is terminal as far
+# as the gate is concerned.
+PENDING = "pending"
+EXECUTING = "executing"
+STATUSES = frozenset(
+    {
+        PENDING,
+        EXECUTING,
+        "executed",
+        "failed",
+        "rejected",
+        "blocked_quiet_hours",
+        "expired",
+    }
+)
 
 APPROVE_EMOJI = "white_check_mark"
 REJECT_EMOJI = "x"
@@ -71,6 +95,10 @@ class Approvals:
         self.executors = executors
         self.clock = clock
         self.on_message = on_message
+        # One lock per proposal id, created on demand. Without it two coroutines
+        # can both read ``pending`` from disk in the same tick before either
+        # writes ``executing``, and both would execute.
+        self._locks: dict[str, asyncio.Lock] = {}
 
     # -- proposing -----------------------------------------------------
 
@@ -95,15 +123,19 @@ class Approvals:
             reason=reason,
             topic=topic,
             created=_iso(now),
-            status="pending",
+            status=PENDING,
         )
         if self.on_message is not None:
-            proposal.slack_ts = await self.on_message(
+            # A Slack client that failed to post, or a stub that returns nothing,
+            # must not put ``null`` in the outbox: the field is typed ``str``
+            # and ``_find_pending`` uses "" as "no message to react to".
+            posted = await self.on_message(
                 topic,
                 f"Proposal {proposal.id} ({kind}): {reason}\n\n"
                 f"```{json.dumps(payload)}```\n"
                 "React ✅ to approve, ❌ to reject.",
             )
+            proposal.slack_ts = posted or ""
         self._store(proposal)
         return proposal
 
@@ -112,12 +144,24 @@ class Approvals:
     async def on_reaction(self, slack_ts: str, emoji: str) -> Proposal | None:
         if emoji not in (APPROVE_EMOJI, REJECT_EMOJI):
             return None
-        proposal = self._find_pending(slack_ts)
-        if proposal is None:
+        # Look up unlocked to learn *which* proposal this is, then redo the
+        # check while holding that proposal's lock -- the first read is a hint,
+        # the second is the decision.
+        found = self._find_pending(slack_ts)
+        if found is None:
             return None
 
-        if emoji == REJECT_EMOJI:
-            return self._finish(proposal, "rejected", "")
+        async with self._lock_for(found.id):
+            proposal = self._find_pending(slack_ts)
+            if proposal is None:
+                return None
+            if emoji == REJECT_EMOJI:
+                return self._finish(proposal, "rejected", "")
+            # Claim it on disk before awaiting anything, so a concurrent
+            # delivery that reaches _find_pending after the lock is released
+            # sees a non-pending proposal.
+            proposal.status = EXECUTING
+            self._store(proposal)
 
         try:
             result = await self.executors.run(proposal.kind, proposal.payload)
@@ -143,9 +187,15 @@ class Approvals:
     # -- reading -------------------------------------------------------
 
     def pending(self) -> list[Proposal]:
-        return [p for p in self._all() if p.status == "pending"]
+        return [p for p in self._all() if p.status == PENDING]
 
     # -- internals -----------------------------------------------------
+
+    def _lock_for(self, proposal_id: str) -> asyncio.Lock:
+        lock = self._locks.get(proposal_id)
+        if lock is None:
+            lock = self._locks[proposal_id] = asyncio.Lock()
+        return lock
 
     def _path(self, proposal_id: str) -> Path:
         return self.brain.outbox_dir / f"{proposal_id}.json"
@@ -178,6 +228,10 @@ class Approvals:
         tmp.replace(path)
 
     def _finish(self, proposal: Proposal, status: str, result: str) -> Proposal:
+        # A typo'd status would silently make a proposal un-pending and
+        # un-terminal at once; fail loudly at the one place status is set.
+        if status not in STATUSES:
+            raise ValueError(f"unknown status: {status}")
         proposal.status = status
         proposal.result = result
         self._store(proposal)

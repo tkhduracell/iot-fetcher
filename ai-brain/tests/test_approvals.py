@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -174,6 +175,67 @@ async def test_a_second_reaction_does_not_execute_again(approvals, executors):
     await approvals.on_reaction(p.slack_ts, "white_check_mark")
     assert await approvals.on_reaction(p.slack_ts, "white_check_mark") is None
     assert len(executors.calls) == 1
+
+
+async def test_two_concurrent_check_marks_execute_once(brain_dir, moving_clock, slack):
+    """Slack retries deliveries; two in the same tick must not both execute.
+
+    The executor yields inside ``run``, which is exactly the window the old
+    code lost the race in: both callers had already read ``pending`` from disk.
+    """
+
+    class SlowExecutors:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        async def run(self, kind: str, payload: dict) -> str:
+            self.calls.append((kind, payload))
+            await asyncio.sleep(0)
+            return "queued"
+
+    executors = SlowExecutors()
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=slack)
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    await asyncio.gather(
+        approvals.on_reaction(p.slack_ts, "white_check_mark"),
+        approvals.on_reaction(p.slack_ts, "white_check_mark"),
+    )
+
+    assert executors.calls == [("sonos_say", {"text": "hi"})]
+    stored = json.loads((brain_dir.outbox_dir / f"{p.id}.json").read_text())
+    assert stored["status"] == "executed"
+    assert notes(brain_dir) == [f"proposal {p.id} executed: queued"]
+
+
+async def test_an_executing_proposal_is_not_pending_and_ignores_a_reaction(
+    brain_dir, executors, moving_clock
+):
+    """A process that died mid-execution leaves ``executing`` behind for good."""
+    approvals = Approvals(brain_dir, executors, moving_clock)
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    p.slack_ts = "ts-9"
+    p.status = "executing"
+    approvals._store(p)
+
+    assert approvals.pending() == []
+    assert await approvals.expire() == []
+    assert await approvals.on_reaction("ts-9", "white_check_mark") is None
+    assert executors.calls == []
+
+
+async def test_a_none_slack_ts_is_stored_as_empty_string(brain_dir, executors, moving_clock):
+    """on_message returning None must not put ``null`` in the outbox."""
+
+    async def posts_nothing(topic: str, text: str) -> str | None:
+        return None
+
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=posts_nothing)
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    assert p.slack_ts == ""
+    stored = json.loads((brain_dir.outbox_dir / f"{p.id}.json").read_text())
+    assert stored["slack_ts"] == ""
 
 
 async def test_x_rejects_without_executing(approvals, executors, brain_dir):
