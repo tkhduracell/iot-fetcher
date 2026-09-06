@@ -34,6 +34,7 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [localVolumes, setLocalVolumes] = useState<Map<string, number>>(new Map());
   const [announceOpen, setAnnounceOpen] = useState(false);
   const [announceRoom, setAnnounceRoom] = useState('');
+  const [announceVolume, setAnnounceVolume] = useState(40);
   const [sayText, setSayText] = useState('');
   const [saySending, setSaySending] = useState(false);
   const volumeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -220,7 +221,12 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     if (!room || !sayText.trim()) return;
     setSaySending(true);
     try {
-      const resp = await fetch(`/sonos/${encodeURIComponent(room)}/say/${encodeURIComponent(sayText.trim())}`);
+      // node-sonos-http-api: /{room}/say/{text}/{volume} — an all-digit second
+      // parameter is taken as the announcement volume (it restores the
+      // previous volume afterwards), so no separate volume call is needed.
+      const resp = await fetch(
+        `/sonos/${encodeURIComponent(room)}/say/${encodeURIComponent(sayText.trim())}/${announceVolume}`
+      );
       if (!resp.ok) throw new Error(`Announce failed (${resp.status})`);
       setSayText('');
       setAnnounceOpen(false);
@@ -491,6 +497,27 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   <option key={sp.uuid} value={sp.roomName}>{sp.roomName}</option>
                 ))}
               </select>
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Volume</span>
+                <span className="text-sm text-gray-300 tabular-nums">{announceVolume}</span>
+              </div>
+              <div className="relative h-8 rounded-full">
+                <div className="absolute inset-0 bg-gray-600 rounded-full overflow-hidden pointer-events-none">
+                  <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${announceVolume}%` }} />
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={announceVolume}
+                  onChange={(e) => setAnnounceVolume(Number(e.target.value))}
+                  aria-label="Announcement volume"
+                  className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                />
+              </div>
             </label>
 
             <label className="flex flex-col gap-1.5">
