@@ -7,7 +7,7 @@ import schedule
 
 from deco import deco
 from elpris import elpris
-from ngenic import ngenic
+from ngenic import ngenic, ngenic_backfill
 from aqualink import aqualink
 from airquality import airquality
 from aquatemp import aquatemp
@@ -43,10 +43,10 @@ if os.environ.get('PYDEBUGGER', None):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_vm', 'eufy', 'eufy_snapshot']:
+    if len(sys.argv) > 1 and sys.argv[1] in ['deco', 'elpris', 'ngenic', 'ngenic_backfill', 'aqualink', 'aquatemp', 'airquality', 'tapo', 'sonos', 'backup_vm', 'eufy', 'eufy_snapshot']:
         module_name = sys.argv[1]
         logging.info(f"Running module: {module_name}")
-        for m in [deco, elpris, ngenic, aqualink, aquatemp, airquality, tapo, sonos, backup_vm, eufy, eufy_snapshot]:
+        for m in [deco, elpris, ngenic, ngenic_backfill, aqualink, aquatemp, airquality, tapo, sonos, backup_vm, eufy, eufy_snapshot]:
             if m.__name__ == module_name:
                 logging.info(f"Executing {module_name} module...")
                 m()
@@ -69,6 +69,12 @@ def main():
     schedule.every(6).hours.do(with_timeout(elpris))
     schedule.every(1).hours.at(':05').do(with_timeout(airquality))
     schedule.every(3).hours.at(':15').do(with_timeout(eufy_snapshot))
+
+    # Backfill runs once at startup, but through the scheduler and wrapped in
+    # with_timeout like every other job — called inline it would block every
+    # fetcher behind a potentially long (up to 30 days of chunked API calls)
+    # sequential fetch.
+    schedule.every(1).days.do(with_timeout(ngenic_backfill, timeout_seconds=1800))
 
     logging.info("Starting the scheduler, running all...")
     schedule.run_all(delay_seconds=10)
