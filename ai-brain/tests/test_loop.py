@@ -12,11 +12,12 @@ from ai_brain.llm import (
     ProviderError,
     Reply,
     ToolCall,
+    ToolSpec,
     Usage,
 )
 from ai_brain.llm.fake import FakeProvider
-from ai_brain.loop import AgentLoop, CycleResult
-from ai_brain.tools import ToolContext, ToolRegistry
+from ai_brain.loop import MAX_TOOL_RESULT_CHARS, AgentLoop, CycleResult
+from ai_brain.tools import Tool, ToolContext, ToolRegistry
 from ai_brain.tools.memory_tools import register_memory_tools
 from ai_brain.tools.slack_tools import register_slack_tools
 
@@ -34,6 +35,21 @@ def reply(text: str = "", *calls: ToolCall, model: str = "fake:1") -> Reply:
 
 def call(name: str, cid: str = "c1", **args) -> ToolCall:
     return ToolCall(id=cid, name=name, args=args)
+
+
+def _static(text: str):
+    """A tool function that always returns the same string."""
+
+    async def _fn(_ctx, _args) -> str:
+        return text
+
+    return _fn
+
+
+def _last_journal_line(memory) -> str:
+    """The most recent journal entry, with its ``HH:MM  `` stamp stripped."""
+    lines = [ln for ln in memory.journal_text(1).splitlines() if ln and not ln.startswith("## ")]
+    return lines[-1].split("  ", 1)[1]
 
 
 class FakeSlackOut:
@@ -185,6 +201,52 @@ async def test_tool_results_are_fed_back_as_tool_messages(make_loop):
     assert '"ok": true' in tool_msg.content
 
 
+async def test_a_huge_tool_result_is_truncated_before_the_model_sees_it(make_loop, registry):
+    """A tool that forgets to bound itself must not swamp the conversation."""
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="firehose", description="returns too much", parameters={}),
+            fn=_static("x" * 40_000),
+        )
+    )
+    loop, provider = make_loop(
+        [
+            reply("hm", call("firehose", "a")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    convo, _ = provider.calls[-1]
+    tool_msg = convo[3]
+    assert tool_msg.name == "firehose"
+    assert len(tool_msg.content) <= MAX_TOOL_RESULT_CHARS + 100
+    dropped = 40_000 - MAX_TOOL_RESULT_CHARS
+    assert tool_msg.content.endswith(f"[truncated by loop: {dropped} more chars]")
+    assert tool_msg.content.startswith("x" * 100)
+
+
+async def test_a_small_tool_result_is_left_alone(make_loop, registry):
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="trickle", description="returns a little", parameters={}),
+            fn=_static("y" * 100),
+        )
+    )
+    loop, provider = make_loop(
+        [
+            reply("hm", call("trickle", "a")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    convo, _ = provider.calls[-1]
+    assert convo[3].content == "y" * 100
+
+
 async def test_compaction_hint_added_when_memory_is_large(make_loop, brain_dir):
     for i in range(45):
         brain_dir.write_fact(f"fact{i}", "x")
@@ -333,6 +395,34 @@ async def test_a_note_survives_a_failed_cycle(make_loop, brain_dir):
     # The brief says mark_done always runs; the note is archived, not lost.
     assert brain_dir.unread_notes() == []
     assert [p.name for p in brain_dir.done_dir.glob("*.md")]
+
+
+async def test_a_note_survives_a_timed_out_cycle(make_loop, brain_dir, monkeypatch):
+    brain_dir.drop_note("energy", "important")
+    loop, provider = make_loop([reply("never arrives")], call_timeout_s=0.01)
+
+    async def hang(*args, **kwargs):
+        await asyncio.sleep(5)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(provider, "complete", hang)
+
+    await loop.run_cycle()
+
+    assert brain_dir.unread_notes() == []
+    assert [p.name for p in brain_dir.done_dir.glob("*.md")]
+    assert _last_journal_line(brain_dir).startswith("[timeout]")
+
+
+async def test_a_note_survives_an_errored_cycle(make_loop, brain_dir):
+    brain_dir.drop_note("energy", "important")
+    loop, _ = make_loop([ProviderError("schema is wrong", kind="bad_request")])
+
+    await loop.run_cycle()
+
+    assert brain_dir.unread_notes() == []
+    assert [p.name for p in brain_dir.done_dir.glob("*.md")]
+    assert _last_journal_line(brain_dir).startswith("[error]")
 
 
 # -- slack topic status ------------------------------------------------

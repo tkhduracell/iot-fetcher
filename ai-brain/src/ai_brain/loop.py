@@ -36,6 +36,12 @@ MAX_TOKENS = 4000
 MIN_BACKOFF_S = 60
 MAX_WAKE_S = 12 * 3600
 
+# Tools are expected to bound their own output, but a tool that forgets would
+# otherwise push an unbounded string into the conversation -- and the
+# conversation is resent in full on every round. This is the loop's backstop,
+# not the tools' budget: deliberately generous, and only ever a last resort.
+MAX_TOOL_RESULT_CHARS = 16_000
+
 Status = Literal["ok", "no_budget", "error", "timeout", "paused", "cancelled"]
 
 CYCLE_INSTRUCTIONS = """\
@@ -130,6 +136,7 @@ class AgentLoop:
                     break
                 for call in reply.tool_calls:
                     result = await self.registry.dispatch(self.ctx, call)
+                    result = self._cap_tool_result(call.name, result)
                     messages.append(Message("tool", result, tool_call_id=call.id, name=call.name))
                 if self.ctx.extras.get("end_cycle"):
                     break
@@ -181,6 +188,25 @@ class AgentLoop:
         self.wake.clear()
 
     # -- internals -----------------------------------------------------
+
+    def _cap_tool_result(self, tool: str, result: str) -> str:
+        """Keep one runaway tool result from swamping the conversation.
+
+        Tools are supposed to trim themselves; this only catches the ones that
+        did not. The marker is left in the text on purpose, so the model can
+        see it was cut off rather than silently reasoning from half an answer.
+        """
+        if len(result) <= MAX_TOOL_RESULT_CHARS:
+            return result
+        dropped = len(result) - MAX_TOOL_RESULT_CHARS
+        log.warning(
+            "[%s] tool %s returned %d chars; truncated to %d",
+            self.name,
+            tool,
+            len(result),
+            MAX_TOOL_RESULT_CHARS,
+        )
+        return result[:MAX_TOOL_RESULT_CHARS] + f"\n…[truncated by loop: {dropped} more chars]"
 
     def _opening_messages(self) -> list[Message]:
         system = self.memory.read_context(self.constitution) + "\n\n" + CYCLE_INSTRUCTIONS
