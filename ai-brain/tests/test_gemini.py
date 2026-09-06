@@ -405,3 +405,89 @@ async def test_lazy_client_is_created_once_and_closed():
     assert p._client is created
     await p.aclose()
     assert created.is_closed
+
+
+@respx.mock
+async def test_thought_signatures_are_read_off_parts():
+    body = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"text": "checking", "thoughtSignature": "sig-T"},
+                        {
+                            "functionCall": {"name": "get_weather", "args": {"city": "Malmo"}},
+                            "thoughtSignature": "sig-A",
+                        },
+                        {"functionCall": {"name": "get_weather", "args": {"city": "Lund"}}},
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 7},
+    }
+    respx.post(URL).mock(return_value=httpx.Response(200, json=body))
+    reply = await provider().complete([Message(role="user", content="weather?")], [WEATHER], 256)
+
+    assert reply.thought_signature == "sig-T"
+    assert reply.tool_calls[0].thought_signature == "sig-A"
+    assert reply.tool_calls[1].thought_signature == ""
+
+
+@respx.mock
+async def test_reply_without_signatures_has_empty_ones():
+    respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 64)
+    assert reply.thought_signature == ""
+
+
+@respx.mock
+async def test_thought_signatures_are_echoed_back_on_the_matching_parts():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = [
+        Message(role="user", content="weather?"),
+        Message(
+            role="assistant",
+            content="checking",
+            tool_calls=(
+                ToolCall(
+                    id="call_1",
+                    name="get_weather",
+                    args={"city": "Malmo"},
+                    thought_signature="sig-A",
+                ),
+                ToolCall(id="call_2", name="get_weather", args={"city": "Lund"}),
+            ),
+            thought_signature="sig-T",
+        ),
+    ]
+    await provider().complete(messages, [WEATHER], 64)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["contents"][1] == {
+        "role": "model",
+        "parts": [
+            {"text": "checking", "thoughtSignature": "sig-T"},
+            {
+                "functionCall": {"name": "get_weather", "args": {"city": "Malmo"}},
+                "thoughtSignature": "sig-A",
+            },
+            {"functionCall": {"name": "get_weather", "args": {"city": "Lund"}}},
+        ],
+    }
+
+
+@respx.mock
+async def test_no_thought_signature_key_when_there_is_none():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = [
+        Message(role="user", content="hi"),
+        Message(
+            role="assistant",
+            content="checking",
+            tool_calls=(ToolCall(id="call_1", name="get_weather", args={}),),
+        ),
+    ]
+    await provider().complete(messages, [WEATHER], 64)
+
+    assert b"thoughtSignature" not in route.calls.last.request.content

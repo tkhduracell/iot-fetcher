@@ -48,6 +48,9 @@ class ToolCall:
     id: str
     name: str
     args: dict
+    # Gemini 3.x thinking models sign the part they hand back; the same string
+    # must ride along when we echo that model turn, or the next call is a 400.
+    thought_signature: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,7 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str = ""
     name: str = ""
+    thought_signature: str = ""
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,7 @@ class Reply:
     tool_calls: tuple[ToolCall, ...]
     usage: Usage
     model: str
+    thought_signature: str = ""
 
 
 class ProviderError(Exception):

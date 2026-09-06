@@ -201,6 +201,30 @@ async def test_tool_results_are_fed_back_as_tool_messages(make_loop):
     assert '"ok": true' in tool_msg.content
 
 
+async def test_thought_signatures_are_carried_into_the_assistant_turn(make_loop):
+    """Gemini 3.x rejects an echoed model turn whose signatures were dropped."""
+    signed = Reply(
+        text="hm",
+        tool_calls=(ToolCall(id="a", name="list_facts", args={}, thought_signature="sig-A"),),
+        usage=Usage(prompt_tokens=10, completion_tokens=5),
+        model="fake:1",
+        thought_signature="sig-T",
+    )
+    loop, provider = make_loop(
+        [
+            signed,
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    convo, _ = provider.calls[-1]
+    assistant = convo[2]
+    assert assistant.thought_signature == "sig-T"
+    assert assistant.tool_calls[0].thought_signature == "sig-A"
+
+
 async def test_a_huge_tool_result_is_truncated_before_the_model_sees_it(make_loop, registry):
     """A tool that forgets to bound itself must not swamp the conversation."""
     registry.register(

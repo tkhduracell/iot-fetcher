@@ -130,7 +130,12 @@ class AgentLoop:
                 rounds += 1
                 model = reply.model
                 messages.append(
-                    Message("assistant", reply.text, tool_calls=tuple(reply.tool_calls))
+                    Message(
+                        "assistant",
+                        reply.text,
+                        tool_calls=tuple(reply.tool_calls),
+                        thought_signature=reply.thought_signature,
+                    )
                 )
                 if not reply.tool_calls:
                     break

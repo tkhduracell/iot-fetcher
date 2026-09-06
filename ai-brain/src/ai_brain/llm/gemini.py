@@ -14,6 +14,10 @@ Two details of Gemini's format drive the shape of the request builder:
   merged rather than emitted one content each.
 * The system prompt is not a turn at all; it lives beside ``contents`` in
   ``systemInstruction``.
+* Gemini 3.x thinking models sign their parts with a ``thoughtSignature``, and
+  reject the turn on the next call unless the same string comes back on the
+  same part. Signatures are therefore read off the response and echoed
+  verbatim; they are opaque to us.
 
 The API key travels only in the ``x-goog-api-key`` header, never in the URL or
 the body, so neither logs nor error text can leak it.
@@ -149,11 +153,22 @@ class GeminiProvider(Provider):
                 id=f"call_{n}",
                 name=part["functionCall"].get("name", ""),
                 args=part["functionCall"].get("args") or {},
+                thought_signature=part.get("thoughtSignature") or "",
             )
             for n, part in enumerate(
                 (p for p in parts if "functionCall" in p),
                 start=1,
             )
+        )
+        # A thinking model may sign the text part instead of (or as well as)
+        # the calls; that one belongs to the turn, so keep the first we see.
+        text_signature = next(
+            (
+                part["thoughtSignature"]
+                for part in parts
+                if "text" in part and part.get("thoughtSignature")
+            ),
+            "",
         )
 
         usage = body.get("usageMetadata") or {}
@@ -165,6 +180,7 @@ class GeminiProvider(Provider):
                 completion_tokens=usage.get("candidatesTokenCount", 0),
             ),
             model=self.model,
+            thought_signature=text_signature,
         )
 
 
@@ -192,9 +208,12 @@ def build_request(messages: list[Message], tools: list[ToolSpec], max_tokens: in
         elif message.role == "assistant":
             parts: list[dict[str, Any]] = []
             if message.content:
-                parts.append({"text": message.content})
+                parts.append(_signed({"text": message.content}, message.thought_signature))
             parts.extend(
-                {"functionCall": {"name": call.name, "args": call.args}}
+                _signed(
+                    {"functionCall": {"name": call.name, "args": call.args}},
+                    call.thought_signature,
+                )
                 for call in message.tool_calls
             )
             contents.append({"role": "model", "parts": parts})
@@ -239,6 +258,18 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
             if match:
                 return float(match.group(1))
     return None
+
+
+def _signed(part: dict[str, Any], signature: str) -> dict[str, Any]:
+    """A part with its thought signature attached, if it has one.
+
+    Gemini 3.x rejects an echoed model turn whose ``functionCall`` parts lost
+    their signature, but an empty ``thoughtSignature`` is just as invalid --
+    so the key is emitted only when there is something to say.
+    """
+    if signature:
+        part["thoughtSignature"] = signature
+    return part
 
 
 def _tool_response(content: str) -> dict:
