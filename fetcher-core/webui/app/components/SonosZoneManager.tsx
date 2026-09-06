@@ -317,7 +317,7 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
         <div className="flex flex-col gap-0.5">
           <h2 className="text-xl font-semibold text-white">Sonos Speakers</h2>
-          <p className="text-xs text-gray-400">Dra och släpp högtalare för att flytta dem mellan grupper.</p>
+          <p className="text-xs text-gray-400">Drag and drop speakers to move them between groups.</p>
         </div>
         <div className="flex items-center gap-3">
           {error && (
