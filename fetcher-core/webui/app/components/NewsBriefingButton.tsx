@@ -32,7 +32,14 @@ const NewsBriefingButton: React.FC = () => {
     return () => window.removeEventListener('hashchange', check);
   }, []);
 
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  /** Drops every pending timer — a stale done→idle timer from the last run
+   *  would otherwise reset the phase mid-flight through the next one. */
+  const clearTimers = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+  }, []);
+
+  useEffect(() => () => clearTimers(), [clearTimers]);
 
   const closePanel = useCallback(() => {
     history.pushState(null, '', window.location.pathname + window.location.search);
@@ -54,6 +61,7 @@ const NewsBriefingButton: React.FC = () => {
 
   const run = useCallback(async () => {
     if (phase !== 'idle' && phase !== 'done' && phase !== 'error') return;
+    clearTimers();
     setError(null);
     setPhase('fetching');
     timers.current.push(setTimeout(() => {
@@ -84,10 +92,11 @@ const NewsBriefingButton: React.FC = () => {
       setError(e instanceof Error ? e.message : 'Något gick fel');
       setPhase('error');
     }
-  }, [phase, speak]);
+  }, [phase, speak, clearTimers]);
 
   const replay = useCallback(async () => {
     if (!briefing || phase === 'speaking') return;
+    clearTimers();
     try {
       await speak(briefing);
       setPhase('done');
@@ -96,7 +105,7 @@ const NewsBriefingButton: React.FC = () => {
       setError(e instanceof Error ? e.message : 'Något gick fel');
       setPhase('error');
     }
-  }, [briefing, phase, speak]);
+  }, [briefing, phase, speak, clearTimers]);
 
   const busy = phase === 'fetching' || phase === 'writing' || phase === 'speaking';
 
@@ -135,6 +144,7 @@ const NewsBriefingButton: React.FC = () => {
       {open && briefing && (
         <NewsBriefingPanel
           transcript={briefing.transcript}
+          room={briefing.room}
           stories={briefing.stories}
           sources={briefing.sources}
           replaying={phase === 'speaking'}

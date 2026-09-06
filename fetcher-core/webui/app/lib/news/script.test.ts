@@ -21,6 +21,20 @@ const story = (over: Partial<NewsItem> = {}): NewsItem => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe('relativeTime', () => {
+  it('does not call a story inside the 24h window yesterday', () => {
+    // Math.round would push 23h40m to 24 and mislabel it as 'igår'.
+    expect(relativeTime(new Date(NOW.getTime() - (23 * 60 + 40) * 60_000), NOW))
+      .toBe('publicerad för 23 timmar sedan');
+  });
+
+  it('treats a future timestamp as unknown, not as breaking news', () => {
+    expect(relativeTime(new Date(NOW.getTime() + 2 * 3600_000), NOW)).toBe('publiceringstid okänd');
+  });
+
+  it('uses singular Swedish for one minute', () => {
+    expect(relativeTime(new Date(NOW.getTime() - 60_000), NOW)).toBe('publicerad för en minut sedan');
+  });
+
   it('renders hours, minutes and unknown timing', () => {
     expect(relativeTime(new Date(NOW.getTime() - 3 * 3600_000), NOW)).toBe('publicerad för 3 timmar sedan');
     expect(relativeTime(new Date(NOW.getTime() - 20 * 60_000), NOW)).toBe('publicerad för 20 minuter sedan');
@@ -105,6 +119,13 @@ describe('validateTranscript', () => {
     // 120s, so a single-call briefing has to stay near 1000 chars.
     const out = validateTranscript(body(200));
     expect(out.length * 0.1).toBeLessThan(120);
+  });
+
+  it('never ends mid-word when the tail is one long sentence', () => {
+    const oneSentence = `${'A'.repeat(500)} och sedan ${'B'.repeat(600)}.`;
+    const out = validateTranscript(oneSentence);
+    expect(out).toMatch(/[.!?…]$/);
+    expect(out.endsWith('B…')).toBe(false);
   });
 
   it('truncates a runaway script on a sentence boundary', () => {

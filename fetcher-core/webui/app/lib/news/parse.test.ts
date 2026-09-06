@@ -12,6 +12,14 @@ describe('stripHtml', () => {
     expect(stripHtml('R&aring;ttlarm &#039;i&#039; Malm&ouml;')).toBe("Råttlarm 'i' Malmö");
   });
 
+  it('leaves an out-of-range numeric entity alone instead of throwing', () => {
+    // String.fromCodePoint throws RangeError above 0x10FFFF; unguarded that
+    // exception escapes parseRss and discards the whole feed.
+    expect(stripHtml('X &#99999999999; Y')).toBe('X &#99999999999; Y');
+    expect(stripHtml('X &#xFFFFFFFF; Y')).toBe('X &#xFFFFFFFF; Y');
+    expect(stripHtml('R&#229;tt')).toBe('Rått');
+  });
+
   it('collapses whitespace', () => {
     expect(stripHtml('a\n\n   b')).toBe('a b');
   });
@@ -45,6 +53,15 @@ describe('parseRss', () => {
     const items = parseRss('Test')(single);
     expect(items).toHaveLength(1);
     expect(items[0].title).toBe('Ensam nyhet');
+  });
+
+  it('keeps the other items when one has a bad numeric entity', () => {
+    const feed = `<rss><channel>
+      <item><title>Bra nyhet ett</title><link>https://x/1</link></item>
+      <item><title>Trasig &#99999999999; nyhet</title><link>https://x/2</link></item>
+      <item><title>Bra nyhet tre</title><link>https://x/3</link></item>
+    </channel></rss>`;
+    expect(parseRss('Test')(feed)).toHaveLength(3);
   });
 
   it('returns [] for malformed XML rather than throwing', () => {

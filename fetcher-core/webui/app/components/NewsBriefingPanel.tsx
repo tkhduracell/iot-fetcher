@@ -14,6 +14,7 @@ export type SourceStatus = { source: string; count: number; error: string | null
 
 type Props = {
   transcript: string;
+  room: string;
   stories: BriefingStory[];
   sources: SourceStatus[];
   replaying: boolean;
@@ -22,7 +23,7 @@ type Props = {
 };
 
 const NewsBriefingPanel: React.FC<Props> = ({
-  transcript, stories, sources, replaying, onReplay, onClose,
+  transcript, room, stories, sources, replaying, onReplay, onClose,
 }) => {
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -47,7 +48,7 @@ const NewsBriefingPanel: React.FC<Props> = ({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-semibold text-white">Malmökollen</h2>
-            <p className="text-xs text-gray-400">Senaste dygnet, uppläst i Kontor</p>
+            <p className="text-xs text-gray-400">Senaste dygnet, uppläst i {room}</p>
           </div>
           <button
             onClick={onClose}

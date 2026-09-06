@@ -8,7 +8,21 @@ export const dynamic = 'force-dynamic';
 
 /** Defaults match the wall dashboard; overridable without a rebuild. */
 const DEFAULT_ROOM = 'Kontor';
-const DEFAULT_VOLUME = '20';
+const DEFAULT_VOLUME = 20;
+
+/**
+ * The volume reaches Sonos as a bare URL path segment, and node-sonos-http-api
+ * only treats an all-digit segment as a volume — anything else is read as a
+ * language code instead, silently playing at the default volume. So a bad
+ * NEWS_VOLUME must never reach the client.
+ */
+function newsVolume(): string {
+  const raw = (process.env.NEWS_VOLUME ?? '').trim();
+  // Note an unset or empty var must fall back, not coerce to 0 — Number('') is
+  // 0, which would announce the news silently.
+  if (!/^\d+$/.test(raw)) return String(DEFAULT_VOLUME);
+  return String(Math.min(100, Number(raw)));
+}
 const MIN_STORIES = 2;
 /** The script is one short spoken sweep, so feeding more just gets trimmed. */
 const MAX_STORIES = 5;
@@ -20,7 +34,7 @@ export async function POST() {
   }
 
   const room = process.env.NEWS_ROOM || DEFAULT_ROOM;
-  const volume = process.env.NEWS_VOLUME || DEFAULT_VOLUME;
+  const volume = newsVolume();
   const now = new Date();
 
   const results = await fetchAllSources();

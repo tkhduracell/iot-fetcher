@@ -63,9 +63,15 @@ const SWEDISH_MONTHS = ['januari', 'februari', 'mars', 'april', 'maj', 'juni',
 export function relativeTime(published: Date | null, now: Date): string {
   if (!published) return 'publiceringstid okänd';
   const mins = Math.round((now.getTime() - published.getTime()) / 60_000);
+  // A feed with a skewed clock can publish in the future; we do not know when
+  // it really happened, so say so rather than call it breaking news.
+  if (mins < 0) return 'publiceringstid okänd';
   if (mins < 1) return 'publicerad just nu';
+  if (mins === 1) return 'publicerad för en minut sedan';
   if (mins < 60) return `publicerad för ${mins} minuter sedan`;
-  const hours = Math.round(mins / 60);
+  // Floor, not round: rounding pushes 23h30m+ to 24 and mislabels a story that
+  // passed the 24h cutoff as yesterday's.
+  const hours = Math.floor(mins / 60);
   if (hours === 1) return 'publicerad för en timme sedan';
   if (hours < 24) return `publicerad för ${hours} timmar sedan`;
   return 'publicerad igår';
@@ -91,8 +97,9 @@ export const MAX_ENCODED_TRANSCRIPT = 14 * 1024;
 /**
  * The briefing is spoken in ONE /say call, so the whole script has to fit a
  * single URL segment and finish inside the shared 120s Sonos proxy timeout.
- * Measured on Kontor at ~0.1s of speech per character, so ~1000 chars ≈ 95s;
- * 1000 is the ceiling and the prompt targets roughly 950.
+ * Measured on Kontor at ~0.1s of speech per character, so this 900-char ceiling
+ * is ~85s of speech. The prompt itself targets 95-120 words (~700-800 chars),
+ * which lands around 75s; this constant is the backstop, not the target.
  */
 export const MAX_TRANSCRIPT_CHARS = 900;
 const MIN_TRANSCRIPT_CHARS = 200;
@@ -108,7 +115,12 @@ function truncateAtSentence(text: string, max: number): string {
   if (text.length <= max) return text;
   const cut = text.slice(0, max);
   const lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
-  return (lastStop > max * 0.5 ? cut.slice(0, lastStop + 1) : cut).trim();
+  if (lastStop > max * 0.5) return cut.slice(0, lastStop + 1).trim();
+  // No sentence break to fall back on (one very long closing sentence). Cut at
+  // the last word instead — a hard slice would be spoken mid-word.
+  const lastSpace = cut.lastIndexOf(' ');
+  const trimmed = (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim();
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}…`;
 }
 
 /**

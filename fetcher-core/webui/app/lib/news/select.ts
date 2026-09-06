@@ -13,8 +13,8 @@ const MALMO_TERMS = [
   'malmö', 'malmo', 'malmöbo', 'limhamn', 'rosengård', 'hyllie', 'västra hamnen',
   'möllevången', 'möllan', 'kirseberg', 'oxie', 'husie', 'bunkeflo', 'sofielund',
   'triangeln', 'värnhem', 'davidshall', 'lindängen', 'holma', 'kroksbäck',
-  'augustenborg', 'södervärn', 'öresundsbron', 'öresundsbron', 'hyllievång',
-  'malmö ff', 'mff', 'redhawks', 'kockum', 'turning torso', 'katrinelund',
+  'augustenborg', 'södervärn', 'öresundsbron', 'hyllievång',
+  'mff', 'redhawks', 'kockum', 'turning torso', 'katrinelund',
 ];
 
 export function isMalmoRelevant(item: NewsItem): boolean {
@@ -133,7 +133,37 @@ export function selectStories(
   const dated = sorted.filter((i) => i.publishedAt);
   const undated = sorted.filter((i) => !i.publishedAt).slice(0, MAX_UNDATED);
 
-  return interleaveBySource(dated).concat(undated).slice(0, maxStories);
+  // Interleaving keeps one prolific outlet from filling the briefing, but it
+  // must not outrank recency: a story materially newer than another belongs
+  // first whoever ran it. So only stories within the same age band are
+  // round-robined against each other.
+  return bandedInterleave(dated).concat(undated).slice(0, maxStories);
+}
+
+/** Stories this many hours apart are not interchangeable, so the newer one
+ *  wins outright rather than being round-robined behind an older outlet. */
+export const FRESHNESS_BAND_HOURS = 4;
+
+/**
+ * Groups the (already recency-sorted) stories into age bands and interleaves
+ * sources only within a band, so variety never promotes a stale story above a
+ * materially fresher one.
+ */
+function bandedInterleave(items: NewsItem[]): NewsItem[] {
+  if (items.length === 0) return [];
+  const bandMs = FRESHNESS_BAND_HOURS * 3600_000;
+  const newest = items[0].publishedAt!.getTime();
+
+  const bands = new Map<number, NewsItem[]>();
+  for (const item of items) {
+    const band = Math.floor((newest - item.publishedAt!.getTime()) / bandMs);
+    if (!bands.has(band)) bands.set(band, []);
+    bands.get(band)!.push(item);
+  }
+
+  return [...bands.keys()]
+    .sort((a, b) => a - b)
+    .flatMap((band) => interleaveBySource(bands.get(band)!));
 }
 
 /** Round-robins across outlets while preserving recency order within each. */

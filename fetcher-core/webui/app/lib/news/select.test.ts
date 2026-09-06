@@ -169,6 +169,21 @@ describe('ranking and caps', () => {
     expect(selectStories([result('Malmödirekt', many)], FILTER, { now: NOW })).toHaveLength(8);
   });
 
+  it('does not let interleaving promote a stale story over a fresher one', () => {
+    const md = [
+      item({ title: 'Cykelbanan vid Ribersborg byggs om', publishedAt: hoursAgo(10) }),
+      item({ title: 'Saluhallen får nya öppettider', publishedAt: hoursAgo(11) }),
+    ];
+    const svt = [
+      item({ title: 'Brand i Rosengård ikväll', publishedAt: hoursAgo(1), sources: ['SVT Skåne'] }),
+      item({ title: 'Trafikkaos på Amiralsgatan i Malmö', publishedAt: hoursAgo(2), sources: ['SVT Skåne'] }),
+    ];
+    const out = selectStories([result('Malmödirekt', md), result('SVT Skåne', svt)], FILTER, { now: NOW });
+    // Both 1h and 2h stories must precede the 10h one, whoever ran them.
+    expect(out.slice(0, 2).map((i) => i.title))
+      .toEqual(['Brand i Rosengård ikväll', 'Trafikkaos på Amiralsgatan i Malmö']);
+  });
+
   it('interleaves sources so the top is not all one outlet', () => {
     const md = Array.from({ length: 4 }, (_, i) =>
       item({ title: `Malmödirekt sak ${i}`, publishedAt: hoursAgo(1), sources: ['Malmödirekt'] }));

@@ -14,12 +14,28 @@ const ENTITIES: Record<string, string> = {
   '&uuml;': 'ü', '&adiaeresis;': 'ä',
 };
 
+/**
+ * A feed can carry a numeric entity outside the Unicode range, and
+ * String.fromCodePoint throws RangeError on those. Left unguarded that
+ * exception escapes parseRss and discards every item from the feed, so an
+ * unusable code point falls back to the raw text instead.
+ */
+function codePoint(value: number, raw: string): string {
+  if (!Number.isInteger(value) || value < 0 || value > 0x10ffff) return raw;
+  // Lone surrogates are valid code points to fromCodePoint but not to XML.
+  try {
+    return String.fromCodePoint(value);
+  } catch {
+    return raw;
+  }
+}
+
 /** Strips tags and decodes the entities that actually show up in these feeds. */
 export function stripHtml(input: string): string {
   return input
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (m, hex) => codePoint(parseInt(hex, 16), m))
+    .replace(/&#(\d+);/g, (m, code) => codePoint(Number(code), m))
     .replace(/&[a-z]+;/gi, (m) => ENTITIES[m.toLowerCase()] ?? m)
     .replace(/\s+/g, ' ')
     .trim();
