@@ -23,6 +23,8 @@ type PendingMove = {
 };
 
 const UNGROUPED_ZONE_ID = '__ungrouped__';
+// Gemini TTS mis-handles very short phrases; keep the UI above that floor.
+const MIN_ANNOUNCE_CHARS = 3;
 
 const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { result: zones, refetch } = useSonosQuery();
@@ -218,16 +220,24 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   const handleSay = async () => {
     const room = announceRoom;
-    if (!room || !sayText.trim()) return;
+    const message = sayText.trim();
+    // Gemini TTS returns text instead of audio for very short input, which the
+    // provider rejects with 400 and reaches us as a 500. Keep the UI above that.
+    if (!room || message.length < MIN_ANNOUNCE_CHARS) return;
     setSaySending(true);
     try {
       // node-sonos-http-api: /{room}/say/{text}/{volume} — an all-digit second
       // parameter is taken as the announcement volume (it restores the
       // previous volume afterwards), so no separate volume call is needed.
       const resp = await fetch(
-        `/sonos/${encodeURIComponent(room)}/say/${encodeURIComponent(sayText.trim())}/${announceVolume}`
+        `/sonos/${encodeURIComponent(room)}/say/${encodeURIComponent(message)}/${announceVolume}`
       );
-      if (!resp.ok) throw new Error(`Announce failed (${resp.status})`);
+      if (!resp.ok) {
+        // Surface what the API actually said — a bare status code sent us
+        // chasing the wrong cause more than once.
+        const detail = (await resp.text().catch(() => '')).trim().slice(0, 200);
+        throw new Error(detail ? `Announce failed (${resp.status}): ${detail}` : `Announce failed (${resp.status})`);
+      }
       setSayText('');
       setAnnounceOpen(false);
       setError(null);
@@ -535,11 +545,16 @@ const SonosZoneManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
               />
             </label>
 
-            {error && <span className="text-sm text-red-400">{error}</span>}
+            {sayText.trim().length > 0 && sayText.trim().length < MIN_ANNOUNCE_CHARS && (
+              <span className="text-xs text-gray-400">
+                Message must be at least {MIN_ANNOUNCE_CHARS} characters.
+              </span>
+            )}
+            {error && <span className="text-sm text-red-400 break-words">{error}</span>}
 
             <button
               onClick={handleSay}
-              disabled={saySending || !sayText.trim() || !announceRoom}
+              disabled={saySending || sayText.trim().length < MIN_ANNOUNCE_CHARS || !announceRoom}
               className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:hover:bg-green-600 text-white font-semibold rounded-lg px-4 py-3 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-400"
             >
               {saySending ? 'Sending...' : 'Send'}
