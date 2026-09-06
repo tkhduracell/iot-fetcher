@@ -25,6 +25,8 @@ cryptography==50.0.1
     # via
     #   google-auth
     #   plugp100
+ecdsa==0.19.2
+    # via plugp100
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -84,7 +86,9 @@ multidict==6.7.1
     #   yarl
 ngenicpy==0.5.2
     # via iot-fetcher (pyproject.toml)
-plugp100==5.1.7
+passlib==1.7.4
+    # via plugp100
+plugp100==6.0.1
     # via iot-fetcher (pyproject.toml)
 propcache==0.5.2
     # via
@@ -132,7 +136,9 @@ schedule==1.2.2
 semantic-version==2.10.0
     # via plugp100
 six==1.17.0
-    # via python-dateutil
+    # via
+    #   ecdsa
+    #   python-dateutil
 tplinkrouterc6u==5.23.0
     # via iot-fetcher (pyproject.toml)
 tuya-connector-python==0.1.2

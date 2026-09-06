@@ -7,10 +7,10 @@ import re
 import aiohttp
 from typing import List, Dict, Any
 
-from plugp100.discovery.cloud_client import CloudClient
-from plugp100.new.device_factory import connect, DeviceConnectConfiguration
+from plugp100.api.discovery.cloud_client import CloudClient
+from plugp100.devices.factory import connect, DeviceConnectConfiguration
 from plugp100.common.credentials import AuthCredential
-from plugp100.responses.tapo_exception import TapoException
+from plugp100.errors import TapoException
 
 from influx import write_influx, Point
 

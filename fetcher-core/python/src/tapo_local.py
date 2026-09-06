@@ -3,9 +3,9 @@ import logging
 import os
 from typing import List, Dict, Any
 
-from plugp100.discovery.tapo_discovery import TapoDiscovery
+from plugp100.discovery import TapoDiscovery
 from plugp100.common.credentials import AuthCredential
-from plugp100.responses.tapo_exception import TapoException
+from plugp100.errors import TapoException
 
 from influx import write_influx, Point
 
