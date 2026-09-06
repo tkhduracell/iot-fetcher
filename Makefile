@@ -28,10 +28,16 @@ build-gdrive-rag:
 push-gdrive-rag: build-gdrive-rag
 	(cd ./gdrive-rag && make push)
 
+build-ai-brain:
+	(cd ./ai-brain && make build)
+
+push-ai-brain: build-ai-brain
+	(cd ./ai-brain && make push)
+
 login:
 	balena login -H --token "$$(sed -n 's/^BALENA_TOKEN=//p' .env)"
 
 deploy: push-fetcher push-proxy login
 	balena push iot-hub
 
-.PHONY: build-fetcher push-fetcher deploy build-proxy push-proxy build-pool-pump-planner push-pool-pump-planner build-sigenergy-bridge push-sigenergy-bridge build-gdrive-rag push-gdrive-rag login run-proxy
+.PHONY: build-fetcher push-fetcher deploy build-proxy push-proxy build-pool-pump-planner push-pool-pump-planner build-sigenergy-bridge push-sigenergy-bridge build-gdrive-rag push-gdrive-rag build-ai-brain push-ai-brain login run-proxy

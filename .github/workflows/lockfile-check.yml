@@ -27,6 +27,8 @@ jobs:
             type: node
           - dir: fetcher-core/python
             type: python
+          - dir: ai-brain
+            type: python
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
