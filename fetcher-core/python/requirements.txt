@@ -115,7 +115,7 @@ python-dateutil==2.9.0.post0
     # via influxdb3-python
 pytz==2026.3.post1
     # via iot-fetcher (pyproject.toml)
-reactivex==4.1.0
+reactivex==5.1.0
     # via influxdb3-python
 requests==2.34.2
     # via
