@@ -69,3 +69,46 @@ def test_seed_from_copies_once(tmp_path, expert_dir):
     (seed / "personas" / "energy.md").write_text("changed")
     expert_dir.seed_from(seed)
     assert expert_dir.persona_text() == "Energy expert"
+
+
+def test_drop_note_counter_avoids_collisions(brain_dir):
+    names = [brain_dir.drop_note("energy", f"n{i}").name for i in range(3)]
+    assert names == [
+        "20260906T100000-energy-0.md",
+        "20260906T100000-energy-1.md",
+        "20260906T100000-energy-2.md",
+    ]
+    assert [n.body for n in brain_dir.unread_notes()] == ["n0", "n1", "n2"]
+
+
+def test_purge_done_only_removes_old_notes(brain_dir, clock):
+    from datetime import timedelta
+
+    brain_dir.drop_note("energy", "old")
+    brain_dir.mark_done(brain_dir.unread_notes())
+    clock.state["now"] += timedelta(days=40)
+    brain_dir.drop_note("energy", "recent")
+    brain_dir.mark_done(brain_dir.unread_notes())
+    assert brain_dir.purge_done(30) == 1
+    assert [p.name for p in (brain_dir.root / "inbox" / "done").glob("*.md")] == [
+        "20261016T100000-energy-0.md"
+    ]
+
+
+def test_expert_ensure_has_no_outbox(expert_dir):
+    assert (expert_dir.root / "journal").is_dir()
+    assert (expert_dir.root / "facts").is_dir()
+    assert (expert_dir.root / "inbox" / "done").is_dir()
+    assert not (expert_dir.root / "outbox").exists()
+
+
+def test_brain_seed_creates_identity_and_goals(brain_dir, tmp_path):
+    seed = tmp_path / "seed"
+    (seed / "personas").mkdir(parents=True)
+    (seed / "personas" / "brain.md").write_text("blank slate")
+    brain_dir.seed_from(seed)
+    assert brain_dir.persona_text() == "blank slate"
+    assert (brain_dir.root / "goals.md").exists()
+    brain_dir.rewrite_goals("- a goal")
+    brain_dir.seed_from(seed)
+    assert brain_dir.goals_text() == "- a goal"
