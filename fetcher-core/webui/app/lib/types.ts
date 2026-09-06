@@ -10,7 +10,8 @@ export type ConfigValue = {
   title: string;
   unit: string;
   window?: "5m" | "60m" ;
-  range?: "-15m" | "-1h" ;
+  /** Lookback for the latest value. Widen it for sparse sources. */
+  range?: "-15m" | "-1h" | "-6h" | "-24h";
   decimals?: number;
   reload?: number;
   sparkline?: string;
