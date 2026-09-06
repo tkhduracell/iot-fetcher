@@ -8,6 +8,10 @@ and each caller turns that string into ``err(...)``.
 The client comes from ``ctx.extras["http"]`` when the process runs one, so
 connections are pooled across a cycle. Tests usually omit it, so a private
 client is opened for the single call instead.
+
+A 3xx is an error like any other non-2xx, except to a caller following
+redirects by hand: ``web_fetch`` has to see the ``Location`` header to validate
+the next hop before requesting it, so it passes ``allow_redirect_response``.
 """
 
 from __future__ import annotations
@@ -51,9 +55,14 @@ async def request(
     *,
     label: str,
     max_redirects: int | None = None,
+    allow_redirect_response: bool = False,
     **kwargs: Any,
 ) -> tuple[httpx.Response | None, str | None]:
-    """Return ``(response, None)`` on 2xx, else ``(None, message)``."""
+    """Return ``(response, None)`` on 2xx, else ``(None, message)``.
+
+    With ``allow_redirect_response`` a 3xx carrying a ``Location`` is also
+    returned, for callers that follow redirects themselves.
+    """
     kwargs.setdefault("timeout", TIMEOUT_S)
     try:
         async with client_for(ctx, max_redirects=max_redirects) as client:
@@ -61,6 +70,8 @@ async def request(
     except httpx.HTTPError as exc:
         return None, f"{label}: {type(exc).__name__}: {exc}"
     if response.is_success:
+        return response, None
+    if allow_redirect_response and response.is_redirect and "location" in response.headers:
         return response, None
     return None, f"{label}: backend returned HTTP {response.status_code}"
 

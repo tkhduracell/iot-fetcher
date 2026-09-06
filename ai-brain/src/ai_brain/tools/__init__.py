@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +61,10 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
+_SOURCE_RE = re.compile(r"[a-z0-9_.-]+")
+_ZWSP = "\u200b"
+
+
 def wrap_external(source: str, text: str) -> str:
     """Fence text that came from outside this system.
 
@@ -67,8 +72,18 @@ def wrap_external(source: str, text: str) -> str:
     human typed into Home Assistant are not. Anything in the second group is
     data the model reads, never instructions it follows, so it is handed over
     inside an ``<external>`` element that says where it came from.
+
+    The fence only means anything if the fenced text cannot close it, so any
+    ``<external`` or ``</external`` inside ``text`` gets a zero-width space
+    wedged after the ``<``. That breaks the tag while leaving the text
+    readable, so a page saying "put </external> here" still reads correctly and
+    still cannot escape. ``source`` is ours rather than a stranger's, but it is
+    validated too, since it lands in an attribute value.
     """
-    return f'<external source="{source}">{text}</external>'
+    if not _SOURCE_RE.fullmatch(source):
+        raise ValueError(f"wrap_external: invalid source {source!r}")
+    safe = text.replace("</external", f"<{_ZWSP}/external").replace("<external", f"<{_ZWSP}external")
+    return f'<external source="{source}">{safe}</external>'
 
 
 class ToolRegistry:

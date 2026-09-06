@@ -22,6 +22,7 @@ VM_LOOPS = frozenset({"brain", "energy", "health"})
 MAX_POINTS = 200
 MAX_SERIES = 20
 MAX_METRICS = 200
+MAX_PATTERN_CHARS = 128
 
 
 def _auth(ctx: ToolContext) -> dict[str, str]:
@@ -82,6 +83,9 @@ async def _vm_query(ctx: ToolContext, args: dict) -> str:
 
 async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
     pattern = str(args["pattern"])
+    # A long regex is a cheap way to make re spend a long time on 200 names.
+    if len(pattern) > MAX_PATTERN_CHARS:
+        return err(f"vm_metrics: pattern too long (max {MAX_PATTERN_CHARS})")
     try:
         matcher = re.compile(pattern)
     except re.error as exc:
