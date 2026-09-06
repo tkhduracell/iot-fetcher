@@ -97,6 +97,14 @@ class _Bucket:
         self.requests_day = requests_day
         self.tokens_day = tokens_day
         self.recent.clear()
+        # The 429 streak and its block are daily state: three strikes park the
+        # key until the next Pacific midnight, so once that midnight arrives
+        # both must go. Leaving the streak at 3 would let a single fresh 429
+        # re-exhaust the key for another whole day. ``disabled_until`` is
+        # deliberately untouched -- the 404 disable is a flat 24h and is not
+        # tied to the quota day.
+        self.consecutive_429 = 0
+        self.blocked_until = None
 
     def to_json(self) -> dict:
         return {
