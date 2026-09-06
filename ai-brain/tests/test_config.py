@@ -1,13 +1,13 @@
 from pathlib import Path
 
-from ai_brain.config import DEFAULT_SEED_ROOT, load_settings
+from ai_brain.config import DEFAULT_LLM_CHAIN, DEFAULT_SEED_ROOT, load_settings
 
 
 def test_defaults_from_empty_env():
     s = load_settings({})
     assert s.memory_root == Path("/memory")
     assert s.seed_root == DEFAULT_SEED_ROOT
-    assert s.llm_chain == []
+    assert s.llm_chain == ["gemini:gemini-3.8-flash", "gemini:gemini-3.5-flash-lite"]
     assert s.experts == []
     assert s.brain_heartbeat_s == 30 * 60
     assert s.expert_heartbeat_s == 120 * 60
@@ -19,6 +19,7 @@ def test_defaults_from_empty_env():
     assert s.sonos_room == "Kitchen"
     assert s.dry_run is False
     assert (s.rpm, s.tpm, s.rpd) == (8, 200000, 200)
+    assert s.call_timeout_s == 60
 
 
 def test_default_seed_root_is_the_shipped_seed_dir():
@@ -54,3 +55,19 @@ def test_env_overrides_and_list_parsing():
 def test_dry_run_only_true_for_one():
     assert load_settings({"DRY_RUN": "0"}).dry_run is False
     assert load_settings({"DRY_RUN": "true"}).dry_run is False
+
+
+def test_blank_llm_chain_falls_back_to_the_documented_default():
+    """An empty or whitespace LLM_CHAIN must not produce a zero-provider chain."""
+    for raw in ("", "   ", ",,"):
+        s = load_settings({"LLM_CHAIN": raw})
+        assert s.llm_chain == DEFAULT_LLM_CHAIN.split(",")
+
+
+def test_default_chain_entries_are_all_provider_qualified():
+    """Every entry must parse as provider:model or from_settings raises."""
+    for entry in DEFAULT_LLM_CHAIN.split(","):
+        provider, sep, model = entry.partition(":")
+        assert sep == ":"
+        assert provider == "gemini"
+        assert model

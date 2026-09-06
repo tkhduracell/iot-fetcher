@@ -263,6 +263,12 @@ class Ledger:
                 best = candidate
         return best
 
+    @property
+    def day(self) -> str:
+        """The Pacific quota day these counters belong to."""
+        self._roll_day(self._clock())
+        return self._day
+
     def snapshot(self) -> dict:
         self._roll_day(self._clock())
         return {

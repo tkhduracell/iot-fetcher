@@ -33,8 +33,9 @@ are rewritten by the brain over time. Deleting the volume resets it to the
 seed; editing `constitution.md` on the volume is how you steer it.
 
 **Gemini free tier.** All inference runs through a provider chain
-(`LLM_CHAIN`, default `gemini-2.5-flash,gemini-2.5-flash-lite`) against a
-free-tier key. A shared quota ledger decides before every call whether a model
+(`LLM_CHAIN`, default `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite`)
+against a free-tier key. Every entry is `provider:model` — a bare model id has
+no provider to dispatch to and the container refuses to start. A shared quota ledger decides before every call whether a model
 may be dialled at all, so the process stays inside the free allowance without
 relying on the API to say no (see [Quota](#quota)).
 
@@ -66,8 +67,11 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
     └── inbox/ (+ done/)
 ```
 
-Journals keep the last 30 files; facts are capped at 40 before the loop is
-told to compact. Every write goes through a temp file plus `os.replace`, so a
+Journals keep the last 30 files — older ones are deleted after every cycle —
+and facts are capped at 40 before the loop is told to compact. Both limits are
+clearable rather than one-way: the agent has `delete_fact` for the fact side,
+and the journal prunes itself, so the "your memory is large" hint stops firing
+once it has done the work. Every write goes through a temp file plus `os.replace`, so a
 reader never sees a half-written file and a crash never leaves a torn ledger.
 
 ## Configuration
@@ -79,9 +83,9 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | --- | --- | --- |
 | `MEMORY_ROOT` | `/memory` | Where agent memory lives. The volume mount point. |
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
-| `LLM_CHAIN` | `gemini-2.5-flash,gemini-2.5-flash-lite` | Model ids tried in order until one answers. |
-| `GEMINI_API_KEY` | — | Google AI Studio key. Without it no loop can think. |
-| `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Empty means brain only. |
+| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite` | `provider:model` entries tried in order until one answers. |
+| `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
+| `EXPERTS` | *(empty)* | Which expert loops to start, from `energy`, `health`, `house-ops`, `researcher`. Empty means brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
@@ -100,6 +104,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `RPM` | `8` | Requests per minute, per model key. |
 | `TPM` | `200000` | Tokens per minute, per model key. |
 | `RPD` | `200` | Requests per day, per model key. |
+| `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
 
 ## Slack app setup
 
@@ -132,7 +137,8 @@ Bring it up deliberately. The whole point of the design is that it accumulates
 state, so it is much easier to start narrow than to unpick a bad first day.
 
 1. **Deploy paused, brain only.** Create the volume directory and drop the
-   pause file *before* the first start, and leave `EXPERTS=` empty in `.env`:
+   pause file *before* the first start. `.env.example` already ships
+   `EXPERTS=` empty, so a straight copy gives you brain only:
 
    ```sh
    mkdir -p volumes/ai-brain-memory
@@ -174,6 +180,11 @@ DM. You react on that message:
 - ❌ (`:x:`) — rejected, nothing happens.
 - No reaction for 24 hours — expired.
 
+If Slack is unreachable when the brain proposes, the request is recorded
+`failed` rather than left pending: a queued message has no `ts` for a reaction
+to match, so a proposal stored against one could never be approved. The brain
+gets an error back and can propose again on a later cycle.
+
 Every terminal outcome, including rejection and expiry, drops a note into the
 brain's inbox, so the agent learns what became of its request on its next cycle
 rather than assuming it worked.
@@ -205,7 +216,8 @@ every model key. Nothing calls a provider without asking it first.
 - **A missing model (404)** disables that key for 24 hours, since a config
   typo will not fix itself by retrying.
 - **The day rolls at midnight US/Pacific**, which is when Google resets the
-  free tier — not local midnight. A corrupt ledger file is treated as "half
+  free tier — not local midnight. The brain gets a `new day, budget restored`
+  note in its inbox when it turns, so it can see the constraint lift. A corrupt ledger file is treated as "half
   the day is already spent" rather than as a fresh budget.
 
 ## Inspecting

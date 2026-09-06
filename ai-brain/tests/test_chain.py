@@ -1,5 +1,8 @@
+import asyncio
 import dataclasses
+import pathlib
 import sys
+import time
 import types
 
 import pytest
@@ -288,3 +291,134 @@ def test_message_and_tool_call_are_frozen():
     assert msg.tool_calls[0].name == "t"
     with pytest.raises(dataclasses.FrozenInstanceError):
         msg.content = "nope"
+
+
+# --- the shipped .env.example ---------------------------------------------
+
+ENV_EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / ".env.example"
+
+
+def parse_env_file(path: pathlib.Path) -> dict[str, str]:
+    """Parse a dotenv file the way docker compose --env-file does."""
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
+    """The documented first-boot path must not crash-loop the container.
+
+    Every entry in the shipped LLM_CHAIN has to parse as ``provider:model``.
+    A bare model id (no colon) reaches ``raise ValueError(provider ... not
+    implemented)`` inside build(), before any restart logic exists, so the
+    container exits immediately on the very path the README tells you to take.
+    """
+
+    class StubGemini:
+        def __init__(self, model, api_key):
+            self.key = f"gemini:{model}"
+            self.model = model
+            self.api_key = api_key
+
+    stub = types.ModuleType("ai_brain.llm.gemini")
+    stub.GeminiProvider = StubGemini
+    monkeypatch.setitem(sys.modules, "ai_brain.llm.gemini", stub)
+
+    env = parse_env_file(ENV_EXAMPLE)
+    assert env["LLM_CHAIN"] == "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite"
+
+    settings = load_settings({**env, "GEMINI_API_KEY": "k"})
+    ledger, _ = make_ledger(tmp_path, settings.llm_chain)
+    chain = ProviderChain.from_settings(settings, ledger)
+
+    assert [p.key for p in chain.providers] == [
+        "gemini:gemini-3.8-flash",
+        "gemini:gemini-3.5-flash-lite",
+    ]
+
+
+def test_env_example_ships_experts_empty():
+    """Rollout step 1 says brain only; the file must agree with the README."""
+    assert parse_env_file(ENV_EXAMPLE)["EXPERTS"] == ""
+
+
+def test_env_example_call_timeout_matches_the_default():
+    env = parse_env_file(ENV_EXAMPLE)
+    assert load_settings(env).call_timeout_s == 60
+
+
+# --- per-call timeout (the timeout lives in the chain, not around it) ------
+
+
+class SlowProvider(FakeProvider):
+    """A provider that never answers within the chain's per-call budget."""
+
+    def __init__(self, key, delay=5.0):
+        super().__init__(key, script=[])
+        self.delay = delay
+        self.attempts = 0
+
+    async def complete(self, messages, tools, max_tokens):
+        self.attempts += 1
+        await asyncio.sleep(self.delay)
+        raise AssertionError("unreachable")
+
+
+async def test_a_timed_out_call_is_charged_and_the_chain_falls_through(tmp_path):
+    """A cancelled call may already have been billed, so it must be recorded.
+
+    The request reached Google; only our side gave up. Not recording it is the
+    one path in the system that spends without accounting, and it makes
+    ai_brain_ledger_remaining overstate the budget after every timeout.
+    """
+    ledger, _ = make_ledger(tmp_path, ["slow", "b"])
+    slow = SlowProvider("slow")
+    b = FakeProvider("b", [reply("from-b")])
+    chain = ProviderChain([slow, b], ledger, call_timeout_s=0.01)
+
+    out = await chain.complete(MSGS, [], 512, "brain")
+
+    assert out.text == "from-b"
+    # Two attempts: timeout is retryable, so the same provider gets one more go.
+    assert slow.attempts == 2
+    spent = ledger.snapshot()["buckets"]["slow"]
+    assert spent["requests_day"] == 2
+    assert spent["tokens_day"] == 2 * 4000
+
+
+async def test_a_slow_first_provider_does_not_starve_the_second(tmp_path):
+    """Each provider gets its own timeout, so the fallback still has time."""
+    ledger, _ = make_ledger(tmp_path, ["slow", "b"])
+    slow = SlowProvider("slow", delay=0.2)
+    b = FakeProvider("b", [reply("from-b")])
+    chain = ProviderChain([slow, b], ledger, call_timeout_s=0.01)
+
+    started = time.monotonic()
+    out = await chain.complete(MSGS, [], 512, "brain")
+
+    assert out.text == "from-b"
+    # Bounded by the per-call budget (twice), never by the provider's own delay.
+    assert time.monotonic() - started < 0.2
+
+
+async def test_from_settings_takes_the_call_timeout_from_settings(tmp_path, monkeypatch):
+    class StubGemini:
+        def __init__(self, model, api_key):
+            self.key = f"gemini:{model}"
+
+    stub = types.ModuleType("ai_brain.llm.gemini")
+    stub.GeminiProvider = StubGemini
+    monkeypatch.setitem(sys.modules, "ai_brain.llm.gemini", stub)
+
+    settings = load_settings(
+        {"LLM_CHAIN": "gemini:flash", "GEMINI_API_KEY": "k", "CALL_TIMEOUT_S": "12"}
+    )
+    ledger, _ = make_ledger(tmp_path, ["gemini:flash"])
+
+    assert ProviderChain.from_settings(settings, ledger).call_timeout_s == 12

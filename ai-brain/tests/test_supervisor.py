@@ -1,12 +1,14 @@
 import asyncio
+import dataclasses
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 import respx
 
-from ai_brain import metrics
+from ai_brain import metrics, supervisor
 from ai_brain.config import load_settings
 from ai_brain.ledger import Ledger, Limits
 from ai_brain.llm import ProviderChain
@@ -74,6 +76,73 @@ def test_build_exits_when_no_constitution_anywhere(tmp_path, caplog):
     with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
         build(settings, chain_factory=fake_chain)
     assert excinfo.value.code == 2
+
+
+def test_build_exits_on_an_empty_chain(tmp_path, caplog):
+    """A zero-provider chain builds fine and then fails silently forever.
+
+    Every cycle raises ChainExhausted, the journal fills with [no_budget], and
+    the ledger has no buckets so ai_brain_ledger_remaining emits no series at
+    all -- a blank Grafana panel, which is indistinguishable from a healthy
+    one. That has to be a startup error, not a runtime condition.
+    """
+    settings = load_settings(env(tmp_path, LLM_CHAIN="x"))
+    settings = dataclasses.replace(settings, llm_chain=[])
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
+        build(settings, chain_factory=fake_chain)
+    assert excinfo.value.code == 2
+    assert "LLM_CHAIN" in caplog.text
+
+
+def test_build_exits_when_a_gemini_entry_has_no_key(tmp_path, caplog):
+    settings = load_settings(env(tmp_path, LLM_CHAIN="gemini:flash", GEMINI_API_KEY=""))
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
+        build(settings, chain_factory=fake_chain)
+    assert excinfo.value.code == 2
+    assert "GEMINI_API_KEY" in caplog.text
+
+
+def test_build_allows_a_gemini_entry_with_a_key(tmp_path):
+    settings = load_settings(env(tmp_path, LLM_CHAIN="gemini:flash", GEMINI_API_KEY="k"))
+    system = build(settings, chain_factory=fake_chain)
+    assert sorted(system.loops) == ["brain"]
+
+
+def test_build_passes_the_call_timeout_to_every_loop(tmp_path):
+    settings = load_settings(env(tmp_path, EXPERTS="energy", CALL_TIMEOUT_S="17"))
+    system = build(settings, chain_factory=fake_chain)
+    assert [loop.call_timeout_s for loop in system.loops.values()] == [17, 17]
+
+
+# -- daily budget reset -----------------------------------------------
+
+
+def test_day_roll_watcher_notes_and_wakes_the_brain_at_pacific_midnight(tmp_path):
+    """Crossing Pacific midnight must reach the brain's inbox, once."""
+    # 23:59 Pacific on 2026-09-06, then two minutes later.
+    before = datetime(2026, 9, 7, 6, 59, tzinfo=UTC).timestamp()
+    after = datetime(2026, 9, 7, 7, 1, tzinfo=UTC).timestamp()
+    state = {"t": before}
+
+    settings = load_settings(env(tmp_path))
+    system = build(settings, chain_factory=fake_chain, clock=lambda: state["t"])
+    watch = supervisor.day_roll_watcher(system)
+    brain = system.memories["brain"]
+
+    asyncio.run(watch())
+    assert brain.unread_notes() == []
+    assert not system.loops["brain"].wake.is_set()
+
+    state["t"] = after
+    asyncio.run(watch())
+
+    notes = brain.unread_notes()
+    assert [(n.sender, n.body) for n in notes] == [("ledger", "new day, budget restored")]
+    assert system.loops["brain"].wake.is_set()
+
+    # Still the same day now: no second note.
+    asyncio.run(watch())
+    assert len(brain.unread_notes()) == 1
 
 
 def test_build_wires_memories_registry_and_context(tmp_path):

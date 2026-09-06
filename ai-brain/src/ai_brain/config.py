@@ -11,6 +11,13 @@ from pathlib import Path
 
 DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 
+# The chain the component is documented and tested against. It lives here rather
+# than only in .env.example so an unset or blank LLM_CHAIN produces a working
+# brain instead of a chain with zero providers -- which builds fine, raises
+# ChainExhausted on every cycle, and emits no ledger series at all, so the
+# misconfiguration is invisible in both the logs and Grafana.
+DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -37,6 +44,7 @@ class Settings:
     rpm: int
     tpm: int
     rpd: int
+    call_timeout_s: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -59,7 +67,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     return Settings(
         memory_root=Path(get("MEMORY_ROOT", "/memory")),
         seed_root=Path(get("SEED_ROOT")) if get("SEED_ROOT") else DEFAULT_SEED_ROOT,
-        llm_chain=_csv(get("LLM_CHAIN")),
+        llm_chain=_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN),
         gemini_api_key=get("GEMINI_API_KEY"),
         experts=_csv(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
@@ -80,4 +88,5 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         rpm=get_int("RPM", 8),
         tpm=get_int("TPM", 200000),
         rpd=get_int("RPD", 200),
+        call_timeout_s=get_int("CALL_TIMEOUT_S", 60),
     )

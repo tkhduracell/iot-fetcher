@@ -19,7 +19,7 @@ import logging
 import shutil
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -46,6 +46,9 @@ KNOWN_EXPERTS = frozenset({"energy", "health", "house-ops", "researcher"})
 HTTP_TIMEOUT_S = 20
 METRICS_EVERY_S = 60
 EXPIRE_EVERY_S = 600
+DAY_ROLL_EVERY_S = 60
+NEW_DAY_NOTE = "new day, budget restored"
+LEDGER_SENDER = "ledger"
 FLUSH_EVERY_S = 300
 RESTART_DELAY_S = 30
 
@@ -79,6 +82,29 @@ def _read_constitution(settings: Settings) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _check_chain(settings: Settings) -> None:
+    """Refuse to start on a chain that could only ever produce empty answers.
+
+    An empty chain builds cleanly and then fails every cycle with
+    ``ChainExhausted``: the container stays up, the journal fills with
+    ``[no_budget]`` and ``ai_brain_ledger_remaining`` emits no series at all --
+    so the Grafana panel is blank, which is indistinguishable from healthy. The
+    same is true of a gemini entry with no key. Both are config mistakes, and
+    a config mistake must be loud, like a missing constitution.
+    """
+    if not settings.llm_chain:
+        log.error("LLM_CHAIN is empty; refusing to start with no providers")
+        raise SystemExit(2)
+    if any(entry.startswith("gemini:") for entry in settings.llm_chain) and (
+        not settings.gemini_api_key
+    ):
+        log.error(
+            "LLM_CHAIN has gemini entries (%s) but GEMINI_API_KEY is empty; refusing to start",
+            ", ".join(settings.llm_chain),
+        )
+        raise SystemExit(2)
+
+
 def _expert_names(settings: Settings) -> list[str]:
     names = []
     for name in settings.experts:
@@ -95,6 +121,7 @@ def build(
     http: httpx.AsyncClient | None = None,
     clock: Callable[[], float] = time.time,
 ) -> System:
+    _check_chain(settings)
     constitution = _read_constitution(settings)
 
     def dt_clock() -> datetime:
@@ -153,6 +180,7 @@ def build(
             constitution=constitution,
             clock=clock,
             pause_file=settings.memory_root / "PAUSE",
+            call_timeout_s=settings.call_timeout_s,
         )
 
     return System(
@@ -167,6 +195,30 @@ def build(
         settings=settings,
         wake=wake,
     )
+
+
+def day_roll_watcher(system: System) -> Callable[[], Awaitable[None]]:
+    """Announce the daily budget reset to the brain, once per Pacific day.
+
+    The ledger rolls its day lazily, whenever something next happens to ask it,
+    which is enough for the counters: a starved loop already sleeps until
+    ``next_available_at`` and wakes at the right moment. What is missing is the
+    *signal* -- this is an agent designed to reason about its own resource
+    limits from what it reads in its inbox, and nothing told it the budget came
+    back. So watch the day and drop a note when it turns.
+    """
+    seen = {"day": system.ledger.day}
+
+    async def watch() -> None:
+        today = system.ledger.day
+        if today == seen["day"]:
+            return
+        seen["day"] = today
+        system.memories["brain"].drop_note(LEDGER_SENDER, NEW_DAY_NOTE)
+        system.wake("brain")
+        log.info("quota day rolled to %s; brain notified", today)
+
+    return watch
 
 
 async def _supervise(name: str, loop) -> None:
@@ -218,9 +270,12 @@ async def run(settings: Settings) -> None:
     async def expire_proposals() -> None:
         await system.approvals.expire()
 
+    watch_day_roll = day_roll_watcher(system)
+
     tasks = [asyncio.create_task(_supervise(name, agent)) for name, agent in system.loops.items()]
     tasks.append(asyncio.create_task(_every(METRICS_EVERY_S, publish_metrics)))
     tasks.append(asyncio.create_task(_every(EXPIRE_EVERY_S, expire_proposals)))
+    tasks.append(asyncio.create_task(_every(DAY_ROLL_EVERY_S, watch_day_roll)))
     if system.slack_out is not None:
         tasks.append(asyncio.create_task(_every(FLUSH_EVERY_S, system.slack_out.flush_queue)))
 
