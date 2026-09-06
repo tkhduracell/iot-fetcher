@@ -17,7 +17,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Native arm64: these images are arm64-only (see #456), so an amd64
+    # runner would build them under QEMU. Free for public repos.
+    runs-on: ubuntu-24.04-arm
 
     permissions:
       contents: 'read'
@@ -65,17 +67,3 @@ jobs:
         platforms: linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max
-
-    - name: Deploy to Balena Cloud
-      uses: balena-io/deploy-to-balena-action@v2.3.1
-      if: false # temporarily disabled
-      id: deploy
-      with:
-        balena_token: ${{ secrets.BALENA_TOKEN }}
-        fleet: ${{ secrets.BALENA_FLEET }}
-
-    - name: Log release ID built
-      if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-      env:
-        RELEASE_ID: ${{ steps.deploy.outputs.release_id }}
-      run: echo "Built release ID $RELEASE_ID"
