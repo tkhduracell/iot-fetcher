@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?><rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title><![CDATA[MalmöDirekt]]></title>
+        <description><![CDATA[Lokala nyheter i MalmöDirekt]]></description>
+        <link>https://malmodirekt.se</link>
+        <generator>Notisen HUB</generator>
+        <lastBuildDate>Sun, 06 Sep 2026 19:56:49 GMT</lastBuildDate>
+        <atom:link href="https://malmodirekt.se/feed" rel="self" type="application/rss+xml"/>
+        <pubDate>Sun, 06 Sep 2026 19:56:49 GMT</pubDate>
+        <copyright><![CDATA[2026 MalmöDirekt]]></copyright>
+        <language><![CDATA[sv-SE]]></language>
+        <ttl>60</ttl>
+        <item>
+            <title><![CDATA[Andersson når 20 000 dörrknackningar i Malmö]]></title>
+            <description><![CDATA[Socialdemokraternas partiledare Magdalena Andersson nådde dörrknackningsmålet 20 000 i Håkanstorp, Malmö.]]></description>
+            <link>https://malmodirekt.se/politik/andersson-nar-20-000-dorrknackningar-i-malmo-121928</link>
+            <guid isPermaLink="false">ba57fced-e6f3-45d8-90cd-40461de232f2</guid>
+            <category><![CDATA[politik]]></category>
+            <dc:creator><![CDATA[Johan Larsson]]></dc:creator>
+            <pubDate>Sun, 06 Sep 2026 18:01:00 GMT</pubDate>
+            <enclosure url="https://res.cloudinary.com/notisen/image/upload/v1787297400/images/pfpnzwjgizfwhduj4fq9.jpg" length="0" type="image/jpeg"/>
+            <dc:creator>Johan Larsson</dc:creator>
+            <category><![CDATA[politik]]></category>
+        </item><item>
+            <title><![CDATA[Sagostund mini]]></title>
+            <description><![CDATA[Kort sagostund på Bellevuegårdsbiblioteket. Ingen föranmälan för privatpersoner; förskolor anmäler via Kulturbokningen. 11 september 2026 kl. 10.00.]]></description>
+            <link>https://malmodirekt.se/evenemang/sagostund-mini-121871</link>
+            <guid isPermaLink="false">3d55c75c-885b-47c5-b00a-44a78d76dd26</guid>
+            <category><![CDATA[Evenemang]]></category>
+            <dc:creator><![CDATA[Johan Larsson]]></dc:creator>
+            <pubDate>Sun, 06 Sep 2026 13:15:00 GMT</pubDate>
+            <enclosure url="https://res.cloudinary.com/notisen/image/upload/v1774337892/images/wk3gmy1jv5maffcctnyg.jpg" length="0" type="image/jpeg"/>
+            <dc:creator>Johan Larsson</dc:creator>
+            <category><![CDATA[Evenemang]]></category>
+        </item><item>
+            <title><![CDATA[David Urwitz på Victoriateatern]]></title>
+            <description><![CDATA[David Urwitz uppträder på Victoriateatern i Malmö med ett låtskriveri som rör sig mellan folk, pop och americana. Konserten äger rum den 12 september 2026 kl. 00.00.]]></description>
+            <link>https://malmodirekt.se/evenemang/david-urwitz-pa-victoriateatern-121870</link>
+            <guid isPermaLink="false">3c2311b2-3b3a-4347-921d-3d89031fc327</guid>
+            <category><![CDATA[Evenemang]]></category>
+            <dc:creator><![CDATA[Johan Larsson]]></dc:creator>
+            <pubDate>Sun, 06 Sep 2026 13:14:00 GMT</pubDate>
+            <enclosure url="https://res.cloudinary.com/notisen/image/upload/v1788336421/images/qonoq3cmjy2vdxm2pnjj.jpg" length="0" type="image/jpeg"/>
+            <dc:creator>Johan Larsson</dc:creator>
+            <category><![CDATA[Evenemang]]></category>
+        </item>
+</channel>
+</rss>

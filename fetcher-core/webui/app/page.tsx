@@ -7,6 +7,7 @@ import RefreshBadge from './components/RefreshBadge';
 import RoborockCleanButton from './components/RoborockCleanButton';
 import PomodoroButton from './components/PomodoroButton';
 import SpeakersButton from './components/SpeakersButton';
+import NewsBriefingButton from './components/NewsBriefingButton';
 import useAutoReload from './hooks/useAutoReload';
 import EnergyPriceBar from './components/EnergyPriceBar';
 import WeatherBar from './components/WeatherBar';
@@ -44,6 +45,7 @@ export default function DashboardPage() {
         <h1 className="text-3xl font-semibold tracking-tight">🏡 Irisgatan 16</h1>
         <div className='flex grow gap-1.5 justify-end'>
           <SpeakersButton />
+          <NewsBriefingButton />
           <PomodoroButton />
           <RoborockCleanButton />
           <RefreshBadge />
