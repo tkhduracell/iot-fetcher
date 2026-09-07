@@ -8,7 +8,7 @@ const { GET } = route;
 function stubAiBrain(
   resp: { status?: number; body?: string; contentType?: string } = {},
 ) {
-  const fetchMock = vi.fn(async () => ({
+  const fetchMock = vi.fn(async (_url: string) => ({
     status: resp.status ?? 200,
     headers: new Headers({ 'content-type': resp.contentType ?? 'application/json' }),
     text: async () => resp.body ?? '{"ok":true}',
