@@ -4,8 +4,14 @@
     {
       "name": "webui",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "--prefix", "fetcher-core/webui", "dev"],
-      "port": 3000
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "fetcher-core/webui",
+        "dev"
+      ],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }
