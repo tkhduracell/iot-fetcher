@@ -353,6 +353,12 @@ def test_env_example_call_timeout_matches_the_default():
     assert load_settings(env).call_timeout_s == 60
 
 
+def test_env_example_http_port_matches_the_default():
+    """The published port in docker-compose.local.yml must match what we bind."""
+    env = parse_env_file(ENV_EXAMPLE)
+    assert load_settings(env).http_port == 8091
+
+
 # --- per-call timeout (the timeout lives in the chain, not around it) ------
 
 

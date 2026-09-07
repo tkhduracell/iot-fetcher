@@ -82,3 +82,15 @@ def test_a_repeated_chain_entry_is_deduped_in_order():
 def test_dedupe_leaves_a_chain_without_repeats_alone():
     s = load_settings({"LLM_CHAIN": "gemini:a,gemini:b"})
     assert s.llm_chain == ["gemini:a", "gemini:b"]
+
+
+def test_http_port_defaults_to_8091():
+    assert load_settings({}).http_port == 8091
+
+
+def test_http_port_is_read_from_the_environment():
+    assert load_settings({"HTTP_PORT": "9000"}).http_port == 9000
+
+
+def test_http_port_zero_disables_the_api():
+    assert load_settings({"HTTP_PORT": "0"}).http_port == 0
