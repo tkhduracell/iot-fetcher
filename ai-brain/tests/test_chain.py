@@ -422,3 +422,45 @@ async def test_from_settings_takes_the_call_timeout_from_settings(tmp_path, monk
     ledger, _ = make_ledger(tmp_path, ["gemini:flash"])
 
     assert ProviderChain.from_settings(settings, ledger).call_timeout_s == 12
+
+
+# --- the retry re-checks the budget it just spent -------------------------
+
+
+async def test_a_drained_key_is_not_retried_after_the_first_attempt(tmp_path):
+    """The first attempt can be the last of the budget; the retry must not ignore that."""
+    ledger, _ = make_ledger(tmp_path, ["slow", "b"], rpd=1)
+    slow = SlowProvider("slow")
+    b = FakeProvider("b", [reply("from-b")])
+    chain = ProviderChain([slow, b], ledger, call_timeout_s=0.01)
+
+    out = await chain.complete(MSGS, [], 512, "brain")
+
+    assert out.text == "from-b"
+    # The timeout charged the day's only request, so there is nothing to retry with.
+    assert slow.attempts == 1
+    assert ledger.snapshot()["buckets"]["slow"]["requests_day"] == 1
+
+
+async def test_a_key_with_budget_left_is_still_retried(tmp_path):
+    ledger, _ = make_ledger(tmp_path, ["slow", "b"], rpd=10)
+    slow = SlowProvider("slow")
+    b = FakeProvider("b", [reply("from-b")])
+    chain = ProviderChain([slow, b], ledger, call_timeout_s=0.01)
+
+    await chain.complete(MSGS, [], 512, "brain")
+
+    assert slow.attempts == 2
+
+
+async def test_a_denied_retry_still_remembers_when_the_key_frees_up(tmp_path):
+    """The chain must report a retry_at rather than an unexplained exhaustion."""
+    ledger, _ = make_ledger(tmp_path, ["slow"], rpd=1)
+    slow = SlowProvider("slow")
+    chain = ProviderChain([slow], ledger, call_timeout_s=0.01)
+
+    with pytest.raises(ChainExhausted) as caught:
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert caught.value.retry_at is not None
+    assert slow.attempts == 1

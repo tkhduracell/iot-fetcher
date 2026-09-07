@@ -177,7 +177,14 @@ class GeminiProvider(Provider):
             tool_calls=calls,
             usage=Usage(
                 prompt_tokens=usage.get("promptTokenCount", 0),
-                completion_tokens=usage.get("candidatesTokenCount", 0),
+                # Thinking tokens are billed and count against the same TPM
+                # budget as the visible answer, but Gemini reports them
+                # separately -- and on a thinking model they are usually the
+                # larger half. Leaving them out makes the ledger think there is
+                # far more budget left than there is.
+                completion_tokens=(
+                    usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
+                ),
             ),
             model=self.model,
             thought_signature=text_signature,
@@ -216,6 +223,12 @@ def build_request(messages: list[Message], tools: list[ToolSpec], max_tokens: in
                 )
                 for call in message.tool_calls
             )
+            if message.thought_signature and not message.content:
+                # A thinking turn that signed itself but said nothing out loud.
+                # Dropping that signature is a 400 on the next call, so it has
+                # to ride on some part: the first unsigned functionCall if
+                # there is one, otherwise an empty text part carrying it alone.
+                _attach_orphan_signature(parts, message.thought_signature)
             contents.append({"role": "model", "parts": parts})
         else:
             contents.append({"role": "user", "parts": [{"text": message.content}]})
@@ -258,6 +271,15 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
             if match:
                 return float(match.group(1))
     return None
+
+
+def _attach_orphan_signature(parts: list[dict[str, Any]], signature: str) -> None:
+    """Give a turn-level signature somewhere to live when there is no text."""
+    for part in parts:
+        if "functionCall" in part and not part.get("thoughtSignature"):
+            part["thoughtSignature"] = signature
+            return
+    parts.append({"text": "", "thoughtSignature": signature})
 
 
 def _signed(part: dict[str, Any], signature: str) -> dict[str, Any]:

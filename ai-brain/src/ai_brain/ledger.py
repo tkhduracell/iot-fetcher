@@ -194,6 +194,10 @@ class Ledger:
         self._day = day
         for bucket in self._buckets.values():
             bucket.reset_day()
+        # The roll is a real state change: without persisting it, a restart
+        # reloads yesterday's day and daily counts from disk and the budget
+        # stays spent until something else happens to write.
+        self._save()
 
     # ---------- queries ----------
 

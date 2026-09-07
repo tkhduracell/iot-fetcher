@@ -259,3 +259,29 @@ def test_daily_token_budget_blocks_brain(tmp_path):
     d = ledger.can_spend("gemini:a", "brain", est_tokens=1)
     assert not d.allowed
     assert d.reason == "rpd"
+
+
+def test_rolling_the_day_is_persisted_immediately(tmp_path):
+    """A restart right after the roll must not reload yesterday's spent budget."""
+    ledger, st = make(tmp_path)
+    for _ in range(10):
+        ledger.record("gemini:a", 10, 10)
+    assert not ledger.can_spend("gemini:a", "brain").allowed
+
+    st["t"] += 24 * 3600
+    assert ledger.can_spend("gemini:a", "brain").allowed  # rolls the day
+
+    reloaded = Ledger(L, tmp_path / "l.json", clock=lambda: st["t"])
+    assert reloaded.snapshot()["buckets"]["gemini:a"]["requests_day"] == 0
+    assert reloaded.can_spend("gemini:a", "brain").allowed
+
+
+def test_a_day_that_did_not_change_is_not_rewritten(tmp_path):
+    ledger, _st = make(tmp_path)
+    ledger.record("gemini:a", 10, 10)
+    path = tmp_path / "l.json"
+    before = path.stat().st_mtime_ns
+
+    ledger.can_spend("gemini:a", "brain")  # same day: no roll, no save
+
+    assert path.stat().st_mtime_ns == before

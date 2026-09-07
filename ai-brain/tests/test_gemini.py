@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from ai_brain.llm import Message, ProviderError, ToolCall, ToolSpec
-from ai_brain.llm.gemini import GeminiProvider
+from ai_brain.llm.gemini import GeminiProvider, build_request
 
 URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
@@ -491,3 +491,111 @@ async def test_no_thought_signature_key_when_there_is_none():
     await provider().complete(messages, [WEATHER], 64)
 
     assert b"thoughtSignature" not in route.calls.last.request.content
+
+
+# --- thinking tokens count as completion ----------------------------------
+
+
+@respx.mock
+async def test_thinking_tokens_are_counted_as_completion():
+    """thoughtsTokenCount is billed and eats the same TPM budget as the answer."""
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 11,
+                    "candidatesTokenCount": 3,
+                    "thoughtsTokenCount": 400,
+                },
+            },
+        )
+    )
+    out = await provider().complete([Message("user", "hi")], [], 512)
+
+    assert out.usage.completion_tokens == 403
+    assert out.usage.prompt_tokens == 11
+
+
+@respx.mock
+async def test_a_reply_without_thinking_tokens_is_unchanged():
+    respx.post(URL).mock(return_value=httpx.Response(200, json=text_response(completion=3)))
+    out = await provider().complete([Message("user", "hi")], [], 512)
+
+    assert out.usage.completion_tokens == 3
+
+
+# --- a turn-level signature with no text ----------------------------------
+
+
+def test_a_signature_without_text_rides_on_the_first_function_call():
+    """Dropping it is a 400 on the next call, so it has to land somewhere."""
+    body = build_request(
+        [
+            Message(
+                "assistant",
+                content="",
+                tool_calls=(
+                    ToolCall(id="1", name="get_weather", args={}),
+                    ToolCall(id="2", name="get_weather", args={}),
+                ),
+                thought_signature="sig-turn",
+            )
+        ],
+        [],
+        512,
+    )
+    parts = body["contents"][0]["parts"]
+
+    assert parts[0]["thoughtSignature"] == "sig-turn"
+    assert "thoughtSignature" not in parts[1]
+
+
+def test_a_signature_without_text_does_not_displace_a_call_that_has_one():
+    body = build_request(
+        [
+            Message(
+                "assistant",
+                content="",
+                tool_calls=(
+                    ToolCall(id="1", name="get_weather", args={}, thought_signature="sig-call"),
+                    ToolCall(id="2", name="get_weather", args={}),
+                ),
+                thought_signature="sig-turn",
+            )
+        ],
+        [],
+        512,
+    )
+    parts = body["contents"][0]["parts"]
+
+    assert parts[0]["thoughtSignature"] == "sig-call"
+    assert parts[1]["thoughtSignature"] == "sig-turn"
+
+
+def test_a_signature_with_no_text_and_no_calls_gets_an_empty_text_part():
+    body = build_request(
+        [Message("assistant", content="", thought_signature="sig-alone")], [], 512
+    )
+
+    assert body["contents"][0]["parts"] == [{"text": "", "thoughtSignature": "sig-alone"}]
+
+
+def test_a_turn_with_text_keeps_the_signature_on_the_text():
+    body = build_request(
+        [
+            Message(
+                "assistant",
+                content="thinking out loud",
+                tool_calls=(ToolCall(id="1", name="get_weather", args={}),),
+                thought_signature="sig-turn",
+            )
+        ],
+        [],
+        512,
+    )
+    parts = body["contents"][0]["parts"]
+
+    assert parts[0] == {"text": "thinking out loud", "thoughtSignature": "sig-turn"}
+    assert "thoughtSignature" not in parts[1]

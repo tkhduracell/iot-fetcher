@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -49,6 +48,11 @@ RETRYABLE: frozenset[str] = frozenset({"server", "timeout"})
 # loop's own max_tokens rather than free.
 DEFAULT_CALL_TIMEOUT_S = 60
 TIMEOUT_CHARGE_TOKENS = 4000
+
+# Every provider prefix ``from_settings`` knows how to build. Exported so the
+# supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
+# cycle, and so the two lists cannot drift apart.
+PROVIDER_PREFIXES: frozenset[str] = frozenset({"gemini", "fake"})
 
 
 @dataclass(frozen=True)
@@ -130,12 +134,10 @@ class ProviderChain:
         self,
         providers: list[Provider],
         ledger: Ledger,
-        clock: Callable[[], float] = time.time,
         call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
     ):
         self.providers = list(providers)
         self.ledger = ledger
-        self._clock = clock
         self.call_timeout_s = call_timeout_s
 
     @staticmethod
@@ -206,6 +208,17 @@ class ProviderChain:
         """One provider's turn: up to two attempts, then None to fall through."""
         key = provider.key
         for attempt in (1, 2):
+            if attempt == 2:
+                # The first attempt spent budget, and on a small free tier that
+                # can be the last of it. Retrying anyway sends a request the
+                # ledger has already said no to -- and against a provider that
+                # is hanging, that is a second full call_timeout_s of the
+                # cycle's clock spent on a call that cannot be allowed.
+                decision = self.ledger.can_spend(key, priority)
+                if not decision.allowed:
+                    log.warning("not retrying %s: %s", key, decision.reason)
+                    remember(decision.retry_at)
+                    return None
             try:
                 reply = await asyncio.wait_for(
                     provider.complete(messages, tools, max_tokens),
