@@ -63,6 +63,8 @@ def err(msg: str) -> str:
 
 _SOURCE_RE = re.compile(r"[a-z0-9_.-]+")
 _ZWSP = "\u200b"
+# Case-insensitive: HTML tag names are, so ``</EXTERNAL>`` closes the fence too.
+_FENCE_RE = re.compile(r"</?external", re.IGNORECASE)
 
 
 def wrap_external(source: str, text: str) -> str:
@@ -74,15 +76,16 @@ def wrap_external(source: str, text: str) -> str:
     inside an ``<external>`` element that says where it came from.
 
     The fence only means anything if the fenced text cannot close it, so any
-    ``<external`` or ``</external`` inside ``text`` gets a zero-width space
-    wedged after the ``<``. That breaks the tag while leaving the text
+    ``<external`` or ``</external`` inside ``text`` -- in any case, since HTML
+    tag names are case-insensitive -- gets a zero-width space wedged after the
+    ``<``. That breaks the tag while leaving the text
     readable, so a page saying "put </external> here" still reads correctly and
     still cannot escape. ``source`` is ours rather than a stranger's, but it is
     validated too, since it lands in an attribute value.
     """
     if not _SOURCE_RE.fullmatch(source):
         raise ValueError(f"wrap_external: invalid source {source!r}")
-    safe = text.replace("</external", f"<{_ZWSP}/external").replace("<external", f"<{_ZWSP}external")
+    safe = _FENCE_RE.sub(lambda m: m.group(0)[0] + _ZWSP + m.group(0)[1:], text)
     return f'<external source="{source}">{safe}</external>'
 
 

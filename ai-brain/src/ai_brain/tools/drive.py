@@ -41,6 +41,7 @@ async def _drive_search(ctx: ToolContext, args: dict) -> str:
             "similarity": hit.get("similarity"),
         }
         for hit in (body if isinstance(body, list) else [])
+        if isinstance(hit, dict)
     ]
     return ok({"hits": hits})
 

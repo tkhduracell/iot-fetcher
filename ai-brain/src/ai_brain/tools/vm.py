@@ -23,6 +23,21 @@ MAX_POINTS = 200
 MAX_SERIES = 20
 MAX_METRICS = 200
 MAX_PATTERN_CHARS = 128
+# A pattern that nests one quantifier inside another -- ``(a+)+``, ``(a*)*``,
+# ``(a|a)+`` -- can make the backtracking engine take exponential time on a
+# name that nearly matches. There is no way to bound that once it starts:
+# CPython's ``re`` holds the GIL for the whole match, so a thread and a timeout
+# would stop nothing and block the process anyway. The only real defence is to
+# refuse the pattern, which costs nothing a metric search actually needs.
+_NESTED_QUANTIFIER = re.compile(r"""
+    \(                     # a group
+    (?:\?[:=!P][^)]*|)     # optionally non-capturing / lookaround / named
+    [^()]*                 # its body, with no nested group
+    [*+?}]                 # ending in a quantifier
+    \)                     # close it
+    \s*[*+{]               # and quantify the group itself
+""", re.VERBOSE)
+_ALTERNATION_QUANTIFIER = re.compile(r"\([^()]*\|[^()]*\)\s*[*+{]")
 
 
 def _auth(ctx: ToolContext) -> dict[str, str]:
@@ -34,6 +49,8 @@ def _series_from(result: list) -> tuple[list[dict], bool]:
     truncated = len(result) > MAX_SERIES
     series = []
     for entry in result[:MAX_SERIES]:
+        if not isinstance(entry, dict):
+            continue
         # instant queries return a single "value", range queries a "values" list
         values = entry.get("values")
         if values is None:
@@ -74,10 +91,14 @@ async def _vm_query(ctx: ToolContext, args: dict) -> str:
     body, problem = decode_json(response, "vm_query")
     if problem is not None:
         return err(problem)
+    if not isinstance(body, dict):
+        return err("vm_query: backend returned a non-object body")
     if body.get("status") != "success":
         return err(f"vm_query: {body.get('error') or 'query failed'}")
 
-    series, truncated = _series_from(body.get("data", {}).get("result") or [])
+    data = body.get("data")
+    result = data.get("result") if isinstance(data, dict) else None
+    series, truncated = _series_from(result if isinstance(result, list) else [])
     return ok({"series": series, "truncated": truncated})
 
 
@@ -86,6 +107,11 @@ async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
     # A long regex is a cheap way to make re spend a long time on 200 names.
     if len(pattern) > MAX_PATTERN_CHARS:
         return err(f"vm_metrics: pattern too long (max {MAX_PATTERN_CHARS})")
+    if _NESTED_QUANTIFIER.search(pattern) or _ALTERNATION_QUANTIFIER.search(pattern):
+        return err(
+            "vm_metrics: pattern nests a quantifier inside a quantified group, which can "
+            "take exponential time; use a simpler pattern"
+        )
     try:
         matcher = re.compile(pattern)
     except re.error as exc:
@@ -100,7 +126,14 @@ async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
     if problem is not None:
         return err(problem)
 
-    names = [name for name in (body.get("data") or []) if matcher.search(name)]
+    if not isinstance(body, dict):
+        return err("vm_metrics: backend returned a non-object body")
+    data = body.get("data")
+    candidates = [
+        name for name in (data if isinstance(data, list) else []) if isinstance(name, str)
+    ]
+
+    names = [name for name in candidates if matcher.search(name)]
     return ok({"metrics": names[:MAX_METRICS], "truncated": len(names) > MAX_METRICS})
 
 

@@ -155,13 +155,16 @@ async def _web_search(ctx: ToolContext, args: dict) -> str:
     if problem is not None:
         return err(problem)
 
+    web = body.get("web") if isinstance(body, dict) else None
+    hits = web.get("results") if isinstance(web, dict) else None
     results = [
         {
             "title": wrap_external(SOURCE, str(hit.get("title") or "")),
             "url": hit.get("url"),
             "description": wrap_external(SOURCE, str(hit.get("description") or "")),
         }
-        for hit in ((body.get("web") or {}).get("results") or [])[:MAX_RESULTS]
+        for hit in (hits if isinstance(hits, list) else [])[:MAX_RESULTS]
+        if isinstance(hit, dict)
     ]
     return ok({"results": results})
 

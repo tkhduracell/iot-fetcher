@@ -17,6 +17,27 @@ HA_LOOPS = frozenset({"brain", "house-ops"})
 MAX_ENTITIES = 50
 SOURCE = "home-assistant"
 
+# States that are HA's own vocabulary rather than something a human or an
+# integration wrote. Anything else that is not a number is free text -- an
+# input_text, a template sensor, a media title -- and free text from outside
+# this system is fenced before the model reads it.
+SAFE_STATES = frozenset({"on", "off", "unknown", "unavailable", "home", "not_home"})
+
+
+def _wrap_state(state: object) -> object:
+    """Fence a state value unless it is a number or one of HA's own words."""
+    if not isinstance(state, str):
+        return state
+    try:
+        float(state)
+    except ValueError:
+        pass
+    else:
+        return state
+    if state.lower() in SAFE_STATES:
+        return state
+    return wrap_external(SOURCE, state)
+
 
 async def _ha_state(ctx: ToolContext, args: dict) -> str:
     needle = str(args["query"]).lower()
@@ -33,7 +54,10 @@ async def _ha_state(ctx: ToolContext, args: dict) -> str:
 
     matches = []
     for state in body if isinstance(body, list) else []:
-        attributes = state.get("attributes") or {}
+        if not isinstance(state, dict):
+            continue
+        attributes = state.get("attributes")
+        attributes = attributes if isinstance(attributes, dict) else {}
         friendly = attributes.get("friendly_name") or ""
         entity_id = state.get("entity_id") or ""
         if needle not in entity_id.lower() and needle not in str(friendly).lower():
@@ -41,7 +65,7 @@ async def _ha_state(ctx: ToolContext, args: dict) -> str:
         matches.append(
             {
                 "entity_id": entity_id,
-                "state": state.get("state"),
+                "state": _wrap_state(state.get("state")),
                 "friendly_name": wrap_external(SOURCE, str(friendly)) if friendly else None,
                 "last_changed": state.get("last_changed"),
                 "unit_of_measurement": attributes.get("unit_of_measurement"),

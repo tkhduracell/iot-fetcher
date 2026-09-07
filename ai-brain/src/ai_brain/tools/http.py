@@ -28,23 +28,12 @@ TIMEOUT_S = 20
 
 
 @asynccontextmanager
-async def client_for(
-    ctx: ToolContext, *, max_redirects: int | None = None
-) -> AsyncIterator[httpx.AsyncClient]:
+async def client_for(ctx: ToolContext) -> AsyncIterator[httpx.AsyncClient]:
     shared = ctx.extras.get("http")
-    # httpx reads max_redirects off the client, never off the request, so a
-    # caller that needs a specific limit gets its own client even when a shared
-    # one exists with a different limit.
-    reusable = isinstance(shared, httpx.AsyncClient) and (
-        max_redirects is None or shared.max_redirects == max_redirects
-    )
-    if reusable:
+    if isinstance(shared, httpx.AsyncClient):
         yield shared
         return
-    kwargs: dict[str, Any] = {"timeout": TIMEOUT_S}
-    if max_redirects is not None:
-        kwargs["max_redirects"] = max_redirects
-    async with httpx.AsyncClient(**kwargs) as own:
+    async with httpx.AsyncClient(timeout=TIMEOUT_S) as own:
         yield own
 
 
@@ -54,24 +43,16 @@ async def request(
     url: str,
     *,
     label: str,
-    max_redirects: int | None = None,
-    allow_redirect_response: bool = False,
     **kwargs: Any,
 ) -> tuple[httpx.Response | None, str | None]:
-    """Return ``(response, None)`` on 2xx, else ``(None, message)``.
-
-    With ``allow_redirect_response`` a 3xx carrying a ``Location`` is also
-    returned, for callers that follow redirects themselves.
-    """
+    """Return ``(response, None)`` on 2xx, else ``(None, message)``."""
     kwargs.setdefault("timeout", TIMEOUT_S)
     try:
-        async with client_for(ctx, max_redirects=max_redirects) as client:
+        async with client_for(ctx) as client:
             response = await client.request(method, url, **kwargs)
     except httpx.HTTPError as exc:
         return None, f"{label}: {type(exc).__name__}: {exc}"
     if response.is_success:
-        return response, None
-    if allow_redirect_response and response.is_redirect and "location" in response.headers:
         return response, None
     return None, f"{label}: backend returned HTTP {response.status_code}"
 
@@ -83,7 +64,6 @@ async def stream(
     *,
     label: str,
     max_bytes: int,
-    max_redirects: int | None = None,
     allow_redirect_response: bool = False,
     **kwargs: Any,
 ) -> tuple[httpx.Response | None, bytes, bool, str | None]:
@@ -100,7 +80,7 @@ async def stream(
     truncated = False
     try:
         async with (
-            client_for(ctx, max_redirects=max_redirects) as client,
+            client_for(ctx) as client,
             client.stream(method, url, **kwargs) as response,
         ):
             usable = response.is_success or (
@@ -114,9 +94,13 @@ async def stream(
                 # The caller only wants the Location header; reading a
                 # redirect's body would be pointless bytes.
                 return response, b"", False, None
+            # ``truncated`` means "there was more than we kept", so it may only
+            # be set once bytes *past* the cap have actually arrived. A body
+            # that is exactly ``max_bytes`` long is complete, and saying
+            # otherwise sends the model chasing a page it already has in full.
             async for chunk in response.aiter_bytes():
                 body.extend(chunk)
-                if len(body) >= max_bytes:
+                if len(body) > max_bytes:
                     truncated = True
                     del body[max_bytes:]
                     break
