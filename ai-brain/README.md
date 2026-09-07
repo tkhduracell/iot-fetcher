@@ -142,9 +142,15 @@ state, so it is much easier to start narrow than to unpick a bad first day.
 
    ```sh
    mkdir -p volumes/ai-brain-memory
+   sudo chown -R 1000:1000 volumes/ai-brain-memory
    touch volumes/ai-brain-memory/PAUSE
    sudo docker compose -f docker-compose.yml -f docker-compose.local.yml up -d ai-brain
    ```
+
+   The container runs as the non-root user `brain` (uid 1000), so the bind
+   mount has to be writable by uid 1000 — that is what the `chown` is for.
+   Without it the first boot cannot seed the constitution and the container
+   exits.
 
    With `PAUSE` present, every loop wakes, records `paused` in its journal, and
    goes back to sleep without calling a model. This is a safe way to confirm
@@ -167,7 +173,8 @@ state, so it is much easier to start narrow than to unpick a bad first day.
 5. **Drop `DRY_RUN`** once you are happy with what it is proposing.
 
 To pause at any point: `touch volumes/ai-brain-memory/PAUSE`. It takes effect
-at the next cycle, no restart needed, and it does not lose queued work.
+at the top of the next round — so mid-cycle, not only at the next cycle — no
+restart needed, and it does not lose queued work.
 
 ## Approvals
 
