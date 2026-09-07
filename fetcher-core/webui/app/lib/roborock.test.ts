@@ -26,7 +26,7 @@ describe('parseTargets', () => {
     const raw = JSON.stringify({
       floors: [
         { entity_id: 'automation.stada_van1', name: 'Städa Vån1' },
-        { entity_id: 'automation.stada_annexet', name: 'Städa Annexet' },
+        { entity_id: 'automation.stada_uterum', name: 'Städa Uterum' },
       ],
       rooms: [
         { entity_id: 'automation.stada_koket', name: 'Städa Köket' },
@@ -34,10 +34,10 @@ describe('parseTargets', () => {
       ],
     });
     const targets = parseTargets(raw);
-    expect(targets.floors.map(f => f.name)).toEqual(['Annexet', 'Vån1']);
+    expect(targets.floors.map(f => f.name)).toEqual(['Uterum', 'Vån1']);
     // In Swedish collation 'ö' sorts after 'z', so Kontoret precedes Köket.
     expect(targets.rooms.map(r => r.name)).toEqual(['Kontoret', 'Köket']);
-    expect(targets.floors[0].entity_id).toBe('automation.stada_annexet');
+    expect(targets.floors[0].entity_id).toBe('automation.stada_uterum');
   });
 
   it('drops entries missing an entity_id or name', () => {
@@ -145,7 +145,9 @@ describe('isAllowedTarget', () => {
 
   it('rejects any automation that is not labelled', () => {
     expect(isAllowedTarget(targets, 'automation.unlock_front_door')).toBe(false);
-    expect(isAllowedTarget(targets, 'automation.stada')).toBe(false);
+    // Name-prefix lookalikes must not slip through: matching is on the full
+    // entity_id, not on the "stada" prefix the labelled automations share.
+    expect(isAllowedTarget(targets, 'automation.stada_something_else')).toBe(false);
   });
 });
 
