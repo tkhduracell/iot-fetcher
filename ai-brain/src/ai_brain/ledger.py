@@ -240,6 +240,14 @@ class Ledger:
 
         return Decision(True, None, "ok")
 
+    def limits(self, key: str) -> Limits | None:
+        """The configured budget for a key, or None when it has no bucket.
+
+        The API needs the denominators to render "used of limit"; the
+        fractions alone cannot say how big the day is.
+        """
+        return self._limits.get(key)
+
     def remaining_fraction(self, key: str) -> tuple[float, float]:
         self._roll_day(self._clock())
         bucket = self._buckets.get(key)

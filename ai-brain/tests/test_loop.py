@@ -794,3 +794,139 @@ async def test_a_wake_during_a_sleep_still_interrupts_it(make_loop):
     await asyncio.sleep(0)
     loop.wake.set()
     await asyncio.wait_for(sleeping, timeout=1)
+
+
+# -- live trace --------------------------------------------------------
+
+
+async def test_no_trace_before_the_first_cycle(make_loop):
+    loop, _ = make_loop([])
+    assert loop.trace is None
+
+
+async def test_trace_records_rounds_calls_and_results(make_loop):
+    loop, _ = make_loop(
+        [
+            reply("looking", call("list_facts", "a")),
+            reply("noting", call("append_journal", "b", line="checked the pool")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="all quiet")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    trace = loop.trace
+    assert trace is not None
+    assert trace.status == "ok"
+    assert trace.model == "fake:1"
+    assert trace.summary == "all quiet"
+    assert trace.finished_at is not None
+    assert trace.in_progress is False
+    assert [r.text for r in trace.rounds] == ["looking", "noting", "done"]
+    assert [c["name"] for r in trace.rounds for c in r.tool_calls] == [
+        "list_facts",
+        "append_journal",
+        "end_cycle",
+    ]
+    assert trace.rounds[1].tool_calls[0]["args"] == {"line": "checked the pool"}
+    assert [r.tool_results[0]["name"] for r in trace.rounds] == [
+        "list_facts",
+        "append_journal",
+        "end_cycle",
+    ]
+    assert '"ok": true' in trace.rounds[0].tool_results[0]["result_preview"]
+
+
+async def test_a_paused_cycle_still_leaves_a_closed_trace(make_loop, tmp_path):
+    pause = tmp_path / "PAUSE"
+    pause.write_text("stop", encoding="utf-8")
+    loop, _ = make_loop([reply("should not run")], pause_file=pause)
+
+    await loop.run_cycle()
+
+    trace = loop.trace
+    assert trace is not None
+    assert trace.status == "paused"
+    assert trace.rounds == []
+    assert trace.in_progress is False
+
+
+async def test_an_errored_cycle_closes_its_trace(make_loop):
+    loop, _ = make_loop([ProviderError("schema is wrong", kind="bad_request")])
+
+    await loop.run_cycle()
+
+    assert loop.trace is not None
+    assert loop.trace.status == "error"
+    assert loop.trace.in_progress is False
+
+
+async def test_the_trace_is_replaced_each_cycle(make_loop):
+    loop, _ = make_loop(
+        [
+            reply("one", call("end_cycle", "c", next_wake_minutes=10, summary="first")),
+            reply("two", call("end_cycle", "c", next_wake_minutes=10, summary="second")),
+        ]
+    )
+
+    await loop.run_cycle()
+    first = loop.trace
+    await loop.run_cycle()
+
+    assert loop.trace is not first
+    assert loop.trace.summary == "second"
+    assert len(loop.trace.rounds) == 1
+
+
+async def test_trace_text_and_results_are_truncated(make_loop, registry):
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="huge", description="d", parameters={"type": "object"}),
+            fn=_static("y" * 4_000),
+        )
+    )
+    loop, _ = make_loop(
+        [
+            reply("x" * 5_000, call("huge", "a", note="z" * 2_000)),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    round_one = loop.trace.rounds[0]
+    assert round_one.text.startswith("x" * 2000)
+    assert round_one.text.endswith("…[+3000]")
+    assert round_one.tool_calls[0]["args"]["note"].endswith("…[+1500]")
+    assert len(round_one.tool_results[0]["result_preview"]) <= 500 + len("…[+3500]")
+    assert "…[+" in round_one.tool_results[0]["result_preview"]
+
+
+async def test_the_trace_is_visible_from_inside_a_tool_while_the_cycle_runs(make_loop, registry):
+    """The whole point of the trace: an HTTP reader sees an unfinished cycle."""
+    seen = {}
+
+    async def _peek(ctx, _args) -> str:
+        trace = ctx.extras["loop"].trace
+        seen["in_progress"] = trace.in_progress
+        seen["finished_at"] = trace.finished_at
+        seen["rounds"] = len(trace.rounds)
+        return "peeked"
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="peek", description="d", parameters={"type": "object"}),
+            fn=_peek,
+        )
+    )
+    loop, _ = make_loop(
+        [
+            reply("looking", call("peek", "a")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+    loop.ctx.extras["loop"] = loop
+
+    await loop.run_cycle()
+
+    assert seen == {"in_progress": True, "finished_at": None, "rounds": 1}

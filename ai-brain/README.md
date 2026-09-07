@@ -105,6 +105,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `TPM` | `200000` | Tokens per minute, per model key. |
 | `RPD` | `200` | Requests per day, per model key. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
+| `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
 
 ## Slack app setup
 
@@ -249,6 +250,34 @@ outage never stops the brain thinking):
 | `ai_brain_cycle_total` | `loop`, `status` | Counter of cycle outcomes (`ok`, `paused`, `error`, …). Flat `ok` means the brain has stopped thinking. |
 | `ai_brain_ledger_remaining` | `model`, `kind` | Fraction of today's requests/tokens left, 0–1. |
 | `ai_brain_loop_last_cycle_seconds` | `loop` | Age of the last completed cycle. Absent until a loop has finished one — a zero would read as "just ran", which is the opposite of the truth. |
+
+## HTTP API
+
+A read-only window onto the running process, served on `HTTP_PORT` (default
+`8091`). Every route is a `GET` and nothing mutates anything — anything else is
+a 405. There is no authentication, which is why the port is published only by
+`docker-compose.local.yml` and so reaches the LAN, never the internet. Set
+`HTTP_PORT=0` to switch it off; a port that cannot be bound is logged and the
+brain carries on without it.
+
+| Route | Answers |
+| --- | --- |
+| `GET /healthz` | `{ok, uptime_s, loops[]}` — is the process up, and which loops does it run. |
+| `GET /api/status` | Uptime, pause state, Slack, the quota ledger per model key, proposal counts and a fixed allowlist of settings. Never any token. |
+| `GET /api/agents` | One summary per agent, brain first: last cycle, next wake, cycle counts, whether a cycle is running now. |
+| `GET /api/agents/{name}` | That summary plus identity, goals, fact names, unread inbox, journal dates and the live trace. |
+| `GET /api/agents/{name}/journal?days=N` | The last `N` days it actually wrote, newest first. `days` defaults to 3 and is clamped to 1–30; a non-integer is a 400. |
+| `GET /api/agents/{name}/trace` | The current cycle's thoughts, or the last one's. `finished_at: null` means it is still thinking. |
+| `GET /api/agents/{name}/facts/{fact}` | One fact's markdown. |
+| `GET /api/proposals` | Every proposal, newest first (capped at 100), with pending and total counts. |
+| `GET /api/slack/sessions` | The topic-to-thread map and how many posts are queued. `configured: false` when Slack is off — a 200, not an error. |
+
+The trace is in memory only and is replaced at the start of every cycle: the
+journal is the history, this is the live view. From the box:
+
+```sh
+curl -s http://localhost:8091/api/agents/brain/trace
+```
 
 ## Development
 

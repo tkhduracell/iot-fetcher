@@ -708,3 +708,27 @@ async def test_a_reaction_matching_no_proposal_does_not_wake(slack_in, app, woke
     )
 
     assert woken == []
+
+
+# -- reading the session map -------------------------------------------
+
+
+async def test_sessions_exposes_the_stored_topic_map(out):
+    await out.post("pool", "the pool is cold")
+
+    assert out.sessions() == {"pool": {"thread_ts": "1.1", "channel": "D1", "status": "processing"}}
+
+
+def test_sessions_is_empty_before_anything_is_posted(out):
+    assert out.sessions() == {}
+
+
+async def test_queued_count_counts_what_slack_would_not_take(brain_dir, moving_clock):
+    down = SlackOut(FakeClient(frozenset({"chat_postMessage"})), USER, brain_dir, moving_clock)
+    down.sleep = _no_sleep
+    assert down.queued_count() == 0
+
+    assert await down.post("pool", "first") == "queued"
+    assert await down.post("pool", "second") == "queued"
+
+    assert down.queued_count() == 2

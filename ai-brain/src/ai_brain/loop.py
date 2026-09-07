@@ -24,10 +24,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from ai_brain.ledger import Priority
 from ai_brain.llm import ChainExhausted, Message, ProviderChain
@@ -50,6 +50,13 @@ MAX_TOOL_RESULT_CHARS = 16_000
 # twice each, so the loop's own bound has to leave room for all of them.
 CHAIN_TIMEOUT_FACTOR = 4
 
+# The live trace is read over HTTP by a human watching a cycle think, not by a
+# model, so it is bounded far harder than the conversation itself: enough to
+# see what happened, never enough for one runaway round to make the whole
+# trace unreadable -- or to hold a second copy of a 16k tool result in memory.
+TRACE_TEXT_CHARS = 2000
+TRACE_PREVIEW_CHARS = 500
+
 Status = Literal["ok", "no_budget", "error", "timeout", "paused", "cancelled", "max_rounds"]
 
 CYCLE_INSTRUCTIONS = """\
@@ -69,6 +76,61 @@ class CycleResult:
     model: str
     rounds: int
     next_wake_s: int
+
+
+@dataclass
+class RoundTrace:
+    """One model reply and whatever the tools it asked for answered."""
+
+    at: float
+    text: str
+    tool_calls: list[dict] = field(default_factory=list)
+    tool_results: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class CycleTrace:
+    """What the current (or last) cycle is doing, in memory only.
+
+    The journal is the history -- one line per cycle, on disk, forever. This is
+    the opposite: everything a cycle thought, kept only until the next cycle
+    replaces it. It exists so a reader can watch a cycle happen rather than
+    read its epitaph, which is why it is created before the first thing that
+    could end the cycle and closed in ``_finish`` however the cycle went.
+    """
+
+    started_at: float
+    finished_at: float | None = None
+    status: Status | None = None
+    model: str = ""
+    summary: str = ""
+    rounds: list[RoundTrace] = field(default_factory=list)
+
+    @property
+    def in_progress(self) -> bool:
+        return self.finished_at is None
+
+
+def _trunc(text: str, limit: int) -> str:
+    """Cut to ``limit``, saying how much was dropped rather than trailing off."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"…[+{len(text) - limit}]"
+
+
+def _safe_args(args: Any) -> dict:
+    """Render tool arguments as short strings, whatever the model sent.
+
+    The trace is serialised straight to JSON by the API, and a model can put
+    anything in an argument value -- so nothing here may assume a type, and
+    nothing may carry an unbounded string through.
+    """
+    if not isinstance(args, dict):
+        return {"_": _trunc(str(args), TRACE_PREVIEW_CHARS)}
+    return {
+        str(key): _trunc(value if isinstance(value, str) else str(value), TRACE_PREVIEW_CHARS)
+        for key, value in args.items()
+    }
 
 
 class AgentLoop:
@@ -104,10 +166,16 @@ class AgentLoop:
         self.last_cycle: CycleResult | None = None
         self.last_cycle_at: float = 0.0
         self.cycle_counts: dict[str, int] = {}
+        self.trace: CycleTrace | None = None
 
     # -- one cycle -----------------------------------------------------
 
     async def run_cycle(self) -> CycleResult:
+        # First statement, deliberately: a cycle that turns out to be paused
+        # is still a cycle someone may be watching, and a reader who polls
+        # between the pause check and the trace would otherwise be shown the
+        # *previous* cycle as if it were this one.
+        self.trace = trace = CycleTrace(started_at=self.clock())
         notes: list[Note] = []
         status: Status = "ok"
         model = ""
@@ -148,6 +216,15 @@ class AgentLoop:
                 )
                 rounds += 1
                 model = reply.model
+                trace.rounds.append(
+                    RoundTrace(
+                        at=self.clock(),
+                        text=_trunc(reply.text or "", TRACE_TEXT_CHARS),
+                        tool_calls=[
+                            {"name": c.name, "args": _safe_args(c.args)} for c in reply.tool_calls
+                        ],
+                    )
+                )
                 messages.append(
                     Message(
                         "assistant",
@@ -161,6 +238,12 @@ class AgentLoop:
                 for call in reply.tool_calls:
                     result = await self.registry.dispatch(self.ctx, call)
                     result = self._cap_tool_result(call.name, result)
+                    trace.rounds[-1].tool_results.append(
+                        {
+                            "name": call.name,
+                            "result_preview": _trunc(result, TRACE_PREVIEW_CHARS),
+                        }
+                    )
                     messages.append(Message("tool", result, tool_call_id=call.id, name=call.name))
                 if self.ctx.extras.get("end_cycle"):
                     break
@@ -299,6 +382,13 @@ class AgentLoop:
         self.last_cycle = result
         self.last_cycle_at = self.clock()
         self.cycle_counts[status] = self.cycle_counts.get(status, 0) + 1
+        if self.trace is not None:
+            self.trace.status = status
+            self.trace.model = model
+            self.trace.summary = summary
+            # Last, because ``finished_at`` is what tells a reader the rest of
+            # the trace has stopped moving.
+            self.trace.finished_at = self.last_cycle_at
         return result
 
 

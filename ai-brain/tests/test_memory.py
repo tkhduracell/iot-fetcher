@@ -177,3 +177,19 @@ def test_prune_journal_clears_the_compaction_trigger(brain_dir, clock):
 def test_prune_journal_on_a_missing_directory(tmp_path, clock):
     fresh = MemoryDir(tmp_path / "nothing", "brain", is_brain=True, clock=clock)
     assert fresh.prune_journal() == 0
+
+
+# --- journal_days ---------------------------------------------------------
+
+
+def test_journal_days_lists_the_dates_that_have_files(brain_dir):
+    for day in ("2026-09-04", "2026-09-06", "2026-09-05"):
+        (brain_dir.journal_dir / f"{day}.md").write_text("x\n", encoding="utf-8")
+    (brain_dir.journal_dir / "notes.txt").write_text("ignored", encoding="utf-8")
+
+    assert brain_dir.journal_days() == ["2026-09-04", "2026-09-05", "2026-09-06"]
+
+
+def test_journal_days_is_empty_without_a_journal_dir(tmp_path, clock):
+    fresh = MemoryDir(tmp_path / "nothing", "brain", is_brain=True, clock=clock)
+    assert fresh.journal_days() == []

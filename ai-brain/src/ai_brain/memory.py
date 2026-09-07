@@ -143,6 +143,17 @@ class MemoryDir:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(f"{now:%H:%M}  {line}\n")
 
+    def journal_days(self) -> list[str]:
+        """Every date the journal has a file for, oldest first.
+
+        Filenames are dates, so this is the list of days a reader may ask for
+        without guessing at gaps -- a brain that was down for a week has no
+        file for those days at all.
+        """
+        if not self.journal_dir.exists():
+            return []
+        return sorted(p.stem for p in self.journal_dir.glob("*.md"))
+
     def journal_text(self, days: int = 2) -> str:
         now = self.clock()
         wanted = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
