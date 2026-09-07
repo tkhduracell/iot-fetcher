@@ -26,3 +26,8 @@ sonos-http-api/settings.json
 
 .context/
 .claude/worktrees/
+# Playwright MCP page/console captures (can contain secrets)
+.playwright-mcp/
+
+# Playwright MCP page/console captures (can contain secrets)
+.playwright-mcp/
