@@ -285,3 +285,36 @@ def test_a_day_that_did_not_change_is_not_rewritten(tmp_path):
     ledger.can_spend("gemini:a", "brain")  # same day: no roll, no save
 
     assert path.stat().st_mtime_ns == before
+
+
+def test_usage_reports_spend_against_budget(tmp_path):
+    ledger, _st = make(tmp_path)
+    ledger.record("gemini:a", 100, 50)
+
+    usage = ledger.usage()
+
+    assert usage["day"] == ledger.day
+    assert usage["keys"] == [
+        {
+            "key": "gemini:a",
+            "requests_day": 1,
+            "tokens_day": 150,
+            "requests_limit": 10,
+            "tokens_limit": Limits(rpm=2, tpm=1000, rpd=10).daily_tokens,
+            "requests_remaining": pytest.approx(0.9),
+            "tokens_remaining": pytest.approx(1 - 150 / Limits(rpm=2, tpm=1000, rpd=10).daily_tokens),
+            "consecutive_429": 0,
+            "blocked_until": None,
+            "disabled_until": None,
+        }
+    ]
+
+
+def test_usage_reflects_a_blocked_key(tmp_path):
+    ledger, _st = make(tmp_path)
+    ledger.record_429("gemini:a", retry_after_s=30)
+
+    usage = ledger.usage()
+
+    assert usage["keys"][0]["consecutive_429"] == 1
+    assert usage["keys"][0]["blocked_until"] is not None

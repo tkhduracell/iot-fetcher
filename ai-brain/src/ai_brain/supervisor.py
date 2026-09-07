@@ -181,7 +181,7 @@ def build(
             memories=memories,
             settings=settings,
             wake=wake,
-            extras={"http": http, "approvals": approvals},
+            extras={"http": http, "approvals": approvals, "ledger": ledger},
         )
         loops[name] = AgentLoop(
             name=name,

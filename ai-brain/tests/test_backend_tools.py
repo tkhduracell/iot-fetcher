@@ -90,17 +90,29 @@ def test_every_tool_is_registered(registry):
         "drive_search",
         "web_search",
         "web_fetch",
+        "usage_status",
     }
 
 
 def test_loop_allowlists(registry):
-    assert {s.name for s in registry.specs_for("energy")} == {"vm_query", "vm_metrics"}
-    assert {s.name for s in registry.specs_for("health")} == {"vm_query", "vm_metrics"}
-    assert {s.name for s in registry.specs_for("house-ops")} == {"ha_state"}
+    # usage_status has no allowlist -- every loop gets it, on top of its own
+    # scoped tools.
+    assert {s.name for s in registry.specs_for("energy")} == {
+        "vm_query",
+        "vm_metrics",
+        "usage_status",
+    }
+    assert {s.name for s in registry.specs_for("health")} == {
+        "vm_query",
+        "vm_metrics",
+        "usage_status",
+    }
+    assert {s.name for s in registry.specs_for("house-ops")} == {"ha_state", "usage_status"}
     assert {s.name for s in registry.specs_for("researcher")} == {
         "drive_search",
         "web_search",
         "web_fetch",
+        "usage_status",
     }
 
 

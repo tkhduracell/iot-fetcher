@@ -136,37 +136,19 @@ def _agent_summary(name: str, loop: AgentLoop, memory: MemoryDir) -> dict:
 
 
 def _ledger_json(system: System) -> dict:
-    # One snapshot for every key: it rolls the day and serialises every bucket,
-    # so calling it inside the loop would redo that work per provider.
+    # ``Ledger.usage`` carries every field but the trailing-minute detail; the
+    # page also wants how many of those calls are still in the rpm window, so
+    # that one field is stitched on from a second, cheap pass over the buckets
+    # the usage snapshot already rolled and serialised.
+    usage = system.ledger.usage()
     snapshot = system.ledger.snapshot()
-    keys = []
-    for key in system.ledger.keys():  # noqa: SIM118 - Ledger.keys() is a method
-        bucket = snapshot["buckets"].get(key, {})
-        requests_left, tokens_left = system.ledger.remaining_fraction(key)
-        # The fractions alone cannot be rendered as a bar with a number beside
-        # it -- "80% left" says nothing about whether that is 8 requests or
-        # 8000 -- so the denominators travel with them.
-        limits = system.ledger.limits(key)
-        keys.append(
-            {
-                "key": key,
-                "requests_day": bucket.get("requests_day", 0),
-                "tokens_day": bucket.get("tokens_day", 0),
-                "requests_limit": limits.rpd if limits is not None else 0,
-                "tokens_limit": limits.daily_tokens if limits is not None else 0,
-                # Fractions in 0..1, not counts: the bar's width.
-                "requests_remaining": requests_left,
-                "tokens_remaining": tokens_left,
-                "consecutive_429": bucket.get("consecutive_429", 0),
-                "blocked_until": bucket.get("blocked_until"),
-                "disabled_until": bucket.get("disabled_until"),
-                # The list itself is (timestamp, tokens) pairs of every call in
-                # the trailing minute; its length is the only part a reader
-                # wants, and the whole list would grow the body for nothing.
-                "recent_requests": len(bucket.get("recent") or []),
-            }
-        )
-    return {"day": snapshot["day"], "keys": keys}
+    for entry in usage["keys"]:
+        bucket = snapshot["buckets"].get(entry["key"], {})
+        # The list itself is (timestamp, tokens) pairs of every call in the
+        # trailing minute; its length is the only part a reader wants, and the
+        # whole list would grow the body for nothing.
+        entry["recent_requests"] = len(bucket.get("recent") or [])
+    return usage
 
 
 def _settings_json(system: System) -> dict:
