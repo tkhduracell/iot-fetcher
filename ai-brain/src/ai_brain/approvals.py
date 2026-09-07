@@ -238,7 +238,7 @@ class Approvals:
         it. The outcome genuinely is unknown -- the Sonos may well have spoken
         -- so say exactly that rather than retrying it.
         """
-        stale = [p for p in self._all() if p.status == EXECUTING]
+        stale = [p for p in self.all() if p.status == EXECUTING]
         for proposal in stale:
             log.warning("[approvals] %s was executing at startup; marking failed", proposal.id)
             self._finish(proposal, "failed", RESTARTED)
@@ -246,8 +246,25 @@ class Approvals:
 
     # -- reading -------------------------------------------------------
 
+    def all(self) -> list[Proposal]:
+        """Every proposal on disk, oldest id first. Unreadable files are skipped.
+
+        The ids are timestamped, so sorting the filenames sorts by age -- which
+        is what a reader wants and what ``pending`` has always relied on.
+        """
+        directory = self.brain.outbox_dir
+        if not directory.exists():
+            return []
+        proposals = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                proposals.append(Proposal(**json.loads(path.read_text(encoding="utf-8"))))
+            except (ValueError, TypeError):
+                log.warning("[approvals] ignoring unreadable proposal %s", path.name)
+        return proposals
+
     def pending(self) -> list[Proposal]:
-        return [p for p in self._all() if p.status == PENDING]
+        return [p for p in self.all() if p.status == PENDING]
 
     # -- internals -----------------------------------------------------
 
@@ -259,18 +276,6 @@ class Approvals:
 
     def _path(self, proposal_id: str) -> Path:
         return self.brain.outbox_dir / f"{proposal_id}.json"
-
-    def _all(self) -> list[Proposal]:
-        directory = self.brain.outbox_dir
-        if not directory.exists():
-            return []
-        proposals = []
-        for path in sorted(directory.glob("*.json")):
-            try:
-                proposals.append(Proposal(**json.loads(path.read_text(encoding="utf-8"))))
-            except (ValueError, TypeError):
-                log.warning("[approvals] ignoring unreadable proposal %s", path.name)
-        return proposals
 
     def _find_pending(self, slack_ts: str) -> Proposal | None:
         if not slack_ts:
