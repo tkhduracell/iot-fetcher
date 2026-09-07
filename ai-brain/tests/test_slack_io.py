@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -412,6 +413,42 @@ async def test_messages_that_are_not_filip_talking_are_ignored(
     assert woken == []
 
 
+async def test_a_dropped_message_says_why_in_the_log(slack_in, app, caplog):
+    """A DM that goes nowhere must leave a trace, or it looks like a dead socket."""
+    with caplog.at_level(logging.INFO, logger="ai_brain.slack_io"):
+        await app.handlers["message"](
+            {"channel_type": "channel", "user": "U-someone-else", "text": "secret", "bot_id": "B1"},
+            _ack,
+        )
+
+    line = "\n".join(caplog.messages)
+    assert "[slack] dropped message" in line
+    assert "channel_type=channel" in line
+    assert "user=U-someone-else" in line
+    assert f"expected_user={USER}" in line
+    assert "bot=B1" in line
+    assert "secret" not in line
+
+
+async def test_an_accepted_message_is_logged_without_its_text(slack_in, app, out, caplog):
+    await out.post("pool", "the pool is cold")
+
+    with caplog.at_level(logging.INFO, logger="ai_brain.slack_io"):
+        await app.handlers["message"](
+            {"channel_type": "im", "user": USER, "text": "turn it up", "thread_ts": "1.1"}, _ack
+        )
+
+    line = "\n".join(caplog.messages)
+    assert "[slack] note from filip (10 chars, topic=pool)" in line
+    assert "turn it up" not in line
+
+
+async def test_the_assistant_pane_events_are_registered_and_acknowledged(slack_in, app):
+    for name in ("assistant_thread_started", "assistant_thread_context_changed"):
+        assert name in app.handlers
+        await app.handlers[name]({"type": name}, _ack)
+
+
 async def test_a_reaction_from_filip_is_routed_to_approvals(slack_in, app, approvals):
     await app.handlers["reaction_added"](
         {"user": USER, "reaction": "white_check_mark", "item": {"ts": "7.7"}}, _ack
@@ -456,7 +493,12 @@ async def test_a_stop_for_an_unknown_thread_is_ignored(slack_in, app, brain_dir,
 
 
 async def test_the_quiet_events_are_acknowledged(slack_in, app):
-    for name in ("app_home_opened", "agent_session_title_changed"):
+    for name in (
+        "app_home_opened",
+        "agent_session_title_changed",
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
+    ):
         await app.handlers[name]({}, _ack)
 
 
@@ -508,6 +550,8 @@ async def test_start_slack_wires_posting_into_approvals(
         "agent_session_stopped",
         "app_home_opened",
         "agent_session_title_changed",
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
     }
 
 

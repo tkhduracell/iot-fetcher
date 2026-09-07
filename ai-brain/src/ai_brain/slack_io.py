@@ -341,19 +341,47 @@ class SlackIn:
         # logging "unhandled request" for events we deliberately ignore.
         self.app.event("app_home_opened")(self.on_ignored)
         self.app.event("agent_session_title_changed")(self.on_ignored)
+        # Slack's Agents pane sends these when Filip opens or re-points it.
+        self.app.event("assistant_thread_started")(self.on_ignored)
+        self.app.event("assistant_thread_context_changed")(self.on_ignored)
 
     async def on_message(self, event: dict, ack: Ack = None) -> None:
         await _ack(ack)
-        if event.get("channel_type") != "im" or event.get("user") != self.user_id:
-            return
-        # Our own posts come back as messages; so do edits and joins.
-        if event.get("bot_id") or event.get("subtype"):
+        # Every drop is logged: a DM that silently goes nowhere is
+        # indistinguishable from a dead socket without this. The text itself is
+        # never logged -- only the routing fields that decided the drop.
+        if (
+            event.get("channel_type") != "im"
+            or event.get("user") != self.user_id
+            # Our own posts come back as messages; so do edits and joins.
+            or event.get("bot_id")
+            or event.get("subtype")
+        ):
+            log.info(
+                "[slack] dropped message: channel_type=%s user=%s expected_user=%s "
+                "subtype=%s bot=%s",
+                event.get("channel_type"),
+                event.get("user"),
+                self.user_id,
+                event.get("subtype"),
+                event.get("bot_id"),
+            )
             return
         body = str(event.get("text") or "").strip()
         if not body:
+            log.info(
+                "[slack] dropped message: channel_type=%s user=%s expected_user=%s "
+                "subtype=%s bot=%s (empty text)",
+                event.get("channel_type"),
+                event.get("user"),
+                self.user_id,
+                event.get("subtype"),
+                event.get("bot_id"),
+            )
             return
 
         topic = self.out.topic_for_thread(str(event.get("thread_ts") or ""))
+        log.info("[slack] note from filip (%d chars, topic=%s)", len(body), topic)
         if topic is not None:
             body = f"topic: {topic}\n{body}"
         self.brain.drop_note(NOTE_SENDER, body)
@@ -386,6 +414,7 @@ class SlackIn:
 
     async def on_ignored(self, event: dict, ack: Ack = None) -> None:
         await _ack(ack)
+        log.debug("[slack] ignored event: %s", event.get("type"))
 
 
 async def start_slack(
