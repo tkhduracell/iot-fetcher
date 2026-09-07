@@ -3,37 +3,17 @@ import dataclasses
 import json
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 import pytest
 import respx
+from conftest import SEED, env, fake_chain
 
 from ai_brain import metrics, supervisor
 from ai_brain.config import load_settings
 from ai_brain.ledger import Ledger, Limits
-from ai_brain.llm import ProviderChain
 from ai_brain.metrics import MetricsWriter
 from ai_brain.supervisor import build
-
-SEED = Path(__file__).resolve().parents[1] / "seed"
-
-
-def env(tmp_path: Path, **extra) -> dict[str, str]:
-    base = {
-        "MEMORY_ROOT": str(tmp_path / "memory"),
-        "SEED_ROOT": str(SEED),
-        "LLM_CHAIN": "fake:a,fake:b",
-        "VM_URL": "http://vm.test",
-        "INFLUX_TOKEN": "tok",
-    }
-    base.update(extra)
-    return base
-
-
-def fake_chain(settings, ledger) -> ProviderChain:
-    return ProviderChain([], ledger)
-
 
 # -- build ------------------------------------------------------------
 
