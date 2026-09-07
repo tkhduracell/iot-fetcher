@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from ai_brain.api import start_api, stop_api
 from ai_brain.approvals import Approvals
 from ai_brain.config import Settings, load_settings
 from ai_brain.executors import Executors
@@ -273,6 +274,9 @@ async def _every(seconds: float, work: Callable) -> None:
 
 
 async def run(settings: Settings) -> None:
+    # Taken before anything can block, so the API's uptime is the process's
+    # own rather than "since Slack finished connecting".
+    started_at = time.time()
     system = build(settings)
     handler = None
 
@@ -289,6 +293,10 @@ async def run(settings: Settings) -> None:
         log.info("Slack connected")
     else:
         log.info("Slack disabled: no SLACK_BOT_TOKEN/SLACK_APP_TOKEN")
+
+    # After Slack, so /api/status can report whether it connected; before the
+    # tasks, so the window is open for the very first cycle.
+    api = await start_api(system, settings.http_port, started_at)
 
     writer = MetricsWriter(settings.vm_url, settings.influx_token, system.http)
 
@@ -320,6 +328,10 @@ async def run(settings: Settings) -> None:
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    # Before the HTTP client closes: a request in flight reads the same System
+    # the loops just stopped using, and answering it with a half-torn-down
+    # process is worse than refusing the connection.
+    await stop_api(api)
     if handler is not None:
         await handler.close_async()
     await system.http.aclose()

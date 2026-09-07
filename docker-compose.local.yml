@@ -42,6 +42,10 @@ services:
   ai-brain:
     container_name: ai-brain
     env_file: ./ai-brain/.env
+    # Read-only introspection API, LAN-only: published here and not in the
+    # base compose file, exactly like gdrive-rag's 8090.
+    ports:
+      - "8091:8091"
     volumes:
       - ./volumes/ai-brain-memory:/memory
 

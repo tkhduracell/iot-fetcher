@@ -2,8 +2,10 @@ import asyncio
 import dataclasses
 import json
 import logging
+import socket
 from datetime import UTC, datetime
 
+import aiohttp
 import httpx
 import pytest
 import respx
@@ -14,6 +16,28 @@ from ai_brain.config import load_settings
 from ai_brain.ledger import Ledger, Limits
 from ai_brain.metrics import MetricsWriter
 from ai_brain.supervisor import build
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+async def _wait_for_healthz(port: int, tries: int = 50) -> dict:
+    """Poll until the site is up: run() binds it a few awaits after we start."""
+    last: Exception | None = None
+    for _ in range(tries):
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(f"http://127.0.0.1:{port}/healthz") as response,
+            ):
+                return await response.json()
+        except aiohttp.ClientError as exc:  # not listening yet
+            last = exc
+            await asyncio.sleep(0.02)
+    raise AssertionError(f"healthz never came up on {port}: {last}")
 
 # -- build ------------------------------------------------------------
 
@@ -403,3 +427,57 @@ async def test_writer_skips_when_the_vm_url_is_empty(caplog):
             await MetricsWriter("", "tok", http).write(["a value=1i"])
 
     assert "metrics disabled" in caplog.text
+
+
+# -- the introspection API ---------------------------------------------
+
+
+async def test_run_starts_and_stops_the_api_and_serves_healthz(tmp_path, monkeypatch):
+    """run() must bind the port, answer, and hand it back on shutdown."""
+    port = _free_port()
+    settings = load_settings(env(tmp_path, HTTP_PORT=str(port)))
+    monkeypatch.setattr(supervisor, "build", lambda s: build(s, chain_factory=fake_chain))
+
+    stop = asyncio.Event()
+    monkeypatch.setattr(supervisor.asyncio, "Event", lambda: stop)
+
+    async def _never(_seconds, _work):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(supervisor, "_supervise", lambda _n, _l: _never(0, None))
+    monkeypatch.setattr(supervisor, "_every", _never)
+
+    running = asyncio.create_task(supervisor.run(settings))
+    try:
+        body = await _wait_for_healthz(port)
+        assert body["ok"] is True
+        assert body["loops"] == ["brain"]
+        assert body["uptime_s"] >= 0
+    finally:
+        stop.set()
+        await asyncio.wait_for(running, timeout=5)
+
+    # Shutdown released the port: nothing is listening any more.
+    with pytest.raises(aiohttp.ClientError):
+        async with aiohttp.ClientSession() as session:
+            await session.get(f"http://127.0.0.1:{port}/healthz")
+
+
+async def test_run_survives_a_disabled_api_port(tmp_path, monkeypatch):
+    """HTTP_PORT=0 must leave the loops running, not raise on the way up."""
+    settings = load_settings(env(tmp_path, HTTP_PORT="0"))
+    monkeypatch.setattr(supervisor, "build", lambda s: build(s, chain_factory=fake_chain))
+
+    stop = asyncio.Event()
+    monkeypatch.setattr(supervisor.asyncio, "Event", lambda: stop)
+
+    async def _never(_seconds, _work):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(supervisor, "_supervise", lambda _n, _l: _never(0, None))
+    monkeypatch.setattr(supervisor, "_every", _never)
+
+    started = asyncio.create_task(supervisor.run(settings))
+    await asyncio.sleep(0.05)
+    stop.set()
+    await asyncio.wait_for(started, timeout=5)
