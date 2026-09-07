@@ -45,6 +45,7 @@ class Settings:
     tpm: int
     rpd: int
     call_timeout_s: int
+    http_port: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -106,4 +107,5 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         tpm=get_int("TPM", 200000),
         rpd=get_int("RPD", 200),
         call_timeout_s=get_int("CALL_TIMEOUT_S", 60),
+        http_port=get_int("HTTP_PORT", 8091),
     )
