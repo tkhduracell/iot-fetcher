@@ -6,6 +6,7 @@ volumes:
   home-assistant-config:
   caddy-data:
   gdrive-rag-data:
+  ai-brain-memory:
 
 services:
   database:
@@ -114,6 +115,22 @@ services:
     restart: unless-stopped
     volumes:
       - gdrive-rag-data:/data
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  ai-brain:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-brain:latest
+    hostname: ai-brain
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Stockholm
+    volumes:
+      - ai-brain-memory:/memory
+    depends_on:
+      - database-auth
+      - gdrive-rag
+      - sonos-http-api
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"

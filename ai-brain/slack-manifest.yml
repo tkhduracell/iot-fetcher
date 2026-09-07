@@ -1,0 +1,14 @@
+display_information:
+  name: ai-brain
+  description: Emergent household agent on the rpi5
+features:
+  bot_user: { display_name: ai-brain, always_online: true }
+  assistant_view: { assistant_description: "An always-on agent watching the house and forming its own goals." }
+oauth_config:
+  scopes:
+    bot: [assistant:write, chat:write, im:history, im:read, im:write, reactions:read]
+settings:
+  event_subscriptions:
+    bot_events: [message.im, reaction_added, agent_session_stopped, agent_session_title_changed, app_home_opened]
+  socket_mode_enabled: true
+  org_deploy_enabled: false

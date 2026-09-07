@@ -39,6 +39,12 @@ services:
     ports:
       - "8090:8090"
 
+  ai-brain:
+    container_name: ai-brain
+    env_file: ./ai-brain/.env
+    volumes:
+      - ./volumes/ai-brain-memory:/memory
+
   tibber-influx-bridge:
     container_name: tibber-influxdb-bridge
     env_file: ./tibber-influx-bridge/.env
