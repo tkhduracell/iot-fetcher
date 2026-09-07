@@ -8,6 +8,7 @@ import RoborockCleanButton from './components/RoborockCleanButton';
 import PomodoroButton from './components/PomodoroButton';
 import SpeakersButton from './components/SpeakersButton';
 import NewsBriefingButton from './components/NewsBriefingButton';
+import AiBrainButton from './components/AiBrainButton';
 import useAutoReload from './hooks/useAutoReload';
 import EnergyPriceBar from './components/EnergyPriceBar';
 import WeatherBar from './components/WeatherBar';
@@ -48,6 +49,7 @@ export default function DashboardPage() {
           <NewsBriefingButton />
           <PomodoroButton />
           <RoborockCleanButton />
+          <AiBrainButton />
           <RefreshBadge />
         </div>
       </div>
