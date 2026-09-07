@@ -177,6 +177,23 @@ class SlackOut:
             sent += 1
         return sent
 
+    # -- reading -------------------------------------------------------
+
+    def sessions(self) -> dict[str, dict[str, str]]:
+        """The stored ``{topic: {thread_ts, channel, status}}`` map."""
+        return self._read_sessions()
+
+    def queued_count(self) -> int:
+        """How many posts Slack has not taken yet.
+
+        A non-zero count that never falls is the visible symptom of a Slack
+        outage the brain is otherwise silent about -- ``post`` returns
+        ``"queued"`` and the cycle carries on as if the thought was delivered.
+        """
+        if not self.queue_dir.exists():
+            return 0
+        return len(list(self.queue_dir.glob("*.json")))
+
     # -- status --------------------------------------------------------
 
     async def set_status(self, topic: str, status: Status) -> None:

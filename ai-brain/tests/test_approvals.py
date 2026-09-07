@@ -673,3 +673,21 @@ async def test_finishing_a_proposal_drops_its_lock(approvals):
     p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
     await approvals.on_reaction(p.slack_ts, "white_check_mark")
     assert approvals._locks == {}
+
+
+# --- reading everything ---------------------------------------------------
+
+
+async def test_all_returns_every_proposal_whatever_its_status(approvals):
+    live = await approvals.propose("sonos_say", {"text": "a"}, "why", "#home")
+    done = await approvals.propose("sonos_say", {"text": "b"}, "why", "#home")
+    await approvals.on_reaction(done.slack_ts, "x")
+
+    everything = approvals.all()
+
+    assert [p.id for p in everything] == sorted([live.id, done.id])
+    assert {p.status for p in everything} == {"pending", "rejected"}
+
+
+def test_all_is_empty_before_anything_is_proposed(approvals):
+    assert approvals.all() == []
