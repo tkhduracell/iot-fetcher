@@ -7,6 +7,7 @@ volumes:
   caddy-data:
   gdrive-rag-data:
   ai-brain-memory:
+  ollama-models:
 
 services:
   database:
@@ -131,9 +132,20 @@ services:
       - database-auth
       - gdrive-rag
       - sonos-http-api
+      - ollama
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
+
+  # Local last-resort model for ai-brain's fallback chain (ollama:llama3.2:3b),
+  # so the brain still answers once Gemini's free-tier budget is exhausted.
+  # Pull the model once after first start: `docker exec ollama ollama pull llama3.2:3b`.
+  ollama:
+    image: ollama/ollama:latest
+    hostname: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
 
   tibber-influx-bridge:
     image: tkhduracell/tibber-influxdb-bridge:latest

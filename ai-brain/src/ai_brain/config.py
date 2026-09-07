@@ -16,7 +16,7 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # brain instead of a chain with zero providers -- which builds fine, raises
 # ChainExhausted on every cycle, and emits no ledger series at all, so the
 # misconfiguration is invisible in both the logs and Grafana.
-DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite"
+DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ class Settings:
     seed_root: Path
     llm_chain: list[str]
     gemini_api_key: str
+    ollama_url: str
     experts: list[str]
     brain_heartbeat_s: int
     expert_heartbeat_s: int
@@ -87,6 +88,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         seed_root=Path(get("SEED_ROOT")) if get("SEED_ROOT") else DEFAULT_SEED_ROOT,
         llm_chain=_dedupe(_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN)),
         gemini_api_key=get("GEMINI_API_KEY"),
+        ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
         experts=_csv(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
