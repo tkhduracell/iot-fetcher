@@ -24,6 +24,7 @@ has no authentication at all:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -142,11 +143,18 @@ def _ledger_json(system: System) -> dict:
     for key in system.ledger.keys():  # noqa: SIM118 - Ledger.keys() is a method
         bucket = snapshot["buckets"].get(key, {})
         requests_left, tokens_left = system.ledger.remaining_fraction(key)
+        # The fractions alone cannot be rendered as a bar with a number beside
+        # it -- "80% left" says nothing about whether that is 8 requests or
+        # 8000 -- so the denominators travel with them.
+        limits = system.ledger.limits(key)
         keys.append(
             {
                 "key": key,
                 "requests_day": bucket.get("requests_day", 0),
                 "tokens_day": bucket.get("tokens_day", 0),
+                "requests_limit": limits.rpd if limits is not None else 0,
+                "tokens_limit": limits.daily_tokens if limits is not None else 0,
+                # Fractions in 0..1, not counts: the bar's width.
                 "requests_remaining": requests_left,
                 "tokens_remaining": tokens_left,
                 "consecutive_429": bucket.get("consecutive_429", 0),
@@ -199,8 +207,10 @@ def build_app(
         name = request.match_info["name"]
         loop = system.loops.get(name)
         if loop is None:
+            # json.dumps, never an f-string: the name comes from the URL, and
+            # a quote in it would otherwise emit a body that is not JSON.
             raise web.HTTPNotFound(
-                text=f'{{"error": "unknown agent: {name}"}}',
+                text=json.dumps({"error": f"unknown agent: {name}"}),
                 content_type="application/json",
                 headers={"Cache-Control": "no-store"},
             )
@@ -292,7 +302,13 @@ def build_app(
         # asking for "the last 3 days" should show the last 3 it wrote.
         entries = []
         for date in reversed(memory.journal_days()[-days:]):
-            text = (memory.journal_dir / f"{date}.md").read_text(encoding="utf-8")
+            try:
+                text = (memory.journal_dir / f"{date}.md").read_text(encoding="utf-8")
+            except OSError:
+                # Compaction prunes old journal files, and it can do so between
+                # the listing above and this read. A day that vanished mid-
+                # request is one fewer entry, never a 500.
+                continue
             entries.append({"date": date, "lines": text.splitlines()})
         return _json({"agent": name, "days": days, "entries": entries})
 

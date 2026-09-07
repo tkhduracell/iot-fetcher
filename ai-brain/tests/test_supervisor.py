@@ -477,7 +477,21 @@ async def test_run_survives_a_disabled_api_port(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_supervise", lambda _n, _l: _never(0, None))
     monkeypatch.setattr(supervisor, "_every", _never)
 
+    calls = []
+    real_start_api = supervisor.start_api
+
+    async def spy_start_api(system, port, started_at, *args, **kwargs):
+        runner = await real_start_api(system, port, started_at, *args, **kwargs)
+        calls.append((port, runner))
+        return runner
+
+    monkeypatch.setattr(supervisor, "start_api", spy_start_api)
+
     started = asyncio.create_task(supervisor.run(settings))
     await asyncio.sleep(0.05)
     stop.set()
     await asyncio.wait_for(started, timeout=5)
+
+    # run() reached start_api with the disabled port and got no runner back --
+    # so the loops came up with nothing to serve and nothing to stop.
+    assert calls == [(0, None)]

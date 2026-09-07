@@ -88,6 +88,12 @@ async def test_status_reports_the_supervisor_at_a_glance(client, system):
     assert first["requests_day"] == 0
     assert first["requests_remaining"] == 1.0
     assert first["tokens_remaining"] == 1.0
+    # The denominators the bar needs: rpd as-is, and the ledger's synthetic
+    # daily token budget rather than tpm.
+    limits = system.ledger.limits("fake:a")
+    assert first["requests_limit"] == limits.rpd
+    assert first["tokens_limit"] == limits.daily_tokens
+    assert first["tokens_limit"] == limits.tpm * 60 * 24 // 10
     assert first["consecutive_429"] == 0
     assert first["blocked_until"] is None
     assert first["disabled_until"] is None
@@ -265,6 +271,14 @@ async def test_an_unknown_agent_is_a_404(client):
     assert body == {"error": "unknown agent: nope"}
 
 
+async def test_an_unknown_agent_name_cannot_break_the_json_body(client):
+    """The name is URL input, so it is encoded, never interpolated."""
+    response = await client.get('/api/agents/he%22llo')
+    assert response.status == 404
+    # Parses at all -- an f-string body would have emitted invalid JSON here.
+    assert await response.json() == {"error": 'unknown agent: he"llo'}
+
+
 # -- journal -----------------------------------------------------------
 
 
@@ -313,6 +327,36 @@ async def test_journal_days_must_be_an_integer(client):
 
 async def test_journal_of_an_unknown_agent_is_a_404(client):
     await get_json(client, "/api/agents/nope/journal", expect=404)
+
+
+async def test_journal_skips_a_file_pruned_between_listing_and_reading(
+    client, system, monkeypatch
+):
+    """Compaction can delete a day after the glob and before the read."""
+    memory = system.memories["brain"]
+    _write_journal(
+        memory,
+        {
+            "2026-09-05": "10:00  survives\n",
+            "2026-09-06": "10:00  about to vanish\n",
+        },
+    )
+
+    real_days = memory.journal_days
+
+    def vanishing_days():
+        days = real_days()
+        # Delete the newest file the moment the handler asks for the list --
+        # exactly the window a concurrent prune runs in.
+        (memory.journal_dir / "2026-09-06.md").unlink()
+        return days
+
+    monkeypatch.setattr(memory, "journal_days", vanishing_days)
+
+    body = await get_json(client, "/api/agents/brain/journal?days=2")
+
+    assert [entry["date"] for entry in body["entries"]] == ["2026-09-05"]
+    assert body["entries"][0]["lines"] == ["10:00  survives"]
 
 
 # -- trace -------------------------------------------------------------
@@ -371,7 +415,7 @@ async def test_an_unsafe_fact_name_is_a_400(client, name):
 async def test_a_traversing_fact_name_cannot_read_outside_the_facts_dir(client, system):
     (system.settings.memory_root / "constitution.md").write_text("secret", encoding="utf-8")
     response = await client.get("/api/agents/brain/facts/..%2F..%2Fconstitution")
-    assert response.status in (400, 404)
+    assert response.status == 400
     assert "secret" not in await response.text()
 
 
