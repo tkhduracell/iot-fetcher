@@ -35,7 +35,8 @@ export async function GET(
 
   // Read at request time, not module load: the container gets its env from
   // compose, and the tests stub it per case.
-  const base = process.env.AI_BRAIN_URL ?? DEFAULT_AI_BRAIN_URL;
+  // A bare `AI_BRAIN_URL=` (or one that is only whitespace) means "disabled".
+  const base = (process.env.AI_BRAIN_URL ?? DEFAULT_AI_BRAIN_URL).trim();
   if (!base) {
     return NextResponse.json(
       { error: 'ai-brain not configured' },

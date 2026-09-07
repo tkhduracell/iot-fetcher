@@ -21,17 +21,21 @@ export type CycleTrace = {
   started_at: number;
   /** null while the cycle is still running. */
   finished_at: number | null;
+  /** null while the cycle is still running; a status string once it ends. */
   status: string | null;
-  model: string | null;
+  /** "" before a model has been picked — never null. */
+  model: string;
   rounds: RoundTrace[];
-  summary: string | null;
+  /** "" until the cycle writes one — never null. */
+  summary: string;
 };
 
 export type LastCycle = {
   status: string;
-  model: string | null;
+  /** "" when the cycle never reached a model — never null. */
+  model: string;
   rounds: number;
-  next_wake_s: number | null;
+  next_wake_s: number;
 };
 
 export type AgentSummary = {
@@ -69,8 +73,13 @@ export type AgentDetail = AgentSummary & {
 
 export type LedgerKey = {
   key: string;
+  /** Spent so far today. */
   requests_day: number;
   tokens_day: number;
+  /** The day's budget — the denominator `*_day` is counted against. */
+  requests_limit: number;
+  tokens_limit: number;
+  /** Fractions in 0..1, not counts. */
   requests_remaining: number;
   tokens_remaining: number;
   consecutive_429: number;
@@ -110,10 +119,16 @@ export type Status = {
   settings: BrainSettings;
 };
 
-export type Proposal = Record<string, unknown> & {
-  id?: string;
-  status?: string;
-  created?: string;
+export type Proposal = {
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  reason: string;
+  topic: string;
+  created: string;
+  status: string;
+  slack_ts: string;
+  result: string;
 };
 
 export type JournalEntry = { date: string; lines: string[] };
@@ -257,4 +272,23 @@ export function parseJournalLine(line: string): { time: string | null; text: str
 /** Clock-time label for a unix timestamp (seconds). */
 export function formatClock(at: number): string {
   return new Date(at * 1000).toLocaleTimeString('sv-SE');
+}
+
+/** "12 av 1 500" — what a quota bar says beside itself.
+ *
+ *  The bar's width is the remaining *fraction*; this is the pair of counts
+ *  behind it, so a nearly-full bar still says whether that is 8 requests left
+ *  or 8000. A limit of 0 (an unknown key) has no denominator to show. */
+export function quotaLabel(used: number, limit: number): string {
+  const u = Number.isFinite(used) ? used : 0;
+  if (!Number.isFinite(limit) || limit <= 0) return `${u.toLocaleString('sv-SE')} av –`;
+  return `${u.toLocaleString('sv-SE')} av ${limit.toLocaleString('sv-SE')}`;
+}
+
+/** Colour family for a remaining fraction: green above 40%, yellow above 15%. */
+export function quotaTone(remaining: number): 'ok' | 'warn' | 'error' {
+  if (!Number.isFinite(remaining)) return 'error';
+  if (remaining > 0.4) return 'ok';
+  if (remaining > 0.15) return 'warn';
+  return 'error';
 }

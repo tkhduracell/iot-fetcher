@@ -57,7 +57,7 @@ const AiBrainAgentCard: React.FC<Props> = ({ agent, now, selected, onSelect }) =
 
       <div className="text-[11px] text-gray-700 dark:text-gray-300 flex flex-col gap-0.5">
         <span className="truncate">
-          {agent.last_cycle?.model ?? 'ingen modell'}
+          {agent.last_cycle?.model || 'ingen modell'}
           {agent.last_cycle ? ` · ${agent.last_cycle.rounds} rundor` : ''}
         </span>
         <span className="tabular-nums">
