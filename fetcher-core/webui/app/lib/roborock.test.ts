@@ -6,6 +6,8 @@ import {
   isAllowedTarget,
   shouldRetryTargets,
   stripCleanPrefix,
+  classifyStart,
+  START_CONFIRM_DELAY_MS,
   RoborockTargets,
 } from './roborock';
 
@@ -24,7 +26,7 @@ describe('parseTargets', () => {
     const raw = JSON.stringify({
       floors: [
         { entity_id: 'automation.stada_van1', name: 'Städa Vån1' },
-        { entity_id: 'automation.stada_annexet', name: 'Städa Annexet' },
+        { entity_id: 'automation.stada_uterum', name: 'Städa Uterum' },
       ],
       rooms: [
         { entity_id: 'automation.stada_koket', name: 'Städa Köket' },
@@ -32,10 +34,10 @@ describe('parseTargets', () => {
       ],
     });
     const targets = parseTargets(raw);
-    expect(targets.floors.map(f => f.name)).toEqual(['Annexet', 'Vån1']);
+    expect(targets.floors.map(f => f.name)).toEqual(['Uterum', 'Vån1']);
     // In Swedish collation 'ö' sorts after 'z', so Kontoret precedes Köket.
     expect(targets.rooms.map(r => r.name)).toEqual(['Kontoret', 'Köket']);
-    expect(targets.floors[0].entity_id).toBe('automation.stada_annexet');
+    expect(targets.floors[0].entity_id).toBe('automation.stada_uterum');
   });
 
   it('drops entries missing an entity_id or name', () => {
@@ -143,6 +145,56 @@ describe('isAllowedTarget', () => {
 
   it('rejects any automation that is not labelled', () => {
     expect(isAllowedTarget(targets, 'automation.unlock_front_door')).toBe(false);
-    expect(isAllowedTarget(targets, 'automation.stada')).toBe(false);
+    // Name-prefix lookalikes must not slip through: matching is on the full
+    // entity_id, not on the "stada" prefix the labelled automations share.
+    expect(isAllowedTarget(targets, 'automation.stada_something_else')).toBe(false);
+  });
+});
+
+describe('classifyStart', () => {
+  const T0 = 1_000_000;
+  const later = T0 + START_CONFIRM_DELAY_MS + 1;
+
+  it('is pending before anything was requested', () => {
+    expect(
+      classifyStart({ requestedAt: null, now: later, state: 'docked', stale: false })
+    ).toBe('pending');
+  });
+
+  it('is pending inside the confirmation delay, even while docked', () => {
+    expect(
+      classifyStart({ requestedAt: T0, now: T0 + 1000, state: 'docked', stale: false })
+    ).toBe('pending');
+  });
+
+  it('reports not-started when the vacuum is still docked after the delay', () => {
+    expect(
+      classifyStart({ requestedAt: T0, now: later, state: 'docked', stale: false })
+    ).toBe('not-started');
+  });
+
+  it('reports started once the vacuum is cleaning', () => {
+    expect(
+      classifyStart({ requestedAt: T0, now: later, state: 'cleaning', stale: false })
+    ).toBe('started');
+  });
+
+  // Regression: a failing Roborock integration 503s the status route, which
+  // froze the old status-keyed check and suppressed the warning entirely. A
+  // stale feed must read as "cannot confirm", never as a silent success and
+  // never as a confident vacuum failure.
+  it('reports unknown when the status feed is stale, whatever the last state said', () => {
+    expect(
+      classifyStart({ requestedAt: T0, now: later, state: 'docked', stale: true })
+    ).toBe('unknown');
+    expect(
+      classifyStart({ requestedAt: T0, now: later, state: 'cleaning', stale: true })
+    ).toBe('unknown');
+  });
+
+  it('reports unknown when no status has ever arrived', () => {
+    expect(
+      classifyStart({ requestedAt: T0, now: later, state: undefined, stale: false })
+    ).toBe('unknown');
   });
 });

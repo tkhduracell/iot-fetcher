@@ -1,7 +1,13 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
-import { RoborockTarget, RoborockTargets } from '../lib/roborock';
+import React, { useEffect, useState } from 'react';
+import {
+  RoborockTarget,
+  RoborockTargets,
+  StartOutcome,
+  classifyStart,
+  START_CONFIRM_DELAY_MS,
+} from '../lib/roborock';
 import { useRoborockStatus } from '../hooks/useRoborockStatus';
 
 type Props = {
@@ -9,20 +15,13 @@ type Props = {
   onClose: () => void;
 };
 
-// Vacuum states that mean "hasn't actually gone off to clean". If the
-// vacuum is still in one of these ~15s after we asked it to start, the most
-// likely reason is its Do Not Disturb window (22:00-08:00) silently
-// refusing the request.
-const NOT_MOVING_STATES = new Set(['docked', 'idle', 'charging']);
-const START_CONFIRM_DELAY_MS = 15000;
-
 const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
-  const status = useRoborockStatus(true);
+  const { status, stale } = useRoborockStatus(true);
   const [pending, setPending] = useState<string | null>(null);
   const [requested, setRequested] = useState<string | null>(null);
-  const [notStarted, setNotStarted] = useState(false);
+  const [requestedAt, setRequestedAt] = useState<number | null>(null);
+  const [outcome, setOutcome] = useState<StartOutcome>('pending');
   const [error, setError] = useState<string | null>(null);
-  const pendingCheck = useRef<{ at: number } | null>(null);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -32,22 +31,32 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
     return () => window.removeEventListener('keydown', handleEsc);
   }, [onClose]);
 
-  // A 200 from the trigger route only proves Home Assistant accepted the
-  // call, not that the vacuum moved — check status a little later before
-  // trusting it.
+  // A 200 from the trigger route only proves Home Assistant accepted the call,
+  // not that the vacuum moved — confirm against status a little later.
+  //
+  // This runs on its own timer rather than keying off `status`. When the
+  // Roborock integration fails, the status route 503s and the hook stops
+  // publishing new objects, so a status-keyed effect would never re-run and the
+  // warning would be suppressed in exactly the case it exists for.
   useEffect(() => {
-    if (!pendingCheck.current || !status) return;
-    if (Date.now() - pendingCheck.current.at < START_CONFIRM_DELAY_MS) return;
-    if (NOT_MOVING_STATES.has(status.state)) setNotStarted(true);
-    pendingCheck.current = null;
-  }, [status]);
+    if (requestedAt === null) return;
+
+    const evaluate = () =>
+      setOutcome(
+        classifyStart({ requestedAt, now: Date.now(), state: status?.state, stale })
+      );
+
+    evaluate();
+    const timer = setInterval(evaluate, 1000);
+    return () => clearInterval(timer);
+  }, [requestedAt, status, stale]);
 
   const start = async (target: RoborockTarget) => {
     setPending(target.entity_id);
     setError(null);
     setRequested(null);
-    setNotStarted(false);
-    pendingCheck.current = null;
+    setRequestedAt(null);
+    setOutcome('pending');
     try {
       const resp = await fetch('/api/roborock/trigger', {
         method: 'POST',
@@ -56,7 +65,7 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
       });
       if (!resp.ok) throw new Error(`Could not start ${target.name}`);
       setRequested(target.name);
-      pendingCheck.current = { at: Date.now() };
+      setRequestedAt(Date.now());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
     } finally {
@@ -66,8 +75,8 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
 
   const dock = async () => {
     setError(null);
-    setNotStarted(false);
-    pendingCheck.current = null;
+    setRequestedAt(null);
+    setOutcome('pending');
     try {
       const resp = await fetch('/api/roborock/dock', { method: 'POST' });
       if (!resp.ok) throw new Error('Could not send the vacuum back to its dock');
@@ -144,21 +153,36 @@ const RoborockCleanDialog: React.FC<Props> = ({ targets, onClose }) => {
         <div className="text-sm text-gray-300 flex items-center gap-3 min-w-0">
           {status ? (
             <>
-              <span className="capitalize">{status.status}</span>
-              {status.battery !== null && <span>{status.battery}%</span>}
+              <span className={stale ? 'capitalize text-gray-500' : 'capitalize'}>
+                {status.status}
+              </span>
+              {status.battery !== null && (
+                <span className={stale ? 'text-gray-500' : undefined}>{status.battery}%</span>
+              )}
               {status.room && <span className="truncate">in {status.room}</span>}
               {status.error && <span className="text-red-400">{status.error}</span>}
+              {stale && <span className="text-yellow-400 truncate">status not updating</span>}
             </>
+          ) : stale ? (
+            <span className="text-yellow-400">Status unavailable</span>
           ) : (
             <span className="text-gray-500">Loading status…</span>
           )}
-          {requested && notStarted && (
+          {requested && outcome === 'not-started' && (
             <span className="text-yellow-400 truncate">
-              {requested} hasn&apos;t started — Do Not Disturb may be active
+              {requested} hasn&apos;t started — check Home Assistant, or Do Not Disturb may be
+              active
             </span>
           )}
-          {requested && !notStarted && (
-            <span className="text-green-400 truncate">{requested} requested</span>
+          {requested && outcome === 'unknown' && (
+            <span className="text-yellow-400 truncate">
+              {requested} requested — can&apos;t confirm it started
+            </span>
+          )}
+          {requested && outcome !== 'not-started' && outcome !== 'unknown' && (
+            <span className="text-green-400 truncate">
+              {outcome === 'started' ? `${requested} started` : `${requested} requested`}
+            </span>
           )}
           {error && <span className="text-red-400 truncate">{error}</span>}
         </div>

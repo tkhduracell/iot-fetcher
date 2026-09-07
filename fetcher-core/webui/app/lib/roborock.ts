@@ -131,3 +131,37 @@ export function shouldRetryTargets(state: {
 export function isAllowedTarget(targets: RoborockTargets, entityId: string): boolean {
   return [...targets.floors, ...targets.rooms].some(t => t.entity_id === entityId);
 }
+
+/**
+ * Vacuum states that mean "hasn't actually gone off to clean". If the vacuum is
+ * still in one of these once the confirmation delay has passed, the start did
+ * not take effect.
+ */
+export const NOT_MOVING_STATES = new Set(['docked', 'idle', 'charging']);
+
+/** How long to give the vacuum to leave the dock before calling it a failure. */
+export const START_CONFIRM_DELAY_MS = 15000;
+
+export type StartOutcome = 'pending' | 'started' | 'not-started' | 'unknown';
+
+/**
+ * Whether a requested clean actually got going.
+ *
+ * Deliberately separates "the vacuum told us it is still docked" from "we have
+ * no idea because the status feed is down". The first is a real failure worth
+ * naming a likely cause for; the second must not be reported as a vacuum
+ * problem, because the vacuum may well be cleaning and only our view of it is
+ * broken.
+ */
+export function classifyStart(input: {
+  requestedAt: number | null;
+  now: number;
+  state: string | undefined;
+  stale: boolean;
+}): StartOutcome {
+  const { requestedAt, now, state, stale } = input;
+  if (requestedAt === null) return 'pending';
+  if (now - requestedAt < START_CONFIRM_DELAY_MS) return 'pending';
+  if (stale || !state) return 'unknown';
+  return NOT_MOVING_STATES.has(state) ? 'not-started' : 'started';
+}
