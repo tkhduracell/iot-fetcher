@@ -61,6 +61,11 @@ webui/
 - `POST /roborock/trigger` - Trigger vacuum clean via Home Assistant
 - `POST /roborock/dock` - Return vacuum to dock via Home Assistant
 
+### AI Brain
+- `GET /api/ai-brain/*` - Read-only proxy to the ai-brain introspection API
+  (`/healthz` and `/api/*` only; every other path is 404ed without a request
+  reaching ai-brain). Backs the `/ai-brain` dashboard page.
+
 ### File Upload
 - `POST /upload` - Upload files
 - `GET /upload/<uuid>` - Retrieve uploaded files
@@ -79,6 +84,10 @@ INFLUX_HOST=influxdb_host
 INFLUX_TOKEN=influxdb_token
 SONOS_HOST=sonos_host
 WEB_UI_PORT=8080
+
+# ai-brain introspection API (optional; the default resolves on the compose
+# network, so only set it for local dev outside Docker). See .env.example.
+AI_BRAIN_URL=http://ai-brain:8091
 ```
 
 ## Getting Started
