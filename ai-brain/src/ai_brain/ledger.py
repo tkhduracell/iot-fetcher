@@ -288,6 +288,36 @@ class Ledger:
             "buckets": {key: b.to_json() for key, b in self._buckets.items()},
         }
 
+    def usage(self) -> dict:
+        """Every key's spend against its budget, for a human or the brain to read.
+
+        Same shape the HTTP API renders as a bar (fraction) with a number beside
+        it (the count and its denominator) -- so a caller can say either "20%
+        left" or "200 of 1000", and a tool result gets both without a second
+        query.
+        """
+        snapshot = self.snapshot()
+        keys = []
+        for key in self.keys():  # noqa: SIM118 - Ledger.keys() is a method
+            bucket = snapshot["buckets"].get(key, {})
+            requests_left, tokens_left = self.remaining_fraction(key)
+            limits = self.limits(key)
+            keys.append(
+                {
+                    "key": key,
+                    "requests_day": bucket.get("requests_day", 0),
+                    "tokens_day": bucket.get("tokens_day", 0),
+                    "requests_limit": limits.rpd if limits is not None else 0,
+                    "tokens_limit": limits.daily_tokens if limits is not None else 0,
+                    "requests_remaining": requests_left,
+                    "tokens_remaining": tokens_left,
+                    "consecutive_429": bucket.get("consecutive_429", 0),
+                    "blocked_until": bucket.get("blocked_until"),
+                    "disabled_until": bucket.get("disabled_until"),
+                }
+            )
+        return {"day": snapshot["day"], "keys": keys}
+
     # ---------- mutations ----------
 
     def record(self, key: str, prompt_tokens: int, completion_tokens: int) -> None:
