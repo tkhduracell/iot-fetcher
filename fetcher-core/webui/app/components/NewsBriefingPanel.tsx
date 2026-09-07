@@ -12,6 +12,9 @@ export type BriefingStory = {
 
 export type SourceStatus = { source: string; count: number; error: string | null };
 
+/** Long enough for the whole bulletin to play before the panel clears itself. */
+const AUTO_DISMISS_MS = 2 * 60 * 1000;
+
 type Props = {
   transcript: string;
   room: string;
@@ -30,6 +33,14 @@ const NewsBriefingPanel: React.FC<Props> = ({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // The dashboard is wall-mounted and nobody walks over to dismiss it, so the
+  // panel closes itself once the briefing has had time to play. `replaying`
+  // restarts the clock so a replay is never cut off mid-bulletin.
+  React.useEffect(() => {
+    const timer = setTimeout(onClose, AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [onClose, replaying]);
 
   const failed = sources.filter((s) => s.error || s.count === 0);
   // Cues are directions for the voice, not part of the bulletin — show them
