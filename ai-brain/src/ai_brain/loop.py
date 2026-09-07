@@ -50,7 +50,7 @@ MAX_TOOL_RESULT_CHARS = 16_000
 # twice each, so the loop's own bound has to leave room for all of them.
 CHAIN_TIMEOUT_FACTOR = 4
 
-Status = Literal["ok", "no_budget", "error", "timeout", "paused", "cancelled"]
+Status = Literal["ok", "no_budget", "error", "timeout", "paused", "cancelled", "max_rounds"]
 
 CYCLE_INSTRUCTIONS = """\
 # This cycle
@@ -121,11 +121,22 @@ class AgentLoop:
             return await self._finish("paused", "", 0, "paused by PAUSE file", next_wake_s, notes)
 
         try:
+            # Read the inbox once. Reading it again inside read_context would
+            # render whatever arrived in between -- and mark_done only archives
+            # this list, so that note would be shown to the model and then left
+            # unread, to be shown again next cycle.
             notes = self.memory.unread_notes()
-            messages = self._opening_messages()
+            messages = self._opening_messages(notes)
             self.ctx.extras["cycle_topics"] = []
 
             while rounds < self.max_rounds:
+                # A tool can drop the PAUSE file mid-cycle, and a pause that
+                # only takes effect at the next cycle boundary is no pause at
+                # all when a cycle is eight provider calls long.
+                if self.pause_file.exists():
+                    status, summary = "paused", "paused mid-cycle"
+                    log.info("[%s] PAUSE appeared mid-cycle, stopping", self.name)
+                    break
                 reply = await asyncio.wait_for(
                     self.chain.complete(
                         messages,
@@ -158,6 +169,14 @@ class AgentLoop:
             if ended:
                 minutes, summary = ended
                 next_wake_s = _clamp_wake(minutes, self.heartbeat_s)
+            elif status == "ok" and rounds >= self.max_rounds:
+                # The model ran out of rounds without calling end_cycle. That
+                # is not a normal cycle: nothing summarised the work and
+                # nothing chose a wake, so reporting it as ``ok`` hides a loop
+                # that may be going in circles every heartbeat.
+                status = "max_rounds"
+                summary = f"hit max_rounds ({self.max_rounds}) without end_cycle"
+                log.warning("[%s] hit max_rounds without end_cycle", self.name)
         except TimeoutError:
             status, summary = (
                 "timeout",
@@ -196,11 +215,20 @@ class AgentLoop:
                 await self._sleep(self.heartbeat_s)
 
     async def _sleep(self, seconds: float) -> None:
-        """Sleep, but wake early when someone rings the bell."""
+        """Sleep, but wake early when someone rings the bell.
+
+        The bell is only cleared when this sleep actually consumed a ring.
+        Clearing unconditionally -- as the old order did, after the wait --
+        wipes a ring that landed in the window between the timeout firing and
+        the clear: nothing rings twice, the note is already in the inbox, and
+        the brain then sleeps a whole heartbeat on a message it was explicitly
+        told about. A timed-out sleep consumed nothing, so it clears nothing,
+        and the ring is honoured by the next sleep instead.
+        """
         try:
             await asyncio.wait_for(self.wake.wait(), timeout=seconds)
         except TimeoutError:
-            pass
+            return
         self.wake.clear()
 
     # -- internals -----------------------------------------------------
@@ -224,8 +252,9 @@ class AgentLoop:
         )
         return result[:MAX_TOOL_RESULT_CHARS] + f"\n…[truncated by loop: {dropped} more chars]"
 
-    def _opening_messages(self) -> list[Message]:
-        system = self.memory.read_context(self.constitution) + "\n\n" + CYCLE_INSTRUCTIONS
+    def _opening_messages(self, notes: list[Note]) -> list[Message]:
+        context = self.memory.read_context(self.constitution, notes=notes)
+        system = context + "\n\n" + CYCLE_INSTRUCTIONS
         if self.memory.needs_compaction():
             system += "\n\n" + COMPACTION_INSTRUCTIONS
         now = datetime.fromtimestamp(self.clock(), UTC).isoformat()

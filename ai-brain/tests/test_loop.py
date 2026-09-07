@@ -101,7 +101,7 @@ def make_loop(brain_dir, expert_dir, registry, wall, tmp_path: Path):
             tmp_path / "ledger.json",
             clock=wall,
         )
-        chain = ProviderChain([provider], ledger, clock=wall)
+        chain = ProviderChain([provider], ledger)
         if raises is not None:
 
             async def _boom(*_args, **_kwargs):
@@ -328,16 +328,19 @@ async def test_end_cycle_wake_is_clamped(make_loop, minutes, expected):
 # -- bounds and failures ----------------------------------------------
 
 
-async def test_max_rounds_stops_a_model_that_never_ends(make_loop):
+async def test_max_rounds_stops_a_model_that_never_ends(make_loop, brain_dir):
+    """Running out of rounds is its own outcome, not a normal cycle."""
     script = [reply(f"round {i}", call("list_facts", f"c{i}")) for i in range(20)]
     loop, provider = make_loop(script, max_rounds=8)
 
     result = await loop.run_cycle()
 
-    assert result.status == "ok"
+    assert result.status == "max_rounds"
     assert result.rounds == 8
     assert len(provider.calls) == 8
     assert result.next_wake_s == HEARTBEAT
+    assert "[max_rounds]" in brain_dir.journal_text(1)
+    assert loop.cycle_counts == {"max_rounds": 1}
 
 
 async def test_chain_exhausted_backs_off_until_retry_at(make_loop, wall, brain_dir):
@@ -664,7 +667,7 @@ async def test_cycle_stays_ok_when_the_second_provider_answers(
         tmp_path / "ledger.json",
         clock=wall,
     )
-    chain = ProviderChain([slow, fast], ledger, clock=wall, call_timeout_s=0.01)
+    chain = ProviderChain([slow, fast], ledger, call_timeout_s=0.01)
     ctx = ToolContext(
         loop="brain",
         memory=brain_dir,
@@ -706,3 +709,88 @@ async def test_finish_prunes_the_journal(make_loop, brain_dir, wall):
     await loop.run_cycle()
 
     assert not (brain_dir.journal_dir / f"{stale}.md").exists()
+
+
+# -- mid-cycle pause, inbox snapshot, wake race -----------------------
+
+
+async def test_pause_created_mid_cycle_stops_before_the_next_round(
+    make_loop, registry, brain_dir, tmp_path
+):
+    """A tool drops PAUSE during round 1; round 2 must not call the provider."""
+    pause = tmp_path / "PAUSE"
+
+    async def _pauses(_ctx, _args) -> str:
+        pause.write_text("stop", encoding="utf-8")
+        return "paused"
+
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="drop_pause", description="d", parameters={"type": "object"}),
+            fn=_pauses,
+        )
+    )
+    script = [reply("one", call("drop_pause", "c1")), reply("two", call("list_facts", "c2"))]
+    loop, provider = make_loop(script, pause_file=pause)
+
+    result = await loop.run_cycle()
+
+    assert result.status == "paused"
+    assert result.rounds == 1
+    assert len(provider.calls) == 1
+    assert _last_journal_line(brain_dir) == "[paused] model=fake:1 rounds=1 paused mid-cycle"
+
+
+async def test_a_note_arriving_mid_context_is_not_rendered_or_consumed(make_loop, brain_dir):
+    """read_context renders the inbox the loop already read, not a fresh one.
+
+    Otherwise a note dropped between unread_notes() and read_context() is shown
+    to the model and then left unread -- shown again on the next cycle, having
+    already been answered.
+    """
+    brain_dir.drop_note("energy", "first note")
+    original = brain_dir.unread_notes
+
+    def read_then_race():
+        notes = original()
+        brain_dir.drop_note("energy", "raced in late")
+        brain_dir.unread_notes = original
+        return notes
+
+    brain_dir.unread_notes = read_then_race
+    loop, provider = make_loop([reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))])
+
+    await loop.run_cycle()
+
+    system = provider.calls[0][0][0].content
+    assert "first note" in system
+    assert "raced in late" not in system
+    assert [n.body for n in brain_dir.unread_notes()] == ["raced in late"]
+
+
+async def test_a_wake_rung_as_the_sleep_ends_survives_to_the_next_sleep(make_loop):
+    """The bell is cleared before the wait, so a ring in the gap is not lost.
+
+    The old order cleared *after* the wait: a wake that landed between wait_for
+    returning and the clear was swallowed, and since the note was already in
+    the inbox nothing would ring again -- the brain slept a whole heartbeat on
+    a message it had been told about.
+    """
+    loop, _ = make_loop([])
+
+    # A sleep that ends on its timeout, with a ring arriving in the same tick.
+    await asyncio.wait_for(loop._sleep(0), timeout=1)
+    loop.wake.set()
+    assert loop.wake.is_set()  # the timed-out sleep consumed nothing
+
+    # The next sleep must see that ring rather than wait out its timeout.
+    await asyncio.wait_for(loop._sleep(30), timeout=1)
+    assert not loop.wake.is_set()
+
+
+async def test_a_wake_during_a_sleep_still_interrupts_it(make_loop):
+    loop, _ = make_loop([])
+    sleeping = asyncio.create_task(loop._sleep(30))
+    await asyncio.sleep(0)
+    loop.wake.set()
+    await asyncio.wait_for(sleeping, timeout=1)

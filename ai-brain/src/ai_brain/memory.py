@@ -263,7 +263,14 @@ class MemoryDir:
 
     # -- context -------------------------------------------------------
 
-    def read_context(self, constitution: str) -> str:
+    def read_context(self, constitution: str, notes: list[Note] | None = None) -> str:
+        """Render the whole system prompt.
+
+        ``notes`` is the inbox the caller already read. A loop marks exactly
+        that list done at the end of the cycle, so re-reading the directory
+        here would render a note that then stays unread -- shown once for free,
+        and again next cycle.
+        """
         parts = [f"# Constitution\n{constitution}"]
         parts.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
         if self.is_brain:
@@ -272,7 +279,8 @@ class MemoryDir:
         facts = "\n".join(f"- {n}" for n in self.list_facts())
         parts.append(f"# Facts available (use read_fact)\n{facts}")
         inbox = "\n\n".join(
-            f"## from: {n.sender} ({_iso(n.created)})\n{n.body}" for n in self.unread_notes()
+            f"## from: {n.sender} ({_iso(n.created)})\n{n.body}"
+            for n in (self.unread_notes() if notes is None else notes)
         )
         parts.append(f"# Inbox\n{inbox}")
         return "\n\n".join(parts)
