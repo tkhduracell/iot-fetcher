@@ -7,6 +7,8 @@ import {
   formatAgo,
   formatIn,
   parseJournalLine,
+  quotaLabel,
+  quotaTone,
 } from './aiBrain';
 
 function stubFetch(resp: { ok?: boolean; status?: number; body?: unknown; text?: string }) {
@@ -154,5 +156,45 @@ describe('parseJournalLine', () => {
       time: null,
       text: 'no timestamp here',
     });
+  });
+});
+
+describe('quotaLabel', () => {
+  it('renders used of limit, not used of remaining', () => {
+    expect(quotaLabel(12, 1500)).toBe('12 av 1\u00a0500');
+  });
+
+  it('shows a dash for the denominator when there is no limit', () => {
+    expect(quotaLabel(12, 0)).toBe('12 av –');
+  });
+
+  it('survives a missing limit from an older ai-brain', () => {
+    expect(quotaLabel(3, undefined as unknown as number)).toBe('3 av –');
+    expect(quotaLabel(undefined as unknown as number, 10)).toBe('0 av 10');
+  });
+
+  it('renders a fully spent day as used equal to limit', () => {
+    expect(quotaLabel(1500, 1500)).toBe('1\u00a0500 av 1\u00a0500');
+  });
+});
+
+describe('quotaTone', () => {
+  it('is green above 40% remaining', () => {
+    expect(quotaTone(1)).toBe('ok');
+    expect(quotaTone(0.41)).toBe('ok');
+  });
+
+  it('is yellow between 15% and 40%', () => {
+    expect(quotaTone(0.4)).toBe('warn');
+    expect(quotaTone(0.16)).toBe('warn');
+  });
+
+  it('is red at or below 15%', () => {
+    expect(quotaTone(0.15)).toBe('error');
+    expect(quotaTone(0)).toBe('error');
+  });
+
+  it('treats a non-numeric fraction as spent rather than full', () => {
+    expect(quotaTone(NaN)).toBe('error');
   });
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import type { LedgerKey, Status } from '../lib/aiBrain';
+import { type LedgerKey, type Status, quotaLabel, quotaTone } from '../lib/aiBrain';
 
 /** Card shell, matching EnergyPriceBar's Wrapper. */
 export const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({
@@ -22,33 +22,36 @@ export const Pill: React.FC<{ children: React.ReactNode; className?: string }> =
   <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${className}`}>{children}</span>
 );
 
-/** Remaining-quota bar: green above 40%, yellow above 15%, red below. */
-const QuotaBar: React.FC<{ label: string; remaining: number; used: number }> = ({
+const QUOTA_COLOURS = {
+  ok: 'bg-green-500 dark:bg-green-600',
+  warn: 'bg-yellow-500 dark:bg-yellow-600',
+  error: 'bg-red-500 dark:bg-red-600',
+} as const;
+
+/** Remaining-quota bar: green above 40%, yellow above 15%, red below.
+ *
+ *  `remaining` is the API's fraction (0..1) and is the bar's width directly --
+ *  it is not derived from used/limit, because the ledger owns that arithmetic
+ *  (a synthetic token budget, a day that can roll mid-request). The counts are
+ *  the label beside it, so the bar says both how much and how much of what. */
+const QuotaBar: React.FC<{ label: string; remaining: number; used: number; limit: number }> = ({
   label,
   remaining,
   used,
+  limit,
 }) => {
-  const total = remaining + used;
-  const frac = total > 0 ? remaining / total : 0;
-  const colour =
-    frac > 0.4
-      ? 'bg-green-500 dark:bg-green-600'
-      : frac > 0.15
-        ? 'bg-yellow-500 dark:bg-yellow-600'
-        : 'bg-red-500 dark:bg-red-600';
+  const frac = Number.isFinite(remaining) ? Math.max(0, Math.min(1, remaining)) : 0;
 
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex justify-between text-[11px] text-gray-700 dark:text-gray-300">
         <span>{label}</span>
-        <span className="tabular-nums">
-          {remaining.toLocaleString('sv-SE')} kvar av {total.toLocaleString('sv-SE')}
-        </span>
+        <span className="tabular-nums">{quotaLabel(used, limit)}</span>
       </div>
       <div className="h-1.5 w-full rounded-full bg-gray-300 dark:bg-gray-700 overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all ${colour}`}
-          style={{ width: `${Math.max(0, Math.min(1, frac)) * 100}%` }}
+          className={`h-full rounded-full transition-all ${QUOTA_COLOURS[quotaTone(remaining)]}`}
+          style={{ width: `${frac * 100}%` }}
         />
       </div>
     </div>
@@ -80,8 +83,14 @@ const KeyRow: React.FC<{ entry: LedgerKey; now: number }> = ({ entry, now }) => 
         label="Förfrågningar"
         remaining={entry.requests_remaining}
         used={entry.requests_day}
+        limit={entry.requests_limit}
       />
-      <QuotaBar label="Tokens" remaining={entry.tokens_remaining} used={entry.tokens_day} />
+      <QuotaBar
+        label="Tokens"
+        remaining={entry.tokens_remaining}
+        used={entry.tokens_day}
+        limit={entry.tokens_limit}
+      />
     </div>
   );
 };

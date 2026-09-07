@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type AgentDetail,
   type CycleTrace,
@@ -39,14 +39,16 @@ const Mono: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 // ------------------------------------------------------------------ trace
 
-const TraceView: React.FC<{ agent: string }> = ({ agent }) => {
+const TraceView: React.FC<{ agent: string; seed: CycleTrace | null }> = ({ agent, seed }) => {
   const fetcher = useCallback((signal: AbortSignal) => fetchTrace(agent, signal), [agent]);
   const { data, error, initialLoading } = useAiBrain(fetcher, [agent], 10_000);
 
-  if (initialLoading) return <Empty>Hämtar spår…</Empty>;
-  if (error && !data) return <Empty>Kunde inte hämta spåret: {error.message}</Empty>;
+  // /api/agents/{name} already carried the trace, so the tab renders on the
+  // first paint; the 10 s poll then keeps a running cycle moving.
+  const trace: CycleTrace | null = data?.trace ?? seed;
 
-  const trace: CycleTrace | null = data?.trace ?? null;
+  if (!trace && initialLoading) return <Empty>Hämtar spår…</Empty>;
+  if (!trace && error) return <Empty>Kunde inte hämta spåret: {error.message}</Empty>;
   if (!trace) return <Empty>Ingen cykel har körts än.</Empty>;
 
   const running = trace.finished_at === null;
@@ -66,7 +68,7 @@ const TraceView: React.FC<{ agent: string }> = ({ agent }) => {
         >
           {running ? 'pågår' : (trace.status ?? 'klar')}
         </Pill>
-        <span>{trace.model ?? 'ingen modell'}</span>
+        <span>{trace.model || 'ingen modell'}</span>
         <span className="tabular-nums">start {formatClock(trace.started_at)}</span>
         {trace.finished_at !== null && (
           <span className="tabular-nums">slut {formatClock(trace.finished_at)}</span>
@@ -183,18 +185,40 @@ const FactsView: React.FC<{ agent: string; factNames: string[] }> = ({ agent, fa
   const [body, setBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Two facts opened in quick succession race: without these guards the slower
+  // response wins and paints its body under the other fact's heading.
+  const openRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  const inFlightRef = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      inFlightRef.current?.abort();
+    },
+    [],
+  );
+
   const show = async (name: string) => {
+    inFlightRef.current?.abort();
     if (open === name) {
+      openRef.current = null;
       setOpen(null);
       return;
     }
+    openRef.current = name;
     setOpen(name);
     setBody(null);
     setError(null);
+
+    const controller = new AbortController();
+    inFlightRef.current = controller;
     try {
-      const result = await fetchFact(agent, name);
+      const result = await fetchFact(agent, name, controller.signal);
+      if (!mountedRef.current || openRef.current !== name) return;
       setBody(result.body);
     } catch (e) {
+      if (!mountedRef.current || openRef.current !== name || controller.signal.aborted) return;
       setError(e instanceof Error ? e.message : String(e));
     }
   };
@@ -238,11 +262,11 @@ const AiBrainDetail: React.FC<{ agent: string; now: number }> = ({ agent, now })
 
   const detail: AgentDetail | null = data;
 
-  const body = useMemo(() => {
+  const renderBody = () => {
     if (!detail) return null;
     switch (tab) {
       case 'trace':
-        return <TraceView agent={agent} />;
+        return <TraceView agent={agent} seed={detail.trace ?? null} />;
       case 'journal':
         return <JournalView agent={agent} />;
       case 'goals':
@@ -283,7 +307,7 @@ const AiBrainDetail: React.FC<{ agent: string; now: number }> = ({ agent, now })
           </div>
         );
     }
-  }, [detail, tab, agent]);
+  };
 
   return (
     <Card>
@@ -316,7 +340,7 @@ const AiBrainDetail: React.FC<{ agent: string; now: number }> = ({ agent, now })
 
       {initialLoading && <Empty>Hämtar agenten…</Empty>}
       {error && !detail && <Empty>Kunde inte hämta agenten: {error.message}</Empty>}
-      {body}
+      {renderBody()}
     </Card>
   );
 };

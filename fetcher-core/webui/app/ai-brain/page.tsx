@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import RefreshBadge from '../components/RefreshBadge';
 import AiBrainSupervisor, { Card } from '../components/AiBrainSupervisor';
@@ -35,16 +35,31 @@ export default function AiBrainPage() {
   const [now, setNow] = useState(() => Date.now() / 1000);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
-    return () => clearInterval(id);
-  }, []);
+  // Every timestamp on this page (last_cycle_at, next_wake_at, blocked_until)
+  // comes from ai-brain's clock. A browser minutes off would render a cycle
+  // that just ran as "5 min sedan", or a wake that already happened as still
+  // pending — so the ticker runs on the server's clock, offset by whatever the
+  // last /api/status said the difference was. Held in a ref: it must not
+  // restart the interval, and the ticker below picks it up on its next tick.
+  const offsetRef = useRef(0);
 
   const statusFetcher = useCallback((signal: AbortSignal) => fetchStatus(signal), []);
   const agentsFetcher = useCallback((signal: AbortSignal) => fetchAgents(signal), []);
 
   const status = useAiBrain(statusFetcher, [], POLL_MS);
   const agents = useAiBrain(agentsFetcher, [], POLL_MS);
+
+  const serverNow = status.data?.now;
+  useEffect(() => {
+    if (typeof serverNow !== 'number' || !Number.isFinite(serverNow)) return;
+    offsetRef.current = serverNow - Date.now() / 1000;
+    setNow(Date.now() / 1000 + offsetRef.current);
+  }, [serverNow]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000 + offsetRef.current), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (agents.data) setUpdatedAt(new Date());
