@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -305,3 +306,120 @@ class _AsyncioWithSleep:
 
     def __getattr__(self, name):
         return getattr(asyncio, name)
+
+
+# -- unknown provider prefixes ----------------------------------------
+
+
+def test_build_exits_on_an_unknown_provider_prefix(tmp_path, caplog):
+    """A typo'd prefix would otherwise raise ValueError on the first real chain build."""
+    settings = load_settings(env(tmp_path, LLM_CHAIN="gemeni:flash", GEMINI_API_KEY="k"))
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
+        build(settings, chain_factory=fake_chain)
+
+    assert excinfo.value.code == 2
+    assert "gemeni" in caplog.text
+
+
+def test_build_exits_on_a_chain_entry_with_no_prefix(tmp_path, caplog):
+    settings = load_settings(env(tmp_path, LLM_CHAIN="gemini-2.5-flash", GEMINI_API_KEY="k"))
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
+        build(settings, chain_factory=fake_chain)
+
+    assert excinfo.value.code == 2
+
+
+def test_every_known_prefix_is_accepted(tmp_path):
+    settings = load_settings(env(tmp_path, LLM_CHAIN="fake:a,gemini:b", GEMINI_API_KEY="k"))
+    assert sorted(build(settings, chain_factory=fake_chain).loops) == ["brain"]
+
+
+# -- startup recovery of executing proposals --------------------------
+
+
+def test_build_recovers_a_proposal_left_executing(tmp_path):
+    settings = load_settings(env(tmp_path))
+    system = build(settings, chain_factory=fake_chain)
+    outbox = system.memories["brain"].outbox_dir
+    outbox.mkdir(parents=True, exist_ok=True)
+    (outbox / "p1.json").write_text(
+        json.dumps(
+            {
+                "id": "p1",
+                "kind": "sonos_say",
+                "payload": {"text": "hi"},
+                "reason": "why",
+                "topic": "#home",
+                "created": "2026-09-06T10:00:00Z",
+                "status": "executing",
+                "slack_ts": "1.1",
+                "result": "",
+            }
+        )
+    )
+
+    rebuilt = build(load_settings(env(tmp_path)), chain_factory=fake_chain)
+
+    stored = json.loads((outbox / "p1.json").read_text())
+    assert stored["status"] == "failed"
+    assert "restarted mid-execution" in stored["result"]
+    assert rebuilt.approvals.pending() == []
+    assert any(
+        "p1 failed" in n.body for n in rebuilt.memories["brain"].unread_notes()
+    )
+
+
+# -- an expiry wakes the brain ----------------------------------------
+
+
+async def test_expiring_a_proposal_wakes_the_brain(tmp_path):
+    settings = load_settings(env(tmp_path))
+    woken: list[str] = []
+    system = dataclasses.replace(
+        build(settings, chain_factory=fake_chain), wake=woken.append
+    )
+
+    async def expired_one() -> list[object]:
+        return [object()]
+
+    system.approvals.expire = expired_one
+    await supervisor.expiry_watcher(system)()
+
+    assert woken == ["brain"]
+
+
+async def test_expiring_nothing_does_not_wake(tmp_path):
+    settings = load_settings(env(tmp_path))
+    woken: list[str] = []
+    system = dataclasses.replace(
+        build(settings, chain_factory=fake_chain), wake=woken.append
+    )
+
+    await supervisor.expiry_watcher(system)()
+
+    assert woken == []
+
+
+# -- metrics with no VM configured ------------------------------------
+
+
+@respx.mock
+async def test_writer_skips_and_warns_once_when_unconfigured(caplog):
+    route = respx.post("http://vm.test/api/v2/write")
+    async with httpx.AsyncClient() as http:
+        writer = MetricsWriter("http://vm.test", "", http)
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                await writer.write(["a value=1i"])
+
+    assert not route.called
+    assert caplog.text.count("metrics disabled") == 1
+
+
+@respx.mock
+async def test_writer_skips_when_the_vm_url_is_empty(caplog):
+    async with httpx.AsyncClient() as http:
+        with caplog.at_level(logging.WARNING):
+            await MetricsWriter("", "tok", http).write(["a value=1i"])
+
+    assert "metrics disabled" in caplog.text

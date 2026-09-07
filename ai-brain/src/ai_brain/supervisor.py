@@ -29,7 +29,7 @@ from ai_brain.approvals import Approvals
 from ai_brain.config import Settings, load_settings
 from ai_brain.executors import Executors
 from ai_brain.ledger import Ledger
-from ai_brain.llm import ProviderChain, limits_from_settings
+from ai_brain.llm import PROVIDER_PREFIXES, ProviderChain, limits_from_settings
 from ai_brain.loop import AgentLoop
 from ai_brain.memory import MemoryDir
 from ai_brain.metrics import MetricsWriter, render
@@ -95,6 +95,16 @@ def _check_chain(settings: Settings) -> None:
     if not settings.llm_chain:
         log.error("LLM_CHAIN is empty; refusing to start with no providers")
         raise SystemExit(2)
+    for entry in settings.llm_chain:
+        prefix = entry.partition(":")[0]
+        if prefix not in PROVIDER_PREFIXES:
+            log.error(
+                "LLM_CHAIN entry %r names unknown provider %r (known: %s); refusing to start",
+                entry,
+                prefix,
+                ", ".join(sorted(PROVIDER_PREFIXES)),
+            )
+            raise SystemExit(2)
     if any(entry.startswith("gemini:") for entry in settings.llm_chain) and (
         not settings.gemini_api_key
     ):
@@ -151,6 +161,9 @@ def build(
     executors = Executors(settings, http, dt_clock)
     # ``on_message`` stays None until Slack is up; ``start_slack`` sets it.
     approvals = Approvals(memories["brain"], executors, dt_clock)
+    # A proposal left ``executing`` by a killed process is nobody's job but
+    # startup's: it is not pending, so ``expire`` never sees it.
+    approvals.recover_stale()
 
     loops: dict[str, AgentLoop] = {}
 
@@ -195,6 +208,21 @@ def build(
         settings=settings,
         wake=wake,
     )
+
+
+def expiry_watcher(system: System) -> Callable[[], Awaitable[None]]:
+    """Expire overdue proposals, and tell the brain when any did.
+
+    An expiry drops a note into the inbox. Without a wake the brain learns its
+    request went unanswered only whenever its heartbeat next comes round -- up
+    to half an hour after the gate it was waiting on closed.
+    """
+
+    async def expire() -> None:
+        if await system.approvals.expire():
+            system.wake("brain")
+
+    return expire
 
 
 def day_roll_watcher(system: System) -> Callable[[], Awaitable[None]]:
@@ -267,9 +295,7 @@ async def run(settings: Settings) -> None:
     async def publish_metrics() -> None:
         await writer.write(render(system.loops, system.ledger, time.time()))
 
-    async def expire_proposals() -> None:
-        await system.approvals.expire()
-
+    expire_proposals = expiry_watcher(system)
     watch_day_roll = day_roll_watcher(system)
 
     tasks = [asyncio.create_task(_supervise(name, agent)) for name, agent in system.loops.items()]

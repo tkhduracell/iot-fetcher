@@ -71,3 +71,14 @@ def test_default_chain_entries_are_all_provider_qualified():
         assert sep == ":"
         assert provider == "gemini"
         assert model
+
+
+def test_a_repeated_chain_entry_is_deduped_in_order():
+    """Every entry shares one ledger key, so a repeat is the same exhausted key twice."""
+    s = load_settings({"LLM_CHAIN": "gemini:a,gemini:b,gemini:a,gemini:c,gemini:b"})
+    assert s.llm_chain == ["gemini:a", "gemini:b", "gemini:c"]
+
+
+def test_dedupe_leaves_a_chain_without_repeats_alone():
+    s = load_settings({"LLM_CHAIN": "gemini:a,gemini:b"})
+    assert s.llm_chain == ["gemini:a", "gemini:b"]

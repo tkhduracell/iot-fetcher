@@ -51,6 +51,23 @@ def _csv(raw: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _dedupe(entries: list[str]) -> list[str]:
+    """Drop repeats, keep order.
+
+    A chain is walked in order and every entry shares one ledger key, so a
+    duplicate is not a second budget -- it is the same exhausted key tried
+    twice, which costs the fallback nothing but latency. Deduping here means
+    ``limits_from_settings`` and the chain agree on how many providers exist.
+    """
+    seen: set[str] = set()
+    out = []
+    for entry in entries:
+        if entry not in seen:
+            seen.add(entry)
+            out.append(entry)
+    return out
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if env is None:
         import os
@@ -67,7 +84,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     return Settings(
         memory_root=Path(get("MEMORY_ROOT", "/memory")),
         seed_root=Path(get("SEED_ROOT")) if get("SEED_ROOT") else DEFAULT_SEED_ROOT,
-        llm_chain=_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN),
+        llm_chain=_dedupe(_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN)),
         gemini_api_key=get("GEMINI_API_KEY"),
         experts=_csv(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,

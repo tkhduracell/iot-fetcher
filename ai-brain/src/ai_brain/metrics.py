@@ -54,9 +54,17 @@ class MetricsWriter:
         self.vm_url = vm_url.rstrip("/")
         self.token = token
         self.http = http
+        self._warned_unconfigured = False
 
     async def write(self, lines: list[str]) -> None:
         if not lines:
+            return
+        if not self.vm_url or not self.token:
+            # Unconfigured is a permanent state, and this runs every 60s: say
+            # it once rather than a thousand identical lines a day.
+            if not self._warned_unconfigured:
+                self._warned_unconfigured = True
+                log.warning("metrics disabled: VM_URL or INFLUX_TOKEN is empty")
             return
         try:
             response = await self.http.post(
