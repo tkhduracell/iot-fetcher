@@ -11,6 +11,13 @@ Three properties shape the code more than the API does:
   next to the brain's memory holds ``{topic: {thread_ts, channel, status}}``,
   written atomically. A restart mid-conversation keeps replying in the same
   thread rather than opening a second one about the same thing.
+* **The assistant thread wins.** This is an agent app, so Filip talks inside a
+  thread Slack owns, tracked under the reserved ``chat`` topic. A new topic
+  raised while that thread is open replies *into it*, labelled ``*topic*``, and
+  aliases itself onto the same thread. Posting top-level and renaming a session
+  instead would put every reply in a thread he is not looking at -- the History
+  tab fills with ghosts while the conversation on screen stays silent. Only with
+  no assistant thread at all does a topic open one of its own.
 * **The agent cannot spam.** A sliding hour window caps posts; over it,
   ``post`` raises :class:`SlackRateCapped` and the tool turns that into an
   error the model reads. Better to refuse loudly inside the cycle than to let
@@ -22,8 +29,9 @@ Three properties shape the code more than the API does:
   the ones behind it.
 
 Status transitions are deliberately best-effort: ``set_status`` logs and
-swallows. A wrong dot in the sidebar must never take down a cycle that
-otherwise worked.
+swallows, and falls back from ``agents.sessions.*`` to the older
+``assistant.threads.*`` calls, which is all this workspace's app is scoped for.
+A wrong dot in the sidebar must never take down a cycle that otherwise worked.
 """
 
 from __future__ import annotations
@@ -48,6 +56,13 @@ MAX_PER_HOUR = 20
 WINDOW_S = 3600.0
 BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
 NOTE_SENDER = "filip"
+CHAT_TOPIC = "chat"
+SUGGESTED_PROMPTS = [
+    {"title": "Status", "message": "Vad jobbar du med just nu?"},
+    {"title": "El", "message": "Hur mycket el producerar vi just nu?"},
+]
+# The legacy assistant.threads.* surface only knows two dots: thinking, or none.
+_LEGACY_STATUS = {"processing": "is thinking\u2026", "active": "", "closed": ""}
 
 
 class SlackRateCapped(Exception):
@@ -106,9 +121,22 @@ class SlackOut:
         """Post without touching the rate cap. Returns the ts, or ``"queued"``."""
         sessions = self._read_sessions()
         session = sessions.get(topic)
+        # No thread of its own yet, but Filip has an assistant thread open:
+        # speak there rather than opening a ghost thread he never sees.
+        chat = sessions.get(CHAT_TOPIC) if session is None else None
+        chat_thread_ts = chat.get("thread_ts") if isinstance(chat, dict) else None
+        if not chat_thread_ts:
+            chat, chat_thread_ts = None, None
+        if chat is not None and topic != CHAT_TOPIC:
+            text = f"*{topic}* {text}"
         try:
-            channel = await self._open_dm()
-            thread_ts = session["thread_ts"] if session else None
+            # A session records the channel it lives in; the assistant thread
+            # is not always in the DM we would open ourselves.
+            channel = str((chat or session or {}).get("channel") or "") or await self._open_dm()
+            if chat is not None:
+                thread_ts: str | None = str(chat_thread_ts)
+            else:
+                thread_ts = session["thread_ts"] if session else None
             response = await self._retry(
                 self.client.chat_postMessage,
                 channel=channel,
@@ -124,16 +152,25 @@ class SlackOut:
         if session is not None:
             return ts
 
+        if chat is not None:
+            # The reply went into the assistant thread Filip is looking at.
+            # Remember the topic as an alias onto that same thread so later
+            # posts about it land in the same conversation -- and leave the
+            # thread's own title and dot alone, since Slack owns those.
+            sessions[topic] = {
+                "thread_ts": str(chat_thread_ts),
+                "channel": channel,
+                "status": "active",
+            }
+            self._write_sessions(sessions)
+            return ts
+
         # A brand new topic: name the session after it and light the dot, so
         # the thread is recognisable in the sidebar before the reply lands.
         sessions[topic] = {"thread_ts": ts, "channel": channel, "status": "processing"}
         self._write_sessions(sessions)
-        await self._session_call(
-            "agents.sessions.rename", channel_id=channel, thread_ts=ts, title=topic
-        )
-        await self._session_call(
-            "agents.sessions.setStatus", channel_id=channel, thread_ts=ts, status="processing"
-        )
+        await self.rename_session(channel, ts, topic)
+        await self.set_session_status(channel, ts, "processing")
         return ts
 
     async def flush_queue(self) -> int:
@@ -212,17 +249,56 @@ class SlackOut:
         if not channel or not thread_ts:
             log.warning("[slack] session for topic %r is malformed: %r", topic, session)
             return
-        await self._session_call(
-            "agents.sessions.setStatus",
-            channel_id=channel,
-            thread_ts=thread_ts,
-            status=status,
-        )
+        await self.set_session_status(str(channel), str(thread_ts), status)
         session["status"] = status
         self._write_sessions(sessions)
 
     async def close(self, topic: str) -> None:
         await self.set_status(topic, "closed")
+
+    # -- the assistant thread -------------------------------------------
+
+    def bind_chat(self, channel: str, thread_ts: str) -> None:
+        """Point the ``chat`` session at the assistant thread Filip is in.
+
+        Overwritten every time, so the newest thread is always where the
+        conversation goes; an older one stays readable but stops receiving.
+        """
+        if not channel or not thread_ts:
+            return
+        sessions = self._read_sessions()
+        current = sessions.get(CHAT_TOPIC)
+        if isinstance(current, dict) and current.get("thread_ts") == thread_ts:
+            return
+        sessions[CHAT_TOPIC] = {
+            "thread_ts": str(thread_ts),
+            "channel": str(channel),
+            "status": "active",
+        }
+        self._write_sessions(sessions)
+
+    # -- session chrome ---------------------------------------------------
+
+    async def rename_session(self, channel: str, thread_ts: str, title: str) -> None:
+        """Title a thread, falling back to the pre-agents API."""
+        await self._chrome_call(
+            "agents.sessions.rename",
+            {"channel_id": channel, "thread_ts": thread_ts, "title": title},
+            "assistant.threads.setTitle",
+            {"channel_id": channel, "thread_ts": thread_ts, "title": title},
+        )
+
+    async def set_session_status(self, channel: str, thread_ts: str, status: Status) -> None:
+        await self._chrome_call(
+            "agents.sessions.setStatus",
+            {"channel_id": channel, "thread_ts": thread_ts, "status": status},
+            "assistant.threads.setStatus",
+            {
+                "channel_id": channel,
+                "thread_ts": thread_ts,
+                "status": _LEGACY_STATUS.get(status, ""),
+            },
+        )
 
     # -- internals -----------------------------------------------------
 
@@ -258,12 +334,29 @@ class SlackOut:
                 await self.sleep(backoff)
         raise last  # type: ignore[misc]
 
-    async def _session_call(self, method: str, **payload: Any) -> None:
-        """Agent-session calls are cosmetic; a failure must not break a post."""
+    async def _chrome_call(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        fallback: str,
+        fallback_payload: dict[str, Any],
+    ) -> None:
+        """Title/status calls are cosmetic; a failure must not break a post.
+
+        This workspace's app has no ``agents.sessions.*`` scope, so the modern
+        call fails on every post. The pre-agents ``assistant.threads.*`` pair
+        does the same job, and neither is worth a traceback: the Slack error
+        string is the whole diagnosis, and a stack per post buries the log.
+        """
         try:
             await self.client.api_call(method, json=payload)
-        except Exception:
-            log.warning("[slack] %s failed", method, exc_info=True)
+            return
+        except Exception as exc:  # noqa: BLE001 - cosmetic; any failure must leave the post alone
+            log.info("[slack] %s failed (%s), trying %s", method, _slack_error(exc), fallback)
+        try:
+            await self.client.api_call(fallback, json=fallback_payload)
+        except Exception as exc:  # noqa: BLE001 - cosmetic; any failure must leave the post alone
+            log.info("[slack] %s failed (%s)", fallback, _slack_error(exc))
 
     def _enqueue(self, topic: str, text: str) -> None:
         """Write one queued post under a name that cannot collide.
@@ -342,7 +435,7 @@ class SlackIn:
         self.app.event("app_home_opened")(self.on_ignored)
         self.app.event("agent_session_title_changed")(self.on_ignored)
         # Slack's Agents pane sends these when Filip opens or re-points it.
-        self.app.event("assistant_thread_started")(self.on_ignored)
+        self.app.event("assistant_thread_started")(self.on_thread_started)
         self.app.event("assistant_thread_context_changed")(self.on_ignored)
 
     async def on_message(self, event: dict, ack: Ack = None) -> None:
@@ -380,7 +473,16 @@ class SlackIn:
             )
             return
 
-        topic = self.out.topic_for_thread(str(event.get("thread_ts") or ""))
+        thread_ts = str(event.get("thread_ts") or "")
+        topic = self.out.topic_for_thread(thread_ts)
+        if thread_ts:
+            # In the agent UI every message Filip types is a reply inside his
+            # assistant thread. Binding here -- not only on the started event --
+            # is what keeps replies landing in the thread he is looking at
+            # after a restart, when the started event is long gone.
+            self.out.bind_chat(channel=str(event.get("channel") or ""), thread_ts=thread_ts)
+            if topic is None:
+                topic = CHAT_TOPIC
         log.info("[slack] note from filip (%d chars, topic=%s)", len(body), topic)
         if topic is not None:
             body = f"topic: {topic}\n{body}"
@@ -411,6 +513,30 @@ class SlackIn:
         self.brain.drop_note(NOTE_SENDER, f"Filip stopped {topic}")
         await self.out.close(topic)
         self.wake("brain")
+
+    async def on_thread_started(self, event: dict, ack: Ack = None) -> None:
+        """Filip opened a new assistant thread: that is where we now talk."""
+        await _ack(ack)
+        thread = event.get("assistant_thread") or {}
+        if thread.get("user_id") != self.user_id:
+            log.info("[slack] assistant thread for another user, ignoring")
+            return
+        channel = str(thread.get("channel_id") or "")
+        thread_ts = str(thread.get("thread_ts") or "")
+        self.out.bind_chat(channel=channel, thread_ts=thread_ts)
+        # Prompt chips are pure decoration; a workspace without the scope must
+        # not lose the binding above over them.
+        try:
+            await self.out.client.api_call(
+                "assistant.threads.setSuggestedPrompts",
+                json={
+                    "channel_id": channel,
+                    "thread_ts": thread_ts,
+                    "prompts": SUGGESTED_PROMPTS,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - chips are decoration; keep the binding
+            log.info("[slack] setSuggestedPrompts failed (%s)", _slack_error(exc))
 
     async def on_ignored(self, event: dict, ack: Ack = None) -> None:
         await _ack(ack)
@@ -443,6 +569,20 @@ async def start_slack(
 async def _ack(ack: Ack) -> None:
     if ack is not None:
         await ack()
+
+
+def _slack_error(exc: Exception) -> str:
+    """The Slack ``error`` string if this is a SlackApiError, else the message.
+
+    ``SlackApiError`` carries the useful part in ``response["error"]``; its
+    ``str()`` is a paragraph of the whole HTTP body.
+    """
+    response = getattr(exc, "response", None)
+    try:
+        error = response["error"] if response is not None else None
+    except (TypeError, KeyError):
+        error = None
+    return str(error or exc)
 
 
 def _atomic_write(path: Path, body: str) -> None:

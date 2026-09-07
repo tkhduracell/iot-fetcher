@@ -381,12 +381,13 @@ async def test_a_dm_inside_a_topic_thread_is_tagged_with_the_topic(slack_in, app
     assert brain_dir.unread_notes()[0].body == "topic: pool\nturn it up"
 
 
-async def test_a_dm_in_an_unknown_thread_is_left_untagged(slack_in, app, brain_dir):
+async def test_a_dm_in_an_unknown_thread_is_tagged_as_chat(slack_in, app, brain_dir):
+    """Unknown means the assistant thread: in the agent UI there is no other kind."""
     await app.handlers["message"](
         {"channel_type": "im", "user": USER, "text": "hi", "thread_ts": "9.9"}, _ack
     )
 
-    assert brain_dir.unread_notes()[0].body == "hi"
+    assert brain_dir.unread_notes()[0].body == "topic: chat\nhi"
 
 
 @pytest.mark.parametrize(
@@ -776,3 +777,206 @@ async def test_queued_count_counts_what_slack_would_not_take(brain_dir, moving_c
     assert await down.post("pool", "second") == "queued"
 
     assert down.queued_count() == 2
+
+
+# -- the assistant thread ------------------------------------------------
+
+
+async def test_a_dm_in_the_assistant_thread_binds_chat_and_tags_the_note(
+    slack_in, app, out, brain_dir
+):
+    await app.handlers["message"](
+        {
+            "channel_type": "im",
+            "user": USER,
+            "text": "hur mar poolen?",
+            "channel": "D9",
+            "thread_ts": "5.5",
+        },
+        _ack,
+    )
+
+    assert out.sessions()["chat"] == {"thread_ts": "5.5", "channel": "D9", "status": "active"}
+    assert brain_dir.unread_notes()[0].body == "topic: chat\nhur mar poolen?"
+
+
+async def test_a_dm_in_a_known_topic_thread_keeps_its_own_topic_tag(slack_in, app, out, brain_dir):
+    """Binding the chat session must not relabel a thread we already own."""
+    await out.post("pool", "the pool is cold")
+
+    await app.handlers["message"](
+        {
+            "channel_type": "im",
+            "user": USER,
+            "text": "turn it up",
+            "channel": "D1",
+            "thread_ts": "1.1",
+        },
+        _ack,
+    )
+
+    assert brain_dir.unread_notes()[0].body == "topic: pool\nturn it up"
+
+
+async def test_a_top_level_dm_binds_nothing(slack_in, app, out, brain_dir):
+    await app.handlers["message"](
+        {"channel_type": "im", "user": USER, "text": "hi", "channel": "D1"}, _ack
+    )
+
+    assert "chat" not in out.sessions()
+    assert brain_dir.unread_notes()[0].body == "hi"
+
+
+async def test_assistant_thread_started_binds_chat_and_suggests_prompts(slack_in, app, out, client):
+    await app.handlers["assistant_thread_started"](
+        {
+            "type": "assistant_thread_started",
+            "assistant_thread": {"channel_id": "D7", "thread_ts": "8.8", "user_id": USER},
+        },
+        _ack,
+    )
+
+    assert out.sessions()["chat"] == {"thread_ts": "8.8", "channel": "D7", "status": "active"}
+    prompts = client.methods("assistant.threads.setSuggestedPrompts")
+    assert len(prompts) == 1
+    assert prompts[0]["channel_id"] == "D7"
+    assert prompts[0]["thread_ts"] == "8.8"
+    assert [p["title"] for p in prompts[0]["prompts"]] == ["Status", "El"]
+
+
+async def test_assistant_thread_started_for_another_user_is_ignored(slack_in, app, out, client):
+    await app.handlers["assistant_thread_started"](
+        {"assistant_thread": {"channel_id": "D7", "thread_ts": "8.8", "user_id": "U-stranger"}},
+        _ack,
+    )
+
+    assert out.sessions() == {}
+    assert client.methods("assistant.threads.setSuggestedPrompts") == []
+
+
+async def test_a_failing_setSuggestedPrompts_still_leaves_the_binding(slack_in, app, out):
+    out.client.fail_methods = frozenset({"assistant.threads.setSuggestedPrompts"})
+
+    await app.handlers["assistant_thread_started"](
+        {"assistant_thread": {"channel_id": "D7", "thread_ts": "8.8", "user_id": USER}}, _ack
+    )
+
+    assert out.sessions()["chat"]["thread_ts"] == "8.8"
+
+
+async def test_a_new_topic_replies_inside_the_open_assistant_thread(out, client, brain_dir):
+    out.bind_chat(channel="D7", thread_ts="8.8")
+
+    ts = await out.post("solar", "vi producerar 4 kW")
+
+    assert client.methods("chat_postMessage") == [
+        {"channel": "D7", "text": "*solar* vi producerar 4 kW", "thread_ts": "8.8"}
+    ]
+    # No ghost thread: the topic is an alias onto the thread Filip is reading,
+    # and Slack owns that thread's title, so we do not rename it.
+    assert out.sessions()["solar"] == {"thread_ts": "8.8", "channel": "D7", "status": "active"}
+    assert client.methods("agents.sessions.rename") == []
+    assert ts == "1.1"
+
+
+async def test_a_second_post_reuses_the_alias_without_reprefixing(out, client):
+    out.bind_chat(channel="D7", thread_ts="8.8")
+    await out.post("solar", "first")
+
+    await out.post("solar", "second")
+
+    assert [k["text"] for k in client.methods("chat_postMessage")] == [
+        "*solar* first",
+        "second",
+    ]
+    assert [k["thread_ts"] for k in client.methods("chat_postMessage")] == ["8.8", "8.8"]
+
+
+async def test_posting_to_chat_itself_carries_no_label(out, client):
+    out.bind_chat(channel="D7", thread_ts="8.8")
+
+    await out.post("chat", "hej")
+
+    assert client.methods("chat_postMessage") == [
+        {"channel": "D7", "text": "hej", "thread_ts": "8.8"}
+    ]
+
+
+async def test_bind_chat_repoints_to_the_newest_thread(out, client):
+    out.bind_chat(channel="D7", thread_ts="8.8")
+    out.bind_chat(channel="D7", thread_ts="9.9")
+
+    await out.post("solar", "hello")
+
+    assert client.methods("chat_postMessage")[0]["thread_ts"] == "9.9"
+
+
+# -- session chrome falls back to the pre-agents API ---------------------
+
+
+class NoAgentsClient(FakeClient):
+    """This workspace's app: every ``agents.*`` call is refused."""
+
+    async def api_call(self, api_method: str, **kwargs):
+        if api_method.startswith("agents."):
+            self.calls.append((api_method, kwargs.get("json", {})))
+            raise SlackError(f"{api_method}: missing_scope")
+        return await super().api_call(api_method, **kwargs)
+
+
+async def test_rename_falls_back_to_assistant_threads_set_title(brain_dir, moving_clock):
+    client = NoAgentsClient()
+    out = SlackOut(client, USER, brain_dir, moving_clock)
+
+    await out.post("pool", "the pool is cold")
+
+    assert client.methods("agents.sessions.rename") == [
+        {"channel_id": "D1", "thread_ts": "1.1", "title": "pool"}
+    ]
+    assert client.methods("assistant.threads.setTitle") == [
+        {"channel_id": "D1", "thread_ts": "1.1", "title": "pool"}
+    ]
+    assert client.methods("assistant.threads.setStatus") == [
+        {"channel_id": "D1", "thread_ts": "1.1", "status": "is thinking…"}
+    ]
+
+
+async def test_set_status_falls_back_and_clears_the_dot_when_active(brain_dir, moving_clock):
+    client = NoAgentsClient()
+    out = SlackOut(client, USER, brain_dir, moving_clock)
+    await out.post("pool", "hello")
+
+    await out.close("pool")
+
+    assert client.methods("assistant.threads.setStatus")[-1] == {
+        "channel_id": "D1",
+        "thread_ts": "1.1",
+        "status": "",
+    }
+    assert json.loads((brain_dir.root / "sessions.json").read_text())["pool"]["status"] == "closed"
+
+
+async def test_a_refused_agents_call_is_logged_without_a_traceback(
+    brain_dir, moving_clock, caplog
+):
+    """A stack per post buries the log; the Slack error string is the diagnosis."""
+    client = NoAgentsClient()
+    out = SlackOut(client, USER, brain_dir, moving_clock)
+
+    with caplog.at_level(logging.INFO, logger="ai_brain.slack_io"):
+        await out.post("pool", "hello")
+
+    assert "missing_scope" in "\n".join(caplog.messages)
+    assert not any(record.exc_info for record in caplog.records)
+
+
+async def test_both_title_calls_failing_does_not_break_the_post(brain_dir, moving_clock):
+    class NothingWorks(NoAgentsClient):
+        async def api_call(self, api_method: str, **kwargs):
+            self.calls.append((api_method, kwargs.get("json", {})))
+            raise SlackError(f"{api_method}: nope")
+
+    client = NothingWorks()
+    out = SlackOut(client, USER, brain_dir, moving_clock)
+
+    assert await out.post("pool", "hello") == "1.1"
