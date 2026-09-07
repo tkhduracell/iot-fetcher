@@ -7,7 +7,11 @@ def test_defaults_from_empty_env():
     s = load_settings({})
     assert s.memory_root == Path("/memory")
     assert s.seed_root == DEFAULT_SEED_ROOT
-    assert s.llm_chain == ["gemini:gemini-3.8-flash", "gemini:gemini-3.5-flash-lite"]
+    assert s.llm_chain == [
+        "gemini:gemini-3.8-flash",
+        "gemini:gemini-3.5-flash-lite",
+        "ollama:llama3.2:3b",
+    ]
     assert s.experts == []
     assert s.brain_heartbeat_s == 30 * 60
     assert s.expert_heartbeat_s == 120 * 60
@@ -69,7 +73,7 @@ def test_default_chain_entries_are_all_provider_qualified():
     for entry in DEFAULT_LLM_CHAIN.split(","):
         provider, sep, model = entry.partition(":")
         assert sep == ":"
-        assert provider == "gemini"
+        assert provider in ("gemini", "ollama")
         assert model
 
 

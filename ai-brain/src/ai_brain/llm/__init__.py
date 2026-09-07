@@ -52,7 +52,7 @@ TIMEOUT_CHARGE_TOKENS = 4000
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
 # cycle, and so the two lists cannot drift apart.
-PROVIDER_PREFIXES: frozenset[str] = frozenset({"gemini", "fake"})
+PROVIDER_PREFIXES: frozenset[str] = frozenset({"gemini", "ollama", "fake"})
 
 
 @dataclass(frozen=True)
@@ -155,6 +155,11 @@ class ProviderChain:
                 from ai_brain.llm.gemini import GeminiProvider
 
                 providers.append(GeminiProvider(model, settings.gemini_api_key))
+            elif name == "ollama":
+                # Imported lazily to match the gemini branch above.
+                from ai_brain.llm.ollama import OllamaProvider
+
+                providers.append(OllamaProvider(model, settings.ollama_url))
             elif name == "fake":
                 from ai_brain.llm.fake import FakeProvider
 

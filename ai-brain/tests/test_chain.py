@@ -259,9 +259,9 @@ def test_from_settings_builds_keys_in_order(tmp_path, monkeypatch):
 
 
 def test_from_settings_rejects_unknown_provider(tmp_path):
-    settings = load_settings({"LLM_CHAIN": "ollama:llama3"})
-    ledger, _ = make_ledger(tmp_path, ["ollama:llama3"])
-    with pytest.raises(ValueError, match="provider 'ollama' not implemented"):
+    settings = load_settings({"LLM_CHAIN": "openai:gpt-4"})
+    ledger, _ = make_ledger(tmp_path, ["openai:gpt-4"])
+    with pytest.raises(ValueError, match="provider 'openai' not implemented"):
         ProviderChain.from_settings(settings, ledger)
 
 
@@ -326,12 +326,24 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
             self.model = model
             self.api_key = api_key
 
-    stub = types.ModuleType("ai_brain.llm.gemini")
-    stub.GeminiProvider = StubGemini
-    monkeypatch.setitem(sys.modules, "ai_brain.llm.gemini", stub)
+    class StubOllama:
+        def __init__(self, model, base_url):
+            self.key = f"ollama:{model}"
+            self.model = model
+            self.base_url = base_url
+
+    gemini_stub = types.ModuleType("ai_brain.llm.gemini")
+    gemini_stub.GeminiProvider = StubGemini
+    monkeypatch.setitem(sys.modules, "ai_brain.llm.gemini", gemini_stub)
+
+    ollama_stub = types.ModuleType("ai_brain.llm.ollama")
+    ollama_stub.OllamaProvider = StubOllama
+    monkeypatch.setitem(sys.modules, "ai_brain.llm.ollama", ollama_stub)
 
     env = parse_env_file(ENV_EXAMPLE)
-    assert env["LLM_CHAIN"] == "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite"
+    assert env["LLM_CHAIN"] == (
+        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
+    )
 
     settings = load_settings({**env, "GEMINI_API_KEY": "k"})
     ledger, _ = make_ledger(tmp_path, settings.llm_chain)
@@ -340,6 +352,7 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
     assert [p.key for p in chain.providers] == [
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
+        "ollama:llama3.2:3b",
     ]
 
 
