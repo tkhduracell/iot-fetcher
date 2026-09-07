@@ -16,7 +16,12 @@ from ai_brain.llm import (
     Usage,
 )
 from ai_brain.llm.fake import FakeProvider
-from ai_brain.loop import MAX_TOOL_RESULT_CHARS, AgentLoop, CycleResult
+from ai_brain.loop import (
+    CYCLE_INSTRUCTIONS,
+    MAX_TOOL_RESULT_CHARS,
+    AgentLoop,
+    CycleResult,
+)
 from ai_brain.tools import Tool, ToolContext, ToolRegistry
 from ai_brain.tools.memory_tools import register_memory_tools
 from ai_brain.tools.slack_tools import register_slack_tools
@@ -412,19 +417,49 @@ async def test_pause_file_skips_the_provider_entirely(make_loop, brain_dir, tmp_
     assert "[paused]" in brain_dir.journal_text(1)
 
 
-async def test_a_note_survives_a_failed_cycle(make_loop, brain_dir):
-    """A cycle that never saw the note must not silently swallow it."""
-    brain_dir.drop_note("energy", "important")
+async def test_a_note_survives_a_budgetless_cycle(make_loop, brain_dir):
+    """A cycle that never reached the model must not archive the note unseen."""
+    brain_dir.drop_note("filip", "when is the pool warm enough?")
     loop, _ = make_loop([], raises=ChainExhausted(retry_at=None))
 
-    await loop.run_cycle()
+    result = await loop.run_cycle()
 
-    # The brief says mark_done always runs; the note is archived, not lost.
+    assert result.status == "no_budget"
+    assert result.rounds == 0
+    # The model never saw it, so it stays in the inbox for the next cycle.
+    assert [n.body for n in brain_dir.unread_notes()] == ["when is the pool warm enough?"]
+    assert list(brain_dir.done_dir.glob("*.md")) == []
+    assert "(1 notes left unread)" in _last_journal_line(brain_dir)
+
+
+async def test_a_note_survives_a_paused_cycle(make_loop, brain_dir, tmp_path):
+    """PAUSE means no provider call at all, so the inbox is untouched."""
+    pause = tmp_path / "PAUSE"
+    pause.write_text("stop", encoding="utf-8")
+    brain_dir.drop_note("filip", "are you awake?")
+    loop, _ = make_loop([reply("should not run")], pause_file=pause)
+
+    result = await loop.run_cycle()
+
+    assert result.status == "paused"
+    assert [n.body for n in brain_dir.unread_notes()] == ["are you awake?"]
+    assert list(brain_dir.done_dir.glob("*.md")) == []
+    assert "(1 notes left unread)" in _last_journal_line(brain_dir)
+
+
+async def test_a_note_is_archived_after_a_successful_cycle(make_loop, brain_dir):
+    brain_dir.drop_note("filip", "important")
+    loop, _ = make_loop([reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))])
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
     assert brain_dir.unread_notes() == []
     assert [p.name for p in brain_dir.done_dir.glob("*.md")]
+    assert "left unread" not in _last_journal_line(brain_dir)
 
 
-async def test_a_note_survives_a_timed_out_cycle(make_loop, brain_dir, monkeypatch):
+async def test_a_note_is_archived_after_a_timed_out_cycle(make_loop, brain_dir, monkeypatch):
     brain_dir.drop_note("energy", "important")
     loop, provider = make_loop([reply("never arrives")], call_timeout_s=0.01)
 
@@ -441,7 +476,8 @@ async def test_a_note_survives_a_timed_out_cycle(make_loop, brain_dir, monkeypat
     assert _last_journal_line(brain_dir).startswith("[timeout]")
 
 
-async def test_a_note_survives_an_errored_cycle(make_loop, brain_dir):
+async def test_a_note_is_archived_after_an_errored_cycle(make_loop, brain_dir):
+    """The model saw the inbox, so a note that broke the cycle must not loop."""
     brain_dir.drop_note("energy", "important")
     loop, _ = make_loop([ProviderError("schema is wrong", kind="bad_request")])
 
@@ -450,6 +486,34 @@ async def test_a_note_survives_an_errored_cycle(make_loop, brain_dir):
     assert brain_dir.unread_notes() == []
     assert [p.name for p in brain_dir.done_dir.glob("*.md")]
     assert _last_journal_line(brain_dir).startswith("[error]")
+
+
+# -- answering Filip ---------------------------------------------------
+
+
+def test_cycle_instructions_tell_the_model_to_answer_filip_on_slack():
+    """The journal is not a reply: Filip only ever reads Slack."""
+    assert "slack_post" in CYCLE_INSTRUCTIONS
+    assert "cannot see your journal" in CYCLE_INSTRUCTIONS
+
+
+async def test_a_note_from_filip_reaches_the_model_with_the_slack_guidance(make_loop, brain_dir):
+    brain_dir.drop_note("filip", "topic: pool -- how warm is it?")
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))]
+    )
+
+    await loop.run_cycle()
+
+    system = provider.calls[0][0][0].content
+    assert "from: filip" in system
+    assert "how warm is it?" in system
+    assert "slack_post" in system
+
+
+def test_slack_post_says_it_is_the_only_way_filip_hears_from_you(registry):
+    spec = next(s for s in registry.specs_for("brain") if s.name == "slack_post")
+    assert "only way" in spec.description
 
 
 # -- slack topic status ------------------------------------------------
@@ -581,7 +645,7 @@ async def test_messages_are_rebuilt_each_cycle(make_loop):
 
 
 async def test_a_cancelled_cycle_still_closes_its_books(make_loop, brain_dir):
-    """Shutdown cancels the task mid-call; the note must not be left in limbo."""
+    """Shutdown cancels the task mid-call; the books close, the note waits."""
     brain_dir.drop_note("energy", "mid-flight")
     loop, provider = make_loop([reply("never arrives")])
 
@@ -599,7 +663,9 @@ async def test_a_cancelled_cycle_still_closes_its_books(make_loop, brain_dir):
         await task
 
     assert "[cancelled]" in brain_dir.journal_text(1)
-    assert brain_dir.unread_notes() == []
+    # Cut short mid-thought: the note may never have been acted on, so the
+    # next run must see it again rather than find it archived.
+    assert [n.body for n in brain_dir.unread_notes()] == ["mid-flight"]
 
 
 async def test_cancellation_does_not_lose_the_journal_when_slack_is_wired(make_loop, brain_dir):

@@ -8,8 +8,9 @@ too, but a generous multiple of the per-call one (``CHAIN_TIMEOUT_FACTOR``):
 it is the backstop for a chain that hangs somewhere other than a provider
 call, not a second budget that could starve the fallback provider of its own
 timeout. Whatever happens, the cycle ends the same way --
-a journal line, the inbox archived, the per-cycle scratch state cleared -- so
-the next cycle starts from a clean, readable state.
+a journal line, the inbox archived if the model actually read it, the
+per-cycle scratch state cleared -- so the next cycle starts from a clean,
+readable state.
 
 Failure is expected rather than exceptional here. A drained quota is not a
 crash but a reason to sleep until the ledger says otherwise; a timeout, a bad
@@ -63,7 +64,22 @@ CYCLE_INSTRUCTIONS = """\
 # This cycle
 You are running one think cycle. Use tools to look at the world and to record
 what you learn. End by calling end_cycle with a short summary and the number of
-minutes until you want waking again."""
+minutes until you want waking again.
+
+# Answering Filip
+Messages in the Inbox section from `filip` are Filip talking to you on Slack.
+He cannot see your journal. If a note asks you something or expects a reply,
+answer it with slack_post in the same cycle: reuse the `topic:` given in the
+note if present, otherwise choose a short new topic (2-4 words) that names the
+subject. Keep replies short and concrete. Notes from other senders (experts,
+approvals, ledger) are internal and need no Slack reply unless Filip would want
+to know."""
+
+# A cycle that never reached the model has not consumed its inbox, so the notes
+# stay unread for the next one. The statuses that *did* reach the model archive
+# them even when the cycle went badly: a note the model choked on would
+# otherwise be re-read forever, poisoning every future cycle.
+CONSUMED_STATUSES: frozenset[str] = frozenset({"ok", "max_rounds", "error", "timeout"})
 
 COMPACTION_INSTRUCTIONS = """\
 Your memory is large: merge related facts, delete outdated ones by overwriting,
@@ -184,8 +200,11 @@ class AgentLoop:
         next_wake_s = self.heartbeat_s
 
         # Paused: no provider call at all, but the cycle still closes its books
-        # so the pause shows up in the journal like any other outcome.
+        # so the pause shows up in the journal like any other outcome. The
+        # inbox is read first purely so the journal line can say how many
+        # notes are still waiting; ``paused`` never marks them done.
         if self.pause_file.exists():
+            notes = self.memory.unread_notes()
             return await self._finish("paused", "", 0, "paused by PAUSE file", next_wake_s, notes)
 
         try:
@@ -272,8 +291,9 @@ class AgentLoop:
                 next_wake_s = max(MIN_BACKOFF_S, int(exc.retry_at - self.clock()))
             log.warning("[%s] no budget; sleeping %ds", self.name, next_wake_s)
         except asyncio.CancelledError:
-            # Shutdown. Still close the books, then let the cancel propagate:
-            # the inbox must not keep notes this cycle already consumed.
+            # Shutdown. Still close the books, then let the cancel propagate.
+            # The inbox is left unread: a cycle cut short mid-thought may never
+            # have acted on the notes, and the next run must see them again.
             status, summary = "cancelled", "cancelled mid-cycle"
             raise
         except Exception as exc:  # a bad cycle must not take the process with it
@@ -356,9 +376,14 @@ class AgentLoop:
         notes: list[Note],
     ) -> CycleResult:
         """Close the books on a cycle, however it went."""
+        consumed = status in CONSUMED_STATUSES
         try:
-            self.memory.append_journal(f"[{status}] model={model or '-'} rounds={rounds} {summary}")
-            self.memory.mark_done(notes)
+            line = f"[{status}] model={model or '-'} rounds={rounds} {summary}"
+            if not consumed and notes:
+                line += f" ({len(notes)} notes left unread)"
+            self.memory.append_journal(line)
+            if consumed:
+                self.memory.mark_done(notes)
             self.memory.purge_done()
             # Before the next cycle reads needs_compaction(): pruning here is
             # what keeps the journal rule clearable rather than a one-way latch.

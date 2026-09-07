@@ -47,7 +47,9 @@ def register_slack_tools(registry: ToolRegistry) -> None:
             spec=ToolSpec(
                 name="slack_post",
                 description=(
-                    "Say something to Filip in Slack. Each topic is its own threaded "
+                    "Say something to Filip in Slack. This is the only way Filip hears "
+                    "from you -- your journal and facts are private, he never reads them, "
+                    "so answering him there reaches nobody. Each topic is its own threaded "
                     "conversation, so reuse the same short topic for follow-ups and pick a "
                     "new one for a new subject. Capped per hour -- speak when it matters."
                 ),
