@@ -308,11 +308,13 @@ async def test_set_status_swallows_api_errors(brain_dir, moving_clock):
 
 
 class FakeApprovals:
-    def __init__(self) -> None:
+    def __init__(self, resolves: object = None) -> None:
         self.reactions: list[tuple[str, str]] = []
+        self.resolves = resolves
 
-    async def on_reaction(self, slack_ts: str, emoji: str) -> None:
+    async def on_reaction(self, slack_ts: str, emoji: str):
         self.reactions.append((slack_ts, emoji))
+        return self.resolves
 
 
 class FakeApp:
@@ -584,3 +586,125 @@ async def test_experts_may_not_use_the_slack_tools(registry, make_ctx, out):
     result = await call(registry, ctx, "slack_post", topic="pool", text="hello")
 
     assert "policy" in result["error"]
+
+
+# -- rate cap is charged on delivery, not on attempt --------------------
+
+
+async def test_a_queued_post_does_not_spend_the_hourly_budget(brain_dir, moving_clock):
+    """An outage must not burn the hour on posts that only reached the outbox."""
+    failing = FakeClient(fail_methods=frozenset({"chat_postMessage"}))
+    out = SlackOut(failing, USER, brain_dir, moving_clock, max_per_hour=2, sleep=_no_sleep)
+
+    assert await out.post("pool", "a") == "queued"
+    assert await out.post("pool", "b") == "queued"
+    assert out._recent == []
+
+    # Slack comes back: the budget is intact, so both queued posts can go.
+    working = FakeClient()
+    flusher = SlackOut(working, USER, brain_dir, moving_clock, max_per_hour=2, sleep=_no_sleep)
+    assert await flusher.flush_queue() == 2
+
+
+async def test_a_successful_post_charges_the_cap_exactly_once(out):
+    await out.post("pool", "a")
+    assert len(out._recent) == 1
+
+
+async def test_a_flushed_message_charges_the_cap_exactly_once(client, brain_dir, moving_clock):
+    queue = brain_dir.outbox_dir / "slack"
+    queue.mkdir(parents=True, exist_ok=True)
+    (queue / "20260901.json").write_text(json.dumps({"topic": "pool", "text": "m"}))
+
+    out = SlackOut(client, USER, brain_dir, moving_clock, sleep=_no_sleep)
+    assert await out.flush_queue() == 1
+    assert len(out._recent) == 1
+
+
+# -- flush order ---------------------------------------------------------
+
+
+async def test_a_failed_flush_keeps_the_original_file_and_its_place(brain_dir, moving_clock):
+    """Delete-after-success: the file that failed keeps its name, so its order."""
+    failing = FakeClient(fail_methods=frozenset({"chat_postMessage"}))
+    queue = brain_dir.outbox_dir / "slack"
+    queue.mkdir(parents=True, exist_ok=True)
+    (queue / "20260901-0.json").write_text(json.dumps({"topic": "pool", "text": "first"}))
+
+    out = SlackOut(failing, USER, brain_dir, moving_clock, sleep=_no_sleep)
+    assert await out.flush_queue() == 0
+
+    assert [p.name for p in sorted(queue.glob("*.json"))] == ["20260901-0.json"]
+    assert json.loads((queue / "20260901-0.json").read_text()) == {
+        "topic": "pool",
+        "text": "first",
+    }
+
+
+async def test_a_failed_flush_stops_before_the_next_message(brain_dir, moving_clock):
+    """Sending the second while the first is stuck would reorder the conversation."""
+
+    class FirstFails(FakeClient):
+        async def chat_postMessage(self, **kwargs):
+            if kwargs.get("text") == "first":
+                self.calls.append(("chat_postMessage", kwargs))
+                raise SlackError("stuck")
+            return await super().chat_postMessage(**kwargs)
+
+    queue = brain_dir.outbox_dir / "slack"
+    queue.mkdir(parents=True, exist_ok=True)
+    (queue / "20260901-0.json").write_text(json.dumps({"topic": "pool", "text": "first"}))
+    (queue / "20260901-1.json").write_text(json.dumps({"topic": "pool", "text": "second"}))
+
+    client = FirstFails()
+    out = SlackOut(client, USER, brain_dir, moving_clock, sleep=_no_sleep)
+    assert await out.flush_queue() == 0
+
+    assert [k["text"] for k in client.methods("chat_postMessage")] == ["first"] * 3
+    assert [p.name for p in sorted(queue.glob("*.json"))] == [
+        "20260901-0.json",
+        "20260901-1.json",
+    ]
+
+
+# -- malformed sessions.json --------------------------------------------
+
+
+async def test_set_status_skips_a_session_missing_its_channel(out, client, brain_dir):
+    (brain_dir.root / "sessions.json").write_text(json.dumps({"pool": {"thread_ts": "1.1"}}))
+
+    await out.set_status("pool", "active")
+
+    assert client.methods("agents.sessions.setStatus") == []
+
+
+async def test_set_status_skips_a_session_that_is_not_an_object(out, client, brain_dir):
+    (brain_dir.root / "sessions.json").write_text(json.dumps({"pool": "1.1"}))
+
+    await out.close("pool")
+
+    assert client.methods("agents.sessions.setStatus") == []
+
+
+# -- a resolved proposal wakes the brain ---------------------------------
+
+
+async def test_a_reaction_that_resolves_a_proposal_wakes_the_brain(
+    app, brain_dir, out, woken
+):
+    listener = SlackIn(app, brain_dir, FakeApprovals(resolves=object()), out, woken.append, USER)
+    listener.register()
+
+    await app.handlers["reaction_added"](
+        {"user": USER, "reaction": "white_check_mark", "item": {"ts": "7.7"}}, _ack
+    )
+
+    assert woken == ["brain"]
+
+
+async def test_a_reaction_matching_no_proposal_does_not_wake(slack_in, app, woken):
+    await app.handlers["reaction_added"](
+        {"user": USER, "reaction": "white_check_mark", "item": {"ts": "7.7"}}, _ack
+    )
+
+    assert woken == []

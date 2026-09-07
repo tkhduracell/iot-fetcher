@@ -17,7 +17,9 @@ Three properties shape the code more than the API does:
   a confused loop fill a DM.
 * **Slack being down is not a reason to lose a thought.** A call that fails
   three retries is written to ``outbox/slack/<ts>.json`` and ``post`` returns
-  ``"queued"``; ``flush_queue`` drains it oldest-first on a later cycle.
+  ``"queued"``; ``flush_queue`` drains it oldest-first on a later cycle, and
+  stops at the first message Slack still will not take rather than reordering
+  the ones behind it.
 
 Status transitions are deliberately best-effort: ``set_status`` logs and
 swallows. A wrong dot in the sidebar must never take down a cycle that
@@ -86,12 +88,22 @@ class SlackOut:
     # -- posting -------------------------------------------------------
 
     async def post(self, topic: str, text: str) -> str:
-        """Post ``text`` under ``topic``. Returns the ts, or ``"queued"``."""
-        self._charge_rate()
-        return await self._post_charged(topic, text)
+        """Post ``text`` under ``topic``. Returns the ts, or ``"queued"``.
 
-    async def _post_charged(self, topic: str, text: str) -> str:
-        """The body of ``post``, for callers that already paid the rate cap."""
+        The cap is *checked* before the send and *charged* after it succeeds.
+        Charging up front means a Slack outage burns the hour's whole budget on
+        posts that only reached the retry queue, and the flush that finally
+        delivers them is then refused for being over cap -- the outage would
+        silence the brain for an hour after Slack came back.
+        """
+        self._check_cap()
+        ts = await self._send(topic, text)
+        if ts != "queued":
+            self._charge_rate()
+        return ts
+
+    async def _send(self, topic: str, text: str) -> str:
+        """Post without touching the rate cap. Returns the ts, or ``"queued"``."""
         sessions = self._read_sessions()
         session = sessions.get(topic)
         try:
@@ -125,7 +137,15 @@ class SlackOut:
         return ts
 
     async def flush_queue(self) -> int:
-        """Re-send everything the outbox holds, oldest first. Returns the count."""
+        """Re-send everything the outbox holds, oldest first. Returns the count.
+
+        Send first, delete after. Deleting first and letting a failing send
+        re-queue would keep the message but lose its place in the queue, so an
+        outage silently reorders a conversation. Leaving the file untouched
+        until Slack has taken it keeps the order, and keeps the message even if
+        the process dies between the two. A failure stops the flush: everything
+        behind it is newer, and sending it now would reorder just as badly.
+        """
         if not self.queue_dir.exists():
             return 0
         sent = 0
@@ -138,21 +158,23 @@ class SlackOut:
                 path.unlink()
                 continue
 
-            # The rate cap is checked before the file is touched: out of budget
-            # means leave this and everything after it for the next cycle,
-            # rather than burning through the queue.
+            # Out of budget means leave this and everything after it for the
+            # next cycle, rather than burning through the queue.
             try:
-                self._charge_rate()
+                self._check_cap()
             except SlackRateCapped:
                 log.info("[slack] rate cap reached while flushing, %s left queued", path.name)
                 break
 
-            # Now the original can go: a failing post() writes its own fresh
-            # copy, so removing it first is what keeps this from being either
-            # duplicated or -- if post() rewrote this very name -- deleted.
+            if await self._send(topic, text) == "queued":
+                # ``_send`` wrote a fresh copy on its way out; drop that and
+                # keep the original, which still holds this message's place.
+                self._drop_newest_queued()
+                log.info("[slack] flush stopped at %s, still queued", path.name)
+                break
+            self._charge_rate()
             path.unlink()
-            if await self._post_charged(topic, text) != "queued":
-                sent += 1
+            sent += 1
         return sent
 
     # -- status --------------------------------------------------------
@@ -163,13 +185,20 @@ class SlackOut:
             return
         sessions = self._read_sessions()
         session = sessions.get(topic)
-        if session is None:
+        if not isinstance(session, dict):
             log.info("[slack] no session for topic %r, not setting status", topic)
+            return
+        # sessions.json is on a bind mount and has been hand-edited before; a
+        # half-written entry must not raise out of a best-effort status call.
+        channel = session.get("channel")
+        thread_ts = session.get("thread_ts")
+        if not channel or not thread_ts:
+            log.warning("[slack] session for topic %r is malformed: %r", topic, session)
             return
         await self._session_call(
             "agents.sessions.setStatus",
-            channel_id=session["channel"],
-            thread_ts=session["thread_ts"],
+            channel_id=channel,
+            thread_ts=thread_ts,
             status=status,
         )
         session["status"] = status
@@ -180,14 +209,18 @@ class SlackOut:
 
     # -- internals -----------------------------------------------------
 
-    def _charge_rate(self) -> None:
+    def _check_cap(self) -> None:
+        """Raise if another post would exceed the cap. Charges nothing."""
         now = self.clock().timestamp()
         self._recent = [t for t in self._recent if now - t < WINDOW_S]
         if len(self._recent) >= self.max_per_hour:
             raise SlackRateCapped(
                 f"slack post cap reached ({self.max_per_hour}/h); try again next cycle"
             )
-        self._recent.append(now)
+
+    def _charge_rate(self) -> None:
+        """Record one delivered post against the hour's budget."""
+        self._recent.append(self.clock().timestamp())
 
     async def _open_dm(self) -> str:
         if self._channel is None:
@@ -232,6 +265,14 @@ class SlackOut:
                 break
             counter += 1
         _atomic_write(path, json.dumps({"topic": topic, "text": text}))
+
+    def _drop_newest_queued(self) -> None:
+        """Remove the copy ``_send`` just enqueued, keeping the original."""
+        if not self.queue_dir.exists():
+            return
+        files = sorted(self.queue_dir.glob("*.json"))
+        if files:
+            files[-1].unlink(missing_ok=True)
 
     def _read_sessions(self) -> dict[str, dict[str, str]]:
         if not self.sessions_path.exists():
@@ -305,9 +346,15 @@ class SlackIn:
         await _ack(ack)
         if event.get("user") != self.user_id:
             return
-        await self.approvals.on_reaction(
-            str(event.get("item", {}).get("ts", "")), str(event.get("reaction", ""))
+        item = event.get("item")
+        proposal = await self.approvals.on_reaction(
+            str((item or {}).get("ts", "")), str(event.get("reaction", ""))
         )
+        # A reaction resolves a proposal and drops a note about it. Without a
+        # wake the brain reads that note whenever its heartbeat next comes
+        # round -- up to half an hour after Filip approved something.
+        if proposal is not None:
+            self.wake("brain")
 
     async def on_session_stopped(self, event: dict, ack: Ack = None) -> None:
         await _ack(ack)

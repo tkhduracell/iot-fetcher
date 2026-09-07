@@ -16,7 +16,9 @@ Two properties are worth stating because the tests pin them:
   the second caller finds a non-pending file and stops. A process that dies
   mid-execution leaves the proposal ``executing`` forever, which is the safe
   side of the trade -- it is neither retried nor re-approved by a later
-  reaction, and it never shows up as pending again.
+  reaction, and it never shows up as pending again. ``recover_stale`` closes
+  those out at startup as ``failed``, so the agent at least learns the
+  outcome is unknown instead of never hearing back.
 * **Nothing silent.** Every terminal outcome -- executed, failed, rejected,
   blocked, expired -- drops a note into the brain's inbox, so the agent reads
   what became of its request on its next cycle instead of assuming.
@@ -76,6 +78,8 @@ STATUSES = frozenset(
 # What ``SlackOut.post`` returns when the post failed and was queued instead.
 QUEUED = "queued"
 UNREACHABLE = "slack unavailable, not proposed"
+NOT_CONFIGURED = "slack not configured, not proposed"
+RESTARTED = "process restarted mid-execution; outcome unknown"
 
 APPROVE_EMOJI = "white_check_mark"
 REJECT_EMOJI = "x"
@@ -138,21 +142,38 @@ class Approvals:
             created=_iso(now),
             status=PENDING,
         )
-        if self.on_message is not None:
+        # No Slack at all is the same situation as a Slack that would not take
+        # the message: there is no ✅ for anyone to press, so storing this as
+        # pending would leave a request that can only ever expire, 24h later,
+        # in silence.
+        if self.on_message is None:
+            self._finish(proposal, "failed", NOT_CONFIGURED)
+            raise RuntimeError("slack not configured")
+
+        try:
             posted = await self.on_message(
                 topic,
                 f"Proposal {proposal.id} ({kind}): {reason}\n\n"
                 f"```{json.dumps(payload)}```\n"
                 "React ✅ to approve, ❌ to reject.",
             )
-            # "queued" means Slack was down and the text went to the retry
-            # outbox; an empty return means a client that posted nothing at
-            # all. Neither leaves a message anyone can react to, so neither may
-            # become a pending proposal.
-            if not posted or posted == QUEUED:
-                self._finish(proposal, "failed", UNREACHABLE)
-                raise RuntimeError("slack unavailable")
-            proposal.slack_ts = posted
+        except Exception as exc:
+            # Anything the poster raises -- the hourly cap, a transport error,
+            # a client that is not connected -- means nothing was posted. The
+            # exception type is deliberately not inspected: approvals must not
+            # import the Slack layer to name its errors.
+            log.warning("[approvals] posting %s failed: %s", proposal.id, exc)
+            self._finish(proposal, "failed", f"slack unavailable: {exc}")
+            raise RuntimeError("slack unavailable") from exc
+
+        # "queued" means Slack was down and the text went to the retry
+        # outbox; an empty return means a client that posted nothing at
+        # all. Neither leaves a message anyone can react to, so neither may
+        # become a pending proposal.
+        if not posted or posted == QUEUED:
+            self._finish(proposal, "failed", UNREACHABLE)
+            raise RuntimeError("slack unavailable")
+        proposal.slack_ts = posted
         self._store(proposal)
         return proposal
 
@@ -172,6 +193,11 @@ class Approvals:
             proposal = self._find_pending(slack_ts)
             if proposal is None:
                 return None
+            # ``expire`` only runs every ten minutes, so a proposal can still be
+            # pending well past its deadline. A reaction on a 25-hour-old
+            # request must not run it: the world it was reasoned about is gone.
+            if self.clock() - _parse(proposal.created) > EXPIRE_AFTER:
+                return self._finish(proposal, "expired", "no reaction within 24h")
             if emoji == REJECT_EMOJI:
                 return self._finish(proposal, "rejected", "")
             # Claim it on disk before awaiting anything, so a concurrent
@@ -200,6 +226,23 @@ class Approvals:
             if _parse(proposal.created) < cutoff:
                 expired.append(self._finish(proposal, "expired", "no reaction within 24h"))
         return expired
+
+    # -- startup -------------------------------------------------------
+
+    def recover_stale(self) -> list[Proposal]:
+        """Close out proposals left ``executing`` by a process that died.
+
+        ``executing`` is written before the executor is awaited, so a restart
+        mid-execution leaves that status on disk forever: the proposal is not
+        pending, so nothing expires it, and no note ever says what became of
+        it. The outcome genuinely is unknown -- the Sonos may well have spoken
+        -- so say exactly that rather than retrying it.
+        """
+        stale = [p for p in self._all() if p.status == EXECUTING]
+        for proposal in stale:
+            log.warning("[approvals] %s was executing at startup; marking failed", proposal.id)
+            self._finish(proposal, "failed", RESTARTED)
+        return stale
 
     # -- reading -------------------------------------------------------
 
@@ -252,6 +295,9 @@ class Approvals:
         proposal.status = status
         proposal.result = result
         self._store(proposal)
+        # Terminal: nothing will contend for this id again, and _locks would
+        # otherwise grow by one entry per proposal for the life of the process.
+        self._locks.pop(proposal.id, None)
         self.brain.drop_note(NOTE_SENDER, f"proposal {proposal.id} {status}: {result}")
         return proposal
 

@@ -70,6 +70,33 @@ def notes(brain_dir) -> list[str]:
     return [n.body for n in brain_dir.unread_notes() if n.sender == "approvals"]
 
 
+async def call_propose(brain_dir, approvals) -> str:
+    """Drive the propose *tool*, so the caller sees what the model would."""
+    registry = ToolRegistry()
+    register_propose_tool(registry)
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories={"brain": brain_dir},
+        settings=load_settings({}),
+        wake=lambda name: None,
+        extras={"approvals": approvals},
+    )
+    return await registry.dispatch(
+        ctx,
+        ToolCall(
+            id="1",
+            name="propose",
+            args={
+                "kind": "sonos_say",
+                "payload": {"text": "hi"},
+                "reason": "why",
+                "topic": "#home",
+            },
+        ),
+    )
+
+
 # --- propose --------------------------------------------------------------
 
 
@@ -115,11 +142,49 @@ async def test_propose_posts_to_slack_and_keeps_the_ts(approvals, slack):
     assert "React" in text
 
 
-async def test_propose_without_slack_leaves_the_ts_empty(brain_dir, executors, moving_clock):
+async def test_propose_without_slack_is_failed_not_pending(brain_dir, executors, moving_clock):
+    """No Slack means no ✅ to press, so nothing may be left waiting for one."""
     approvals = Approvals(brain_dir, executors, moving_clock)
-    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
-    assert p.slack_ts == ""
-    assert approvals.pending()[0].slack_ts == ""
+    with pytest.raises(RuntimeError, match="slack not configured"):
+        await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    assert approvals.pending() == []
+    stored = [json.loads(f.read_text()) for f in brain_dir.outbox_dir.glob("*.json")]
+    assert [(s["status"], s["result"]) for s in stored] == [
+        ("failed", "slack not configured, not proposed")
+    ]
+    assert notes(brain_dir) == [
+        f"proposal {stored[0]['id']} failed: slack not configured, not proposed"
+    ]
+
+
+async def test_propose_reports_a_raising_poster_as_failed(brain_dir, executors, moving_clock):
+    """The hourly cap raises out of post(); that is a failed proposal, not a pending one."""
+
+    async def capped(topic: str, text: str) -> str:
+        raise RuntimeError("slack post cap reached (20/h); try again next cycle")
+
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=capped)
+    with pytest.raises(RuntimeError, match="slack unavailable"):
+        await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    assert approvals.pending() == []
+    stored = [json.loads(f.read_text()) for f in brain_dir.outbox_dir.glob("*.json")]
+    assert stored[0]["status"] == "failed"
+    assert "cap reached" in stored[0]["result"]
+    assert notes(brain_dir) == [f"proposal {stored[0]['id']} failed: {stored[0]['result']}"]
+
+
+async def test_a_capped_post_makes_the_propose_tool_return_an_error(
+    brain_dir, executors, moving_clock
+):
+    async def capped(topic: str, text: str) -> str:
+        raise RuntimeError("slack post cap reached (20/h)")
+
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=capped)
+    out = json.loads(await call_propose(brain_dir, approvals))
+    assert "slack unavailable" in out["error"]
+    assert approvals.pending() == []
 
 
 async def test_propose_rejects_an_unknown_kind(approvals):
@@ -212,7 +277,7 @@ async def test_an_executing_proposal_is_not_pending_and_ignores_a_reaction(
     brain_dir, executors, moving_clock
 ):
     """A process that died mid-execution leaves ``executing`` behind for good."""
-    approvals = Approvals(brain_dir, executors, moving_clock)
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=FakeSlack())
     p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
     p.slack_ts = "ts-9"
     p.status = "executing"
@@ -534,3 +599,77 @@ def test_proposal_round_trips_through_json():
         status="pending",
     )
     assert Proposal(**json.loads(json.dumps(p.__dict__))) == p
+
+
+# --- expiry on reaction ---------------------------------------------------
+
+
+async def test_a_reaction_after_the_deadline_expires_instead_of_executing(
+    brain_dir, executors, moving_clock, slack
+):
+    """expire() runs every ten minutes, so a stale pending proposal is reachable."""
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=slack)
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    moving_clock.state["now"] = START + timedelta(hours=25)
+    done = await approvals.on_reaction(p.slack_ts, "white_check_mark")
+
+    assert done.status == "expired"
+    assert executors.calls == []
+    assert approvals.pending() == []
+    assert notes(brain_dir) == [f"proposal {p.id} expired: no reaction within 24h"]
+
+
+async def test_a_reaction_just_inside_the_deadline_still_executes(
+    brain_dir, executors, moving_clock, slack
+):
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=slack)
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+
+    moving_clock.state["now"] = START + timedelta(hours=23, minutes=59)
+    done = await approvals.on_reaction(p.slack_ts, "white_check_mark")
+
+    assert done.status == "executed"
+    assert executors.calls == [("sonos_say", {"text": "hi"})]
+
+
+# --- startup recovery -----------------------------------------------------
+
+
+async def test_recover_stale_finishes_a_proposal_left_executing(
+    brain_dir, executors, moving_clock, slack
+):
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=slack)
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    p.status = "executing"
+    approvals._store(p)
+
+    recovered = Approvals(brain_dir, executors, moving_clock, on_message=slack)
+    assert [r.id for r in recovered.recover_stale()] == [p.id]
+
+    stored = json.loads((brain_dir.outbox_dir / f"{p.id}.json").read_text())
+    assert stored["status"] == "failed"
+    assert stored["result"] == "process restarted mid-execution; outcome unknown"
+    assert notes(brain_dir) == [f"proposal {p.id} failed: {stored['result']}"]
+    assert executors.calls == []
+
+
+async def test_recover_stale_leaves_pending_and_terminal_proposals_alone(
+    brain_dir, executors, moving_clock, slack
+):
+    approvals = Approvals(brain_dir, executors, moving_clock, on_message=slack)
+    live = await approvals.propose("sonos_say", {"text": "a"}, "why", "#home")
+    done = await approvals.propose("sonos_say", {"text": "b"}, "why", "#home")
+    await approvals.on_reaction(done.slack_ts, "x")
+
+    assert Approvals(brain_dir, executors, moving_clock).recover_stale() == []
+    assert [p.id for p in approvals.pending()] == [live.id]
+
+
+# --- lock bookkeeping -----------------------------------------------------
+
+
+async def test_finishing_a_proposal_drops_its_lock(approvals):
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    await approvals.on_reaction(p.slack_ts, "white_check_mark")
+    assert approvals._locks == {}
