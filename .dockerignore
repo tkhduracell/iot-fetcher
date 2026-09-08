@@ -3,6 +3,7 @@
 **/.classpath
 **/.dockerignore
 **/.env
+**/.env.*
 **/.git
 **/.gitignore
 **/.project
@@ -22,6 +23,14 @@
 **/obj
 **/secrets.dev.yaml
 **/values.dev.yaml
+**/*service-account*.json
+**/*service_account*.json
+**/credentials.json
+**/client_secret*.json
+**/*.pem
+**/*.key
+**/*.p12
+**/.netrc
 LICENSE
 README.md
 
