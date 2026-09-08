@@ -9,6 +9,11 @@ import {
   parseJournalLine,
   quotaLabel,
   quotaTone,
+  shortModel,
+  quotaCounts,
+  compactTokens,
+  formatUptime,
+  truncate,
 } from './aiBrain';
 
 function stubFetch(resp: { ok?: boolean; status?: number; body?: unknown; text?: string }) {
@@ -196,5 +201,99 @@ describe('quotaTone', () => {
 
   it('treats a non-numeric fraction as spent rather than full', () => {
     expect(quotaTone(NaN)).toBe('error');
+  });
+});
+
+describe('shortModel', () => {
+  it('strips the provider prefix and its repeat inside the model name', () => {
+    expect(shortModel('gemini:gemini-2.5-flash-lite')).toBe('2.5-flash-lite');
+    expect(shortModel('gemini:gemini-3.5-flash')).toBe('3.5-flash');
+  });
+
+  it('strips a bare provider prefix when the model does not repeat it', () => {
+    expect(shortModel('gemini:models/foo')).toBe('models/foo');
+    expect(shortModel('openai:gpt-4o')).toBe('gpt-4o');
+  });
+
+  it('leaves an unqualified key alone', () => {
+    expect(shortModel('flash-lite')).toBe('flash-lite');
+  });
+
+  it('keeps the provider when nothing follows the colon', () => {
+    expect(shortModel('gemini:')).toBe('gemini');
+  });
+
+  it('shows a dash for a missing key rather than an empty cell', () => {
+    expect(shortModel('')).toBe('–');
+    expect(shortModel(null)).toBe('–');
+    expect(shortModel(undefined)).toBe('–');
+  });
+});
+
+describe('quotaCounts', () => {
+  it('renders used over limit', () => {
+    expect(quotaCounts(11, 200)).toBe('11/200');
+  });
+
+  it('shows a dash denominator when the limit is unknown', () => {
+    expect(quotaCounts(11, 0)).toBe('11/–');
+    expect(quotaCounts(11, undefined as unknown as number)).toBe('11/–');
+  });
+
+  it('treats a missing numerator as zero', () => {
+    expect(quotaCounts(undefined as unknown as number, 200)).toBe('0/200');
+  });
+});
+
+describe('compactTokens', () => {
+  it.each([
+    [0, '0'],
+    [999, '999'],
+    [1000, '1k'],
+    [74_321, '74k'],
+    [1_500_000, '1.5M'],
+    [2_000_000, '2M'],
+  ])('formats %i as %s', (n, expected) => {
+    expect(compactTokens(n)).toBe(expected);
+  });
+
+  it('does not crash on a non-numeric spend', () => {
+    expect(compactTokens(NaN)).toBe('0');
+  });
+});
+
+describe('formatUptime', () => {
+  it.each([
+    [90, '1 min'],
+    [3600 * 5 + 120, '5 h 2 min'],
+    [86400 * 2 + 3600 * 3, '2 d 3 h'],
+  ])('formats %i as %s', (s, expected) => {
+    expect(formatUptime(s)).toBe(expected);
+  });
+
+  it('shows a dash rather than a negative uptime', () => {
+    expect(formatUptime(-1)).toBe('–');
+    expect(formatUptime(NaN)).toBe('–');
+  });
+});
+
+describe('truncate', () => {
+  it('leaves a short value untouched and unflagged', () => {
+    expect(truncate('hello', 160)).toEqual({ text: 'hello', truncated: false });
+  });
+
+  it('cuts at the limit and flags that there is more', () => {
+    const long = 'x'.repeat(200);
+    const out = truncate(long, 160);
+    expect(out.text).toHaveLength(160);
+    expect(out.truncated).toBe(true);
+  });
+
+  it('does not flag a value exactly at the limit', () => {
+    expect(truncate('y'.repeat(160), 160).truncated).toBe(false);
+  });
+
+  it('defaults to 160 characters', () => {
+    expect(truncate('z'.repeat(300)).text).toHaveLength(160);
   });
 });

@@ -40,7 +40,7 @@ export type LastCycle = {
 
 export type AgentSummary = {
   name: string;
-  priority: number;
+  priority: 'brain' | 'expert';
   heartbeat_s: number;
   last_cycle: LastCycle | null;
   last_cycle_at: number | null;
@@ -291,4 +291,59 @@ export function quotaTone(remaining: number): 'ok' | 'warn' | 'error' {
   if (remaining > 0.4) return 'ok';
   if (remaining > 0.15) return 'warn';
   return 'error';
+}
+
+/** Short display name for a ledger key.
+ *
+ *  Keys arrive provider-qualified ("gemini:gemini-2.5-flash-lite"), which eats
+ *  the whole width of a compact quota row on a phone. Strip the provider and
+ *  the redundant repeat of it in the model name, then drop the "N." major
+ *  version prefix that every model in a chain shares. */
+export function shortModel(key: string | null | undefined): string {
+  if (!key) return '–';
+  let s = String(key).trim();
+  const colon = s.indexOf(':');
+  if (colon !== -1) {
+    const provider = s.slice(0, colon);
+    let rest = s.slice(colon + 1);
+    if (provider && rest.toLowerCase().startsWith(`${provider.toLowerCase()}-`)) {
+      rest = rest.slice(provider.length + 1);
+    }
+    s = rest || provider;
+  }
+  return s || '–';
+}
+
+/** "11/200" — the compact counts beside a single quota bar. */
+export function quotaCounts(used: number, limit: number): string {
+  const u = Number.isFinite(used) ? used : 0;
+  if (!Number.isFinite(limit) || limit <= 0) return `${u}/–`;
+  return `${u}/${limit}`;
+}
+
+/** "74k tok" — token spend at a glance, without a denominator. */
+export function compactTokens(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  const v = Math.round(n);
+  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (Math.abs(v) >= 1_000) return `${Math.round(v / 1000)}k`;
+  return String(v);
+}
+
+/** "5 h" / "2 d 3 h" — uptime, short enough for a pill. */
+export function formatUptime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '–';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d} d ${h} h`;
+  if (h > 0) return `${h} h ${m} min`;
+  return `${m} min`;
+}
+
+/** Truncate a tool argument for the trace, keeping whether it was cut. */
+export function truncate(value: string, max: number = 160): { text: string; truncated: boolean } {
+  const s = value ?? '';
+  if (s.length <= max) return { text: s, truncated: false };
+  return { text: s.slice(0, max), truncated: true };
 }

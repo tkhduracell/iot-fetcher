@@ -12,11 +12,11 @@ import { fetchAgents, fetchStatus } from '../lib/aiBrain';
 const POLL_MS = 10_000;
 
 const Skeleton: React.FC = () => (
-  <div className="flex flex-col gap-1.5">
+  <div className="flex flex-col gap-2">
     {[0, 1, 2].map((i) => (
       <div
         key={i}
-        className="h-24 rounded-md bg-blue-100 dark:bg-blue-900 ring-1 ring-blue-200 dark:ring-blue-800 animate-pulse"
+        className="h-16 rounded-md bg-blue-100 dark:bg-blue-900 ring-1 ring-blue-200 dark:ring-blue-800 animate-pulse"
       />
     ))}
   </div>
@@ -80,59 +80,76 @@ export default function AiBrainPage() {
   const loading = status.initialLoading || agents.initialLoading;
 
   return (
-    <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 relative p-1">
-      <div className="flex items-center flex-wrap gap-2 mx-1 my-2">
-        <Link
-          href="/"
-          aria-label="Tillbaka till översikten"
-          className="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow flex items-center justify-center transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
-        </Link>
-        <h1 className="text-3xl font-semibold tracking-tight">🧠 AI-hjärna</h1>
-        <div className="flex grow gap-1.5 justify-end items-center">
-          {updatedAt && (
-            <span className="text-xs text-gray-600 dark:text-gray-400 tabular-nums">
-              uppdaterad {updatedAt.toLocaleTimeString('sv-SE')}
-            </span>
-          )}
-          <RefreshBadge />
-        </div>
-      </div>
+    <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300 text-sm">
+      <div className="max-w-screen-2xl mx-auto px-1 sm:px-2 py-2 flex flex-col gap-2">
+        {/* One row at every width: the buttons keep their places and only the
+            "uppdaterad" stamp wraps under the title on a narrow phone. */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/"
+            aria-label="Tillbaka till översikten"
+            className="w-8 h-8 shrink-0 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow flex items-center justify-center transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
+            </svg>
+          </Link>
 
-      <div className="w-full py-0 flex flex-col gap-1.5">
+          <div className="grow min-w-0 flex flex-wrap items-baseline gap-x-2">
+            <h1 className="text-xl font-semibold tracking-tight truncate">🧠 AI-hjärna</h1>
+            {updatedAt && (
+              <span className="text-xs text-gray-600 dark:text-gray-400 tabular-nums ml-auto">
+                uppdaterad {updatedAt.toLocaleTimeString('sv-SE')}
+              </span>
+            )}
+          </div>
+
+          <div className="shrink-0">
+            <RefreshBadge />
+          </div>
+        </div>
+
         {error && <ErrorCard message={error.message} stale={Boolean(status.data || agents.data)} />}
 
         {loading && !status.data && !agents.data ? (
           <Skeleton />
         ) : (
-          <>
-            {status.data && <AiBrainSupervisor status={status.data} />}
+          <div className="flex flex-col lg:flex-row lg:items-start gap-2">
+            {/* Status strip and the agent grid share the narrow left rail on a
+                desktop; below lg they stack above the detail panel. */}
+            <div className="flex flex-col gap-2 lg:w-[22rem] lg:shrink-0">
+              {status.data && <AiBrainSupervisor status={status.data} />}
 
-            {agents.data && agentList.length === 0 && (
-              <Card>
-                <p className="text-xs text-gray-700 dark:text-gray-300">Inga agenter körs.</p>
-              </Card>
-            )}
+              {agents.data && agentList.length === 0 && (
+                <Card>
+                  <p className="text-xs text-gray-700 dark:text-gray-300">Inga agenter körs.</p>
+                </Card>
+              )}
 
-            {agentList.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                {agentList.map((agent) => (
-                  <AiBrainAgentCard
-                    key={agent.name}
-                    agent={agent}
-                    now={now}
-                    selected={agent.name === selected}
-                    onSelect={setSelected}
-                  />
-                ))}
-              </div>
-            )}
+              {agentList.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 lg:grid-cols-1 gap-2">
+                  {agentList.map((agent) => (
+                    <AiBrainAgentCard
+                      key={agent.name}
+                      agent={agent}
+                      now={now}
+                      selected={agent.name === selected}
+                      onSelect={setSelected}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
 
-            {selected && <AiBrainDetail agent={selected} now={now} />}
-          </>
+            <div className="grow min-w-0">
+              {selected && <AiBrainDetail agent={selected} now={now} />}
+            </div>
+          </div>
         )}
       </div>
     </div>
