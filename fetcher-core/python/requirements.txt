@@ -143,5 +143,5 @@ urllib3==2.7.0
     #   influxdb3-python
     #   plugp100
     #   requests
-yarl==1.23.0
+yarl==1.24.5
     # via aiohttp
