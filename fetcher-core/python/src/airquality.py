@@ -59,7 +59,7 @@ def _airquality():
     points = []
 
     # Extract AQI data
-    for index in json_data.get('indexes', []):
+    for index in json_data.get('indexes') or []:
         points.append(Point("air_quality")
                       .field("aqi", index['aqi'])
                       .field("dominant_pollutant",
@@ -67,7 +67,7 @@ def _airquality():
                       .time(json_data['dateTime']))
 
     # Extract pollutant concentration data
-    for pollutant in json_data.get('pollutants', []):
+    for pollutant in json_data.get('pollutants') or []:
         points.append(Point("air_quality_pollutants")
                       .tag("code", pollutant['displayName'])
                       .tag("name", pollutant['fullName'])

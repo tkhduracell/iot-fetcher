@@ -35,7 +35,7 @@ google-api-core==2.34.0
     # via
     #   google-cloud-core
     #   google-cloud-storage
-google-auth==2.56.3
+google-auth==2.57.1
     # via
     #   google-api-core
     #   google-cloud-core
@@ -48,7 +48,7 @@ google-crc32c==1.8.0
     # via
     #   google-cloud-storage
     #   google-resumable-media
-google-resumable-media==2.10.1
+google-resumable-media==2.10.2
     # via google-cloud-storage
 googleapis-common-protos==1.75.1
     # via google-api-core
@@ -94,9 +94,9 @@ propcache==0.5.2
     # via
     #   aiohttp
     #   yarl
-proto-plus==1.28.2
+proto-plus==1.28.4
     # via google-api-core
-protobuf==7.34.1
+protobuf==7.36.1
     # via
     #   google-api-core
     #   googleapis-common-protos
@@ -143,5 +143,5 @@ urllib3==2.7.0
     #   influxdb3-python
     #   plugp100
     #   requests
-yarl==1.23.0
+yarl==1.24.5
     # via aiohttp
