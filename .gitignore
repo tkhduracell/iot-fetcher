@@ -1,33 +1,69 @@
+# --- secrets: env files ----------------------------------------------------
+# Every service takes its config through an env file (see docker-compose.local.yml),
+# so ignore them everywhere and re-allow only the committed placeholder variants.
+# Add a new negation here if you ever commit another template-style file.
 .env
-.env.local
-.vscode
+.env.*
+!.env.template
+!.env.example
+!.env.test
 
-esp32-*/
-venv/
-pinout.png
+# --- secrets: cloud + service-account credentials --------------------------
+# gdrive-rag and ai-assistant both take a Google service-account JSON key
+# (GOOGLE_SERVICE_ACCOUNT / GOOGLE_SHEETS_SERVICE_ACCOUNT_KEY).
+*service-account*.json
+*service_account*.json
+*serviceaccount*.json
+client_secret*.json
+credentials.json
+gcloud-*.json
+gcp-*.json
+.aws/
+.gcloud/
 
-**/node_modules
-**/.next
-**/next-env.d.ts
-**/dev.log
-**/*.tsbuildinfo
+# --- secrets: keys, certs, tokens ------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+.netrc
+.htpasswd
+*token.json
+*.token
 
-/backup/
-*.tar
-*.pyc
-
-influx-backuper-*.json
-volumes/
-backup-dashboard/
-
+# --- service config holding live credentials -------------------------------
 victoria-metrics/auth.yml
-
 sonos-http-api/settings.json
 
+# --- editor / tooling ------------------------------------------------------
+.vscode
 .context/
 .claude/worktrees/
 # Playwright MCP page/console captures (can contain secrets)
 .playwright-mcp/
 
-# Playwright MCP page/console captures (can contain secrets)
-.playwright-mcp/
+# --- build output / deps ---------------------------------------------------
+**/node_modules
+**/.next
+**/next-env.d.ts
+**/dev.log
+**/*.tsbuildinfo
+venv/
+*.pyc
+
+# --- local data / backups --------------------------------------------------
+/backup/
+*.tar
+influx-backuper-*.json
+volumes/
+backup-dashboard/
+
+# --- misc ------------------------------------------------------------------
+esp32-*/
+pinout.png
