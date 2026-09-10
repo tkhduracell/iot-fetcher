@@ -36,8 +36,8 @@ def _sonos():
     points: List[Point] = []
     
     for zone in zones:
-        coordinator = zone.get('coordinator', {})
-        state = coordinator.get('state', {})
+        coordinator = zone.get('coordinator') or {}
+        state = coordinator.get('state') or {}
         room_name = coordinator.get('roomName', 'Unknown')
         playback_state = state.get('playbackState', 'STOPPED')
         
@@ -45,7 +45,7 @@ def _sonos():
         if playback_state != 'PLAYING':
             continue
         
-        current_track = state.get('currentTrack', {})
+        current_track = state.get('currentTrack') or {}
         artist = current_track.get('artist', '')
         title = current_track.get('title', '')
         volume = state.get('volume', 0)

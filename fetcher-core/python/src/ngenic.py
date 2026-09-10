@@ -57,7 +57,7 @@ def _get_last_ngenic_timestamp() -> Optional[datetime]:
             timeout=10,
         )
         data = resp.json()
-        results = data.get("data", {}).get("result", [])
+        results = (data.get("data") or {}).get("result") or []
         if not results:
             return None
         # One series per node — back-fill from the oldest, otherwise nodes
