@@ -141,7 +141,7 @@ def _login(session: requests.Session, api_base: str) -> tuple:
 
     code = result.get("code")
     if code in (100032, 100033):
-        captcha_data = result.get("data", {})
+        captcha_data = result.get("data") or {}
         if isinstance(captcha_data, str):
             captcha_data = json.loads(_decrypt(captcha_data, shared_key))
         captcha_id = captcha_data.get("captcha_id", "")
@@ -190,7 +190,7 @@ def _api_request(session: requests.Session, api_base: str, endpoint: str, token:
     if result.get("code") != 0:
         raise RuntimeError(f"Eufy API {endpoint} failed (code={result.get('code')}): {result.get('msg')}")
 
-    data = result.get("data", [])
+    data = result.get("data") or []
     if isinstance(data, str):
         data = json.loads(_decrypt(data, shared_key))
     return data

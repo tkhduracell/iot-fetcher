@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 from typing import List
 
 from plugp100.discovery import TapoDiscovery
@@ -8,23 +7,13 @@ from plugp100.common.credentials import AuthCredential
 from plugp100.errors import TapoException
 
 from influx import write_influx, Point
+from tapo_common import tapo_email, tapo_password, has_credentials
 
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
 
-def strip_quote(s: str) -> str:
-    if s.startswith('"') and s.endswith('"'):
-        return s[1:-1]
-    return s
-
-tapo_email = strip_quote(os.environ.get('TAPO_EMAIL', ''))
-tapo_password = strip_quote(os.environ.get('TAPO_PASSWORD', ''))
-
-
 def tapo():
-    if not tapo_email or not tapo_password:
-        logger.error(
-            "[tapo] TAPO_EMAIL and TAPO_PASSWORD environment variables must be set")
+    if not has_credentials():
         return
 
     try:
@@ -167,22 +156,11 @@ async def _tapo():
                 except:
                     pass
 
-            except TapoException as tapo_error:
-                logger.warning(f"[tapo] TAPO API error for device {device_name} at {device_ip}: {tapo_error}")
-                # Still add basic device presence metric
-                basic_point = Point("tapo_device") \
-                    .tag("device_mac", device_mac) \
-                    .tag("device_type", device_type) \
-                    .tag("device_model", device_model) \
-                    .tag("device_name", device_name) \
-                    .tag("device_alias", device_alias) \
-                    .tag("device_ip", device_ip) \
-                    .field("device_count", 1)
-                if device_id:
-                    basic_point = basic_point.tag("device_id", device_id)
-                points.append(basic_point)
             except Exception as device_error:
-                logger.warning(f"[tapo] Failed to get detailed info for device {device_name} at {device_ip}: {device_error}")
+                if isinstance(device_error, TapoException):
+                    logger.warning(f"[tapo] TAPO API error for device {device_name} at {device_ip}: {device_error}")
+                else:
+                    logger.warning(f"[tapo] Failed to get detailed info for device {device_name} at {device_ip}: {device_error}")
                 # Still add basic device presence metric
                 basic_point = Point("tapo_device") \
                     .tag("device_mac", device_mac) \

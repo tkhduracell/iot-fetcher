@@ -2,7 +2,6 @@ import asyncio
 import base64
 import binascii
 import logging
-import os
 import re
 import aiohttp
 from typing import List
@@ -13,6 +12,7 @@ from plugp100.common.credentials import AuthCredential
 from plugp100.errors import TapoException
 
 from influx import write_influx, Point
+from tapo_common import tapo_email, tapo_password, has_credentials
 
 # Configure module-specific logger
 logger = logging.getLogger(__name__)
@@ -22,11 +22,6 @@ BASE64_PATTERN = re.compile(r'^[A-Za-z0-9+/]*={0,2}$')
 
 # Regex pattern for verifying decoded string contains only printable ASCII characters
 PRINTABLE_PATTERN = re.compile(r'^[\x20-\x7E\s]+$')
-
-def strip_quote(s: str) -> str:
-    if s.startswith('"') and s.endswith('"'):
-        return s[1:-1]
-    return s
 
 def decode_if_base64(s: str) -> str:
     """
@@ -53,16 +48,10 @@ def decode_if_base64(s: str) -> str:
     except (binascii.Error, UnicodeDecodeError):
         return s
 
-tapo_email = strip_quote(os.environ.get('TAPO_EMAIL', ''))
-tapo_password = strip_quote(os.environ.get('TAPO_PASSWORD', ''))
-
-
 def tapo():
-    if not tapo_email or not tapo_password:
-        logger.error(
-            "[tapo] TAPO_EMAIL and TAPO_PASSWORD environment variables must be set")
+    if not has_credentials():
         return
-    
+
     try:
         asyncio.run(_tapo())
     except Exception as e:
@@ -166,23 +155,11 @@ async def _tapo():
                                 basic_point = basic_point.tag("device_id", device_id)
                             points.append(basic_point)
                                 
-                    except TapoException as tapo_error:
-                        logger.warning(f"[tapo_cloud] TAPO API error for device {device_name}: {tapo_error}")
-                        # Still add basic device presence metric
-                        basic_point = Point("tapo_cloud_device") \
-                            .tag("device_mac", device_mac) \
-                            .tag("device_type", device_type) \
-                            .tag("device_model", device_model) \
-                            .tag("device_name", device_name) \
-                            .tag("device_alias", device_alias) \
-                            .field("device_count", 1)
-                        if device_ip:
-                            basic_point = basic_point.tag("device_ip", device_ip)
-                        if device_id:
-                            basic_point = basic_point.tag("device_id", device_id)
-                        points.append(basic_point)
                     except Exception as device_error:
-                        logger.warning(f"[tapo_cloud] Failed to get detailed info for device {device_name}: {device_error}")
+                        if isinstance(device_error, TapoException):
+                            logger.warning(f"[tapo_cloud] TAPO API error for device {device_name}: {device_error}")
+                        else:
+                            logger.warning(f"[tapo_cloud] Failed to get detailed info for device {device_name}: {device_error}")
                         # Still add basic device presence metric
                         basic_point = Point("tapo_cloud_device") \
                             .tag("device_mac", device_mac) \
