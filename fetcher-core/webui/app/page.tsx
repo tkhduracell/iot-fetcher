@@ -49,7 +49,9 @@ export default function DashboardPage() {
           <NewsBriefingButton />
           <PomodoroButton />
           <RoborockCleanButton />
-          <AiBrainButton />
+          <div className="hidden">
+            <AiBrainButton />
+          </div>
           <RefreshBadge />
         </div>
       </div>
