@@ -12,7 +12,7 @@ def test_defaults_from_empty_env():
         "gemini:gemini-3.5-flash-lite",
         "ollama:llama3.2:3b",
     ]
-    assert s.experts == []
+    assert s.experts == ["energy", "health", "house-ops", "researcher"]
     assert s.brain_heartbeat_s == 30 * 60
     assert s.expert_heartbeat_s == 120 * 60
     assert s.vm_url == "http://database-auth:8427"
@@ -24,6 +24,18 @@ def test_defaults_from_empty_env():
     assert s.dry_run is False
     assert (s.rpm, s.tpm, s.rpd) == (8, 200000, 200)
     assert s.call_timeout_s == 60
+    assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
+
+
+def test_blank_experts_means_brain_only():
+    # Distinct from an absent EXPERTS, which seeds the full set: this is how a
+    # deployment cuts back to the brain alone.
+    assert load_settings({"EXPERTS": ""}).experts == []
+
+
+def test_effort_knobs_are_overridable():
+    s = load_settings({"CYCLE_MAX_ROUNDS": "4", "CYCLE_MAX_TOKENS": "1000", "GEMINI_THINKING_BUDGET": "0"})
+    assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
 
 
 def test_default_seed_root_is_the_shipped_seed_dir():

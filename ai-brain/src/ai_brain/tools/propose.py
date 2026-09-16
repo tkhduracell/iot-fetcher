@@ -55,7 +55,11 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                     "react in Slack, so this returns 'pending' -- never report the action as "
                     "done. The outcome arrives as an inbox note on a later cycle. "
                     "Kinds: sonos_say (payload {\"text\": ...}, speaks aloud, refused between "
-                    "22:00 and 07:00) and ha_todo_add (payload {\"item\": ...})."
+                    "22:00 and 07:00), ha_todo_add (payload {\"item\": ...}) and ha_service "
+                    "(payload {\"service\": \"light.turn_off\", \"entity_id\": \"light.kitchen\", "
+                    "optional \"data\": {\"brightness_pct\": 40}}) for lights, switches, scenes, "
+                    "scripts, covers, fans, climate and media players -- look the entity up with "
+                    "ha_state first, and expect anything outside that allowlist to be refused."
                 ),
                 parameters={
                     "type": "object",

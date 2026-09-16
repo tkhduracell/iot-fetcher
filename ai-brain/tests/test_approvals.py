@@ -574,7 +574,11 @@ async def test_propose_tool_requires_every_argument(registry, make_ctx):
 
 
 def test_kinds_matches_the_executor_surface():
-    assert KINDS == {"sonos_say": ("text",), "ha_todo_add": ("item",)}
+    assert KINDS == {
+        "sonos_say": ("text",),
+        "ha_todo_add": ("item",),
+        "ha_service": ("service", "entity_id"),
+    }
 
 
 def test_every_kind_requires_at_least_one_key():

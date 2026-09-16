@@ -18,6 +18,12 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # misconfiguration is invisible in both the logs and Grafana.
 DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
 
+# Every expert the image ships a persona for. Brain-only was the rollout
+# default while the loops were unproven; with them proven the useful default is
+# the whole set, and ``EXPERTS=`` (blank) is still how you cut back to the
+# brain alone -- a blank value is respected, only an absent one seeds this.
+DEFAULT_EXPERTS = "energy,health,house-ops,researcher"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -42,6 +48,9 @@ class Settings:
     slack_app_token: str
     slack_user_id: str
     dry_run: bool
+    max_rounds: int
+    max_tokens: int
+    thinking_budget: int
     rpm: int
     tpm: int
     rpd: int
@@ -89,7 +98,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         llm_chain=_dedupe(_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN)),
         gemini_api_key=get("GEMINI_API_KEY"),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
-        experts=_csv(get("EXPERTS")),
+        experts=_csv(get("EXPERTS", DEFAULT_EXPERTS)),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
         vm_url=get("VM_URL", "http://database-auth:8427"),
@@ -105,6 +114,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
         dry_run=get("DRY_RUN") == "1",
+        max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
+        max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
+        thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),
         rpm=get_int("RPM", 8),
         tpm=get_int("TPM", 200000),
         rpd=get_int("RPD", 200),

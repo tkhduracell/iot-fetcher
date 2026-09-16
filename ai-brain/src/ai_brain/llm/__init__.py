@@ -154,7 +154,13 @@ class ProviderChain:
                 # the concrete provider module or its API client.
                 from ai_brain.llm.gemini import GeminiProvider
 
-                providers.append(GeminiProvider(model, settings.gemini_api_key))
+                providers.append(
+                    GeminiProvider(
+                        model,
+                        settings.gemini_api_key,
+                        thinking_budget=settings.thinking_budget,
+                    )
+                )
             elif name == "ollama":
                 # Imported lazily to match the gemini branch above.
                 from ai_brain.llm.ollama import OllamaProvider

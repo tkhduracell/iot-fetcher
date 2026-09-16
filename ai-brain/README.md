@@ -85,7 +85,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
 | `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite` | `provider:model` entries tried in order until one answers. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
-| `EXPERTS` | *(empty)* | Which expert loops to start, from `energy`, `health`, `house-ops`, `researcher`. Empty means brain only — see [Rollout](#rollout). |
+| `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Set a shorter list, or a blank value for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
@@ -105,6 +105,9 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `TPM` | `200000` | Tokens per minute, per model key. |
 | `RPD` | `200` | Requests per day, per model key. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
+| `CYCLE_MAX_ROUNDS` | `16` | Tool rounds one cycle may take before the loop stops waiting for `end_cycle`. |
+| `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
+| `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
 
 ## Slack app setup
@@ -138,8 +141,8 @@ Bring it up deliberately. The whole point of the design is that it accumulates
 state, so it is much easier to start narrow than to unpick a bad first day.
 
 1. **Deploy paused, brain only.** Create the volume directory and drop the
-   pause file *before* the first start. `.env.example` already ships
-   `EXPERTS=` empty, so a straight copy gives you brain only:
+   pause file *before* the first start. Set `EXPERTS=` (blank) in `.env` for
+   this stage, so the first boots are brain only:
 
    ```sh
    mkdir -p volumes/ai-brain-memory
@@ -184,7 +187,8 @@ The brain never acts on the house directly. It calls `propose`, which writes
 DM. You react on that message:
 
 - ✅ (`:white_check_mark:`) — the executor runs. Currently `sonos_say`
-  (speaks in `SONOS_ROOM`) and `ha_todo_add` (appends to `HA_TODO_LIST`).
+  (speaks in `SONOS_ROOM`), `ha_todo_add` (appends to `HA_TODO_LIST`) and
+  `ha_service` (one Home Assistant service call on one entity).
 - ❌ (`:x:`) — rejected, nothing happens.
 - No reaction for 24 hours — expired.
 
@@ -223,6 +227,12 @@ every model key. Nothing calls a provider without asking it first.
   ledger thought was left — the API knows better than we do.
 - **A missing model (404)** disables that key for 24 hours, since a config
   typo will not fix itself by retrying.
+- **Effort costs requests.** Five loops and up to `CYCLE_MAX_ROUNDS` rounds per
+  cycle spend the free `RPD` well before the day is out. That is the design —
+  the ledger starves the experts first and the chain falls through to
+  flash-lite and then to the local ollama model, so the brain keeps thinking on
+  a drained budget. Lower `CYCLE_MAX_ROUNDS`, lengthen the heartbeats or shorten
+  `EXPERTS` if you would rather it stayed on the strong model all day.
 - **The day rolls at midnight US/Pacific**, which is when Google resets the
   free tier — not local midnight. The brain gets a `new day, budget restored`
   note in its inbox when it turns, so it can see the constraint lift. A corrupt ledger file is treated as "half

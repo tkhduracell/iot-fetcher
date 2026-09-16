@@ -113,6 +113,29 @@ def test_build_allows_a_gemini_entry_with_a_key(tmp_path):
     assert sorted(system.loops) == ["brain"]
 
 
+def test_build_passes_the_effort_knobs_to_every_loop(tmp_path):
+    settings = load_settings(
+        env(tmp_path, EXPERTS="energy", CYCLE_MAX_ROUNDS="21", CYCLE_MAX_TOKENS="1234")
+    )
+    system = build(settings, chain_factory=fake_chain)
+    assert [(loop.max_rounds, loop.max_tokens) for loop in system.loops.values()] == [
+        (21, 1234),
+        (21, 1234),
+    ]
+
+
+def test_build_starts_every_expert_by_default(tmp_path):
+    # The shared env() helper blanks EXPERTS; an absent one is the real default.
+    settings = load_settings({k: v for k, v in env(tmp_path).items() if k != "EXPERTS"})
+    assert sorted(build(settings, chain_factory=fake_chain).loops) == [
+        "brain",
+        "energy",
+        "health",
+        "house-ops",
+        "researcher",
+    ]
+
+
 def test_build_passes_the_call_timeout_to_every_loop(tmp_path):
     settings = load_settings(env(tmp_path, EXPERTS="energy", CALL_TIMEOUT_S="17"))
     system = build(settings, chain_factory=fake_chain)

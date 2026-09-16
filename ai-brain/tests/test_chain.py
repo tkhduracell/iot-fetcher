@@ -240,7 +240,7 @@ def test_from_settings_builds_keys_in_order(tmp_path, monkeypatch):
     # Task 4 supplies the real llm/gemini.py; from_settings imports it lazily,
     # so a stub module is enough to prove the parsing and ordering here.
     class StubGemini:
-        def __init__(self, model, api_key):
+        def __init__(self, model, api_key, thinking_budget=-1):
             self.key = f"gemini:{model}"
             self.model = model
             self.api_key = api_key
@@ -321,7 +321,7 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
     """
 
     class StubGemini:
-        def __init__(self, model, api_key):
+        def __init__(self, model, api_key, thinking_budget=-1):
             self.key = f"gemini:{model}"
             self.model = model
             self.api_key = api_key
@@ -356,9 +356,19 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
     ]
 
 
-def test_env_example_ships_experts_empty():
-    """Rollout step 1 says brain only; the file must agree with the README."""
-    assert parse_env_file(ENV_EXAMPLE)["EXPERTS"] == ""
+def test_env_example_ships_every_expert():
+    """The file must agree with the code default, which is all four loops."""
+    assert load_settings(parse_env_file(ENV_EXAMPLE)).experts == [
+        "energy",
+        "health",
+        "house-ops",
+        "researcher",
+    ]
+
+
+def test_env_example_effort_knobs_match_the_defaults():
+    s = load_settings(parse_env_file(ENV_EXAMPLE))
+    assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
 
 
 def test_env_example_call_timeout_matches_the_default():
@@ -428,7 +438,7 @@ async def test_a_slow_first_provider_does_not_starve_the_second(tmp_path):
 
 async def test_from_settings_takes_the_call_timeout_from_settings(tmp_path, monkeypatch):
     class StubGemini:
-        def __init__(self, model, api_key):
+        def __init__(self, model, api_key, thinking_budget=-1):
             self.key = f"gemini:{model}"
 
     stub = types.ModuleType("ai_brain.llm.gemini")
