@@ -26,7 +26,7 @@ func TestFlash_DailyBudgetGate(t *testing.T) {
 	// RPM limiter that would panic if we actually hit it (cost > burst).
 	rl := budget.NewRateLimiter(0, 0) // unlimited — fine even if reached
 	fc := &FlashClient{
-		model:      "gemini-2.5-flash-lite",
+		model:      "gemini-3.5-flash-lite",
 		prompt:     defaultFlashPrompt,
 		rpmLimiter: rl,
 		daily:      counter,
@@ -71,7 +71,7 @@ func TestFlash_NoDailyCounter_ContextCancellation(t *testing.T) {
 	_ = rl.Wait(context.Background(), 1)
 
 	fc := &FlashClient{
-		model:      "gemini-2.5-flash-lite",
+		model:      "gemini-3.5-flash-lite",
 		prompt:     defaultFlashPrompt,
 		rpmLimiter: rl,
 		daily:      nil, // not configured

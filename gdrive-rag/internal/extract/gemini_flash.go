@@ -14,7 +14,7 @@ import (
 )
 
 // defaultFlashModel is the Gemini model used when FlashConfig.Model is unset.
-const defaultFlashModel = "gemini-2.5-flash-lite"
+const defaultFlashModel = "gemini-3.5-flash-lite"
 
 // defaultFlashPrompt is the extraction instruction sent alongside every Flash
 // call. Chosen to bias the model towards verbatim text reproduction rather
@@ -51,7 +51,7 @@ type FlashConfig struct {
 	// GOOGLE_API_KEY env vars.
 	APIKey string
 
-	// Model is the Gemini model to call. Defaults to "gemini-2.5-flash-lite".
+	// Model is the Gemini model to call. Defaults to "gemini-3.5-flash-lite".
 	Model string
 
 	// RPMLimiter gates every call to GenerateContent. Required if real API

@@ -61,7 +61,7 @@ Create a service account with **Drive read-only** scope:
 
 Create an API key at <https://aistudio.google.com/apikey>. It's used for both
 embeddings (`gemini-embedding-001`) and Flash OCR
-(`gemini-2.5-flash-lite`). The free tier is sufficient for typical iot-fetcher
+(`gemini-3.5-flash-lite`). The free tier is sufficient for typical iot-fetcher
 use, provided the default budget caps are respected.
 
 ### 3. Folder whitelist
@@ -89,7 +89,7 @@ All configuration is via environment variables; see
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `RAG_EMBED_MODEL` | `gemini-embedding-001` | Embedding model |
-| `RAG_EXTRACT_MODEL` | `gemini-2.5-flash-lite` | Flash OCR / extraction model |
+| `RAG_EXTRACT_MODEL` | `gemini-3.5-flash-lite` | Flash OCR / extraction model |
 | `RAG_SYNC_INTERVAL` | `10m` | How often to run `changes.list` |
 | `RAG_CHUNK_TOKENS` | `800` | Target chunk size |
 | `RAG_CHUNK_OVERLAP` | `100` | Tokens of overlap between chunks |

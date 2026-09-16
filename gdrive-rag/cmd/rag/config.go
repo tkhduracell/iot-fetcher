@@ -53,7 +53,7 @@ func LoadConfig() (*Config, error) {
 		WhitelistedFolders: splitCSV(os.Getenv("RAG_ROOT_FOLDER_IDS")),
 
 		EmbedModel:   getenv("RAG_EMBED_MODEL", "gemini-embedding-001"),
-		ExtractModel: getenv("RAG_EXTRACT_MODEL", "gemini-2.5-flash-lite"),
+		ExtractModel: getenv("RAG_EXTRACT_MODEL", "gemini-3.5-flash-lite"),
 		ListenAddr:   getenv("RAG_LISTEN_ADDR", ":8090"),
 		DataDir:      getenv("RAG_DATA_DIR", "/data"),
 		LogLevel:     getenv("RAG_LOG_LEVEL", "info"),
