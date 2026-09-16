@@ -34,6 +34,8 @@ type fakeDrive struct {
 	// Call counters, for assertions.
 	ExportCalls   int
 	DownloadCalls int
+	// Export MIME types asked for, in call order.
+	ExportMimes []string
 }
 
 func newFakeDrive() *fakeDrive {
@@ -49,6 +51,7 @@ func (f *fakeDrive) Export(ctx context.Context, fileID, exportMime string) ([]by
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ExportCalls++
+	f.ExportMimes = append(f.ExportMimes, exportMime)
 	b, ok := f.bodies[fileID]
 	if !ok {
 		return nil, fmt.Errorf("fakeDrive: no body for %s", fileID)
@@ -113,13 +116,17 @@ type fakeExtractor struct {
 	Text      string
 	ReturnErr error
 	Calls     int
-	mu        sync.Mutex
+	// LastMime is the effective MIME the ingester decided to hand over, which
+	// is the export format for a Google-native file.
+	LastMime string
+	mu       sync.Mutex
 }
 
 func (f *fakeExtractor) Extract(ctx context.Context, mimeType, fileHint string, body []byte) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls++
+	f.LastMime = mimeType
 	if f.ReturnErr != nil {
 		return "", f.ReturnErr
 	}
@@ -184,4 +191,3 @@ func newTestLooper(
 		sleep:         func(_ context.Context, _ time.Duration) error { return nil },
 	}
 }
-

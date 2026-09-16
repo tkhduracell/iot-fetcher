@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/budget"
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/chunk"
@@ -14,12 +15,69 @@ import (
 )
 
 // Google-native Drive MIME types we translate to a plain-text format via the
-// Export API. Anything not in this switch goes through Download.
+// Export API. Anything outside this family goes through Download.
 const (
 	mimeGDoc    = "application/vnd.google-apps.document"
 	mimeGSheet  = "application/vnd.google-apps.spreadsheet"
 	mimeGSlides = "application/vnd.google-apps.presentation"
+
+	// Every Docs Editors type shares this prefix. The binary files.get
+	// endpoint refuses all of them -- "Only files with binary content can be
+	// downloaded. Use Export with Docs Editors files" -- so membership of this
+	// family, not membership of a hand-written list, is what decides whether a
+	// file is exported or downloaded.
+	mimeGoogleNativePrefix = "application/vnd.google-apps."
+
+	// Export format for a native type we have no specific mapping for. Drive
+	// gained types after this code was written and will gain more; asking for
+	// plain text is the guess most likely to return something a human wrote.
+	defaultNativeExportMime = "text/plain"
 )
+
+// nativeExportMimes maps the Google-native types with a text-shaped export to
+// the format we ask Drive for. Kept explicit because these three choices are
+// deliberate: markdown keeps a Doc's headings, CSV keeps a Sheet's columns,
+// and Slides only ever offered plain text.
+var nativeExportMimes = map[string]string{
+	mimeGDoc:    "text/markdown",
+	mimeGSheet:  "text/csv",
+	mimeGSlides: "text/plain",
+}
+
+// nativeWithoutText are the Docs Editors types Drive cannot export as text at
+// all. A Form exports as a zipped HTML page of the *form*, not the answers; a
+// Drawing and a Jamboard are pictures; the rest are references rather than
+// documents. Sending any of them through Export would swap one error for
+// another, so they are skipped as a fact about the type rather than logged as
+// a failure to look into.
+var nativeWithoutText = map[string]bool{
+	"application/vnd.google-apps.form":        true,
+	"application/vnd.google-apps.drawing":     true,
+	"application/vnd.google-apps.jam":         true,
+	"application/vnd.google-apps.site":        true,
+	"application/vnd.google-apps.map":         true,
+	"application/vnd.google-apps.fusiontable": true,
+	"application/vnd.google-apps.folder":      true,
+	"application/vnd.google-apps.shortcut":    true,
+	"application/vnd.google-apps.drive-sdk":   true,
+}
+
+// exportMimeFor reports how to fetch a Google-native file: the export MIME to
+// ask for, and whether the type has any text to ask for at all. The bool is
+// false only for native types; a non-native MIME is not this function's
+// business and is reported as exportable=false, native=false.
+func exportMimeFor(mime string) (exportMime string, native, indexable bool) {
+	if !strings.HasPrefix(mime, mimeGoogleNativePrefix) {
+		return "", false, false
+	}
+	if nativeWithoutText[mime] {
+		return "", true, false
+	}
+	if export, ok := nativeExportMimes[mime]; ok {
+		return export, true, true
+	}
+	return defaultNativeExportMime, true, true
+}
 
 // ingest processes one queued file. Returns budget.ErrDailyBudgetExhausted if
 // a downstream call (extract or embed) hits the daily cap, in which case the
@@ -32,6 +90,20 @@ func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 			FileID:   item.FileID,
 			FileName: item.FileName,
 			Reason:   fmt.Sprintf("too-large (%d bytes, cap %dMB)", item.Size, l.maxFileSizeMB),
+			At:       l.now(),
+		})
+		return nil
+	}
+
+	if _, native, indexable := exportMimeFor(item.MimeType); native && !indexable {
+		// Not a failure: this type has no text in it. Info, not warn, and it
+		// belongs in Skipped so /status counts it once rather than the queue
+		// churning on it every sync.
+		l.logger.Info("sync: not indexable", "fileID", item.FileID, "mime", item.MimeType)
+		l.state.AppendSkipped(state.SkippedFile{
+			FileID:   item.FileID,
+			FileName: item.FileName,
+			Reason:   fmt.Sprintf("not-indexable (%s)", item.MimeType),
 			At:       l.now(),
 		})
 		return nil
@@ -120,23 +192,22 @@ func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 }
 
 // fetchBody picks the right Drive accessor for item.MimeType and returns the
-// raw bytes plus the "effective" MIME type to hand to the extractor. Google
-// native docs are exported as plain text; everything else is downloaded as-is.
+// raw bytes plus the "effective" MIME type to hand to the extractor. Every
+// Google-native type is exported as text; everything else is downloaded as-is.
+//
+// Callers are expected to have dropped the native types with no text export
+// (see exportMimeFor); one that reaches here is exported on the default
+// format, which fails honestly rather than 403ing on the binary endpoint.
 func (l *Looper) fetchBody(ctx context.Context, item queue.Item) (body []byte, effMime string, err error) {
-	switch item.MimeType {
-	case mimeGDoc:
-		body, err = l.drive.Export(ctx, item.FileID, "text/markdown")
-		return body, "text/markdown", err
-	case mimeGSheet:
-		body, err = l.drive.Export(ctx, item.FileID, "text/csv")
-		return body, "text/csv", err
-	case mimeGSlides:
-		body, err = l.drive.Export(ctx, item.FileID, "text/plain")
-		return body, "text/plain", err
-	default:
-		body, err = l.drive.Download(ctx, item.FileID)
-		return body, item.MimeType, err
+	if export, native, _ := exportMimeFor(item.MimeType); native {
+		if export == "" {
+			export = defaultNativeExportMime
+		}
+		body, err = l.drive.Export(ctx, item.FileID, export)
+		return body, export, err
 	}
+	body, err = l.drive.Download(ctx, item.FileID)
+	return body, item.MimeType, err
 }
 
 // needsEmbed reports whether new hashes diverge from what's already stored.
