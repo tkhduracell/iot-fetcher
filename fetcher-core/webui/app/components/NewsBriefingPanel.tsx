@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { createPortal } from 'react-dom';
+import { cueParagraphs } from '../lib/news/display';
 
 export type BriefingStory = {
   title: string;
@@ -34,7 +35,9 @@ const NewsBriefingPanel: React.FC<Props> = ({
   const failed = sources.filter((s) => s.error || s.count === 0);
   // Cues are directions for the voice, not part of the bulletin — show them
   // dimmed rather than inline, so the panel reads like what you just heard.
-  const segments = transcript.split(/(\[[^\]]+\])/g).filter(Boolean);
+  // Each cue opens a new item, so it also starts a new line here; run together
+  // the bulletin is one unreadable block.
+  const paragraphs = cueParagraphs(transcript);
 
   return createPortal(
     <div
@@ -61,15 +64,14 @@ const NewsBriefingPanel: React.FC<Props> = ({
           </button>
         </div>
 
-        <p className="text-sm leading-relaxed text-gray-100">
-          {segments.map((seg, i) =>
-            seg.startsWith('[') && seg.endsWith(']') ? (
-              <span key={i} className="text-gray-500 text-xs italic">{seg} </span>
-            ) : (
-              <span key={i}>{seg}</span>
-            ),
-          )}
-        </p>
+        <div className="flex flex-col gap-2">
+          {paragraphs.map((p, i) => (
+            <p key={i} className="text-sm leading-relaxed text-gray-100">
+              {p.cue && <span className="text-gray-500 text-xs italic">{p.cue} </span>}
+              {p.text}
+            </p>
+          ))}
+        </div>
 
         {stories.length > 0 && (
           <div className="flex flex-col gap-1.5">
