@@ -79,6 +79,7 @@ services:
 
   wud:
     container_name: wud
+    env_file: ./wud/.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
