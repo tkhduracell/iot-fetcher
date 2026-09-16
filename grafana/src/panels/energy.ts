@@ -7,7 +7,7 @@ import {
   thresholds, greenThreshold, paletteColor,
   legendBottom, tooltipSingle, tooltipMulti,
   overrideDisplayAndColor, overrideDisplayName,
-  SPAN_NULLS_MS,
+  SPAN_NULLS_MS, timeseriesPanel,
 } from '../helpers.ts';
 
 const energyThresholds = () => thresholds([
@@ -18,18 +18,12 @@ const energyThresholds = () => thresholds([
 
 export function energyPanels(): cog.Builder<dashboard.Panel>[] {
   // 🔋 Sigstore batterinivå (timeseries)
-  const battery = new TimeseriesBuilder()
-    .title('🔋 Sigstore batterinivå')
-    .datasource(VM_DS)
+  const battery = timeseriesPanel('🔋 Sigstore batterinivå')
     .unit('percent')
     .min(0)
     .max(100)
     .interval('1m')
-    .colorScheme(paletteColor())
     .thresholds(energyThresholds())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('A', 'sigenergy_battery', 'soc_percent'))
     .gridPos({ h: 8, w: 9, x: 0, y: 86 });
 
@@ -60,30 +54,18 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .gridPos({ h: 8, w: 4, x: 13, y: 86 });
 
   // ⚡️ Energiförbrukning - simple (timeseries, mean+max)
-  const energySimple = new TimeseriesBuilder()
-    .title('⚡️ Energiförbrukning')
-    .datasource(VM_DS)
+  const energySimple = timeseriesPanel('⚡️ Energiförbrukning')
     .unit('watt')
     .interval('1h')
-    .colorScheme(paletteColor())
     .thresholds(energyThresholds())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .withTarget(vmMetric('DjUv', 'tibber', 'power'))
     .withTarget(vmMetric('B', 'tibber', 'power', { agg: 'MAX' }))
     .gridPos({ h: 8, w: 7, x: 17, y: 86 });
 
   // ⚡️ Energiförbrukning - detailed (timeseries, 4 queries)
-  const energyDetailed = new TimeseriesBuilder()
-    .title('⚡️ Energiförbrukning')
-    .datasource(VM_DS)
+  const energyDetailed = timeseriesPanel('⚡️ Energiförbrukning')
     .unit('watt')
-    .colorScheme(paletteColor())
     .thresholds(energyThresholds())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayName('power', 'Inköp'),
       overrideDisplayAndColor('power_to_battery_kw', 'Batteri', 'blue'),

@@ -9,25 +9,19 @@ import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
   greenRedThresholds, greenThreshold, thresholds, paletteColor,
-  legendBottom, tooltipSingle, tooltipMulti,
+  legendBottom, tooltipMulti,
   overrideDisplayAndColor, overrideDisplayName,
-  SPAN_NULLS_MS,
+  SPAN_NULLS_MS, timeseriesPanel,
 } from '../helpers.ts';
 import { accumulatedCostExpr } from '../energyCost.ts';
 
 export function poolPanels(): cog.Builder<dashboard.Panel>[] {
   // Vattentemperatur - Poolvärmepump (timeseries, 3 queries)
-  const waterTemp = new TimeseriesBuilder()
-    .title('Vattentemperatur - Poolvärmepump')
-    .datasource(VM_DS)
+  const waterTemp = timeseriesPanel('Vattentemperatur - Poolvärmepump')
     .unit('celsius')
     .axisSoftMin(25)
     .axisSoftMax(32)
-    .colorScheme(paletteColor())
     .thresholds(greenRedThresholds(80))
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayAndColor('temp_incoming', 'Ingående', 'blue'),
       overrideDisplayAndColor('temp_outgoing', 'Utgående', 'red'),
@@ -56,8 +50,7 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
   // Y-axeln klippt till 0–4 °C: när cirkulationspumpen pausas står vattnet
   // stilla i värmeväxlaren och utgående-temp skenar (sett 8–12 °C i datat),
   // vilket bara säger "kompressorn körde nyss" och inget om flödet.
-  const deltaT = new TimeseriesBuilder()
-    .title('ΔT över värmeväxlaren')
+  const deltaT = timeseriesPanel('ΔT över värmeväxlaren')
     .description(
       'ΔT = utgående − ingående vattentemperatur över poolvärmepumpens växlare. ' +
       'Mäter om flödet genom värmepumpen är rätt avvägt med bypass-ventilerna.\n\n' +
@@ -74,20 +67,15 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
       'Y-axeln klippt 0–4 °C: värden över 4 °C är nästan alltid avstannat vatten i växlaren ' +
       'när cirkulationspumpen pausas, inte ett verkligt flödesproblem.'
     )
-    .datasource(VM_DS)
     .unit('celsius')
     .min(0)
     .max(4)
-    .colorScheme(paletteColor())
     .thresholds(thresholds([
       { color: 'green', value: null },
       { color: 'yellow', value: 2 },
       { color: 'red', value: 3 },
     ]))
     .thresholdsStyle(new GraphThresholdsStyleConfigBuilder().mode(GraphThresholdsStyleMode.Dashed))
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .overrides([overrideDisplayAndColor('delta_t', 'ΔT (utgående − ingående)', 'blue')])
     .withTarget(vmExpr(
       'A',
@@ -97,18 +85,12 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .gridPos({ h: 8, w: 12, x: 0, y: 44 });
 
   // Pool Energi (timeseries)
-  const heatPump = new TimeseriesBuilder()
-    .title('Pool Energi')
-    .datasource(VM_DS)
+  const heatPump = timeseriesPanel('Pool Energi')
     .unit('watt')
     .interval('5m')
     .axisSoftMin(15)
     .axisSoftMax(35)
-    .colorScheme(paletteColor())
     .thresholds(greenRedThresholds(80))
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .fillOpacity(10)
     .stacking(new StackingConfigBuilder().mode(StackingMode.Normal))
     .overrides([
@@ -132,16 +114,10 @@ export function poolPanels(): cog.Builder<dashboard.Panel>[] {
     .gridPos({ h: 7, w: 5, x: 12, y: 37 });
 
   // Poolpump varvtal (timeseries)
-  const pumpSpeedTs = new TimeseriesBuilder()
-    .title('Poolpump varvtal')
-    .datasource(VM_DS)
+  const pumpSpeedTs = timeseriesPanel('Poolpump varvtal')
     .axisSoftMin(5)
     .axisSoftMax(20)
-    .colorScheme(paletteColor())
     .thresholds(greenRedThresholds(80))
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .overrides([overrideDisplayAndColor('speed', 'Varvtal', 'blue')])
     .withTarget(vmMetric('B', 'pool_iqpump_motordata', 'speed'))
     .gridPos({ h: 7, w: 7, x: 17, y: 37 });

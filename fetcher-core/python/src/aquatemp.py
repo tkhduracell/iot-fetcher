@@ -97,12 +97,18 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
             'toUser': user_id
         }, timeout=30)
     if devices_response_share.status_code != 200:
+        # Don't discard the non-shared devices already fetched above just
+        # because the shared-device call failed — log and carry on with what
+        # we have. This matters in practice: the AquaTemp pool pump is itself
+        # a shared device (see CLAUDE.md), but other non-shared devices on
+        # this account should still get reported.
         logger.error(
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
-        return []
-    devices_response_share = devices_response_share.json().get('objectResult') or []
-    logger.info(
-        f"[aquatemp] Found {len(devices_response_share)} shared devices")
+        devices_response_share = []
+    else:
+        devices_response_share = devices_response_share.json().get('objectResult') or []
+        logger.info(
+            f"[aquatemp] Found {len(devices_response_share)} shared devices")
 
     out = devices_response + devices_response_share
     return out

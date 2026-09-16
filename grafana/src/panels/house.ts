@@ -5,9 +5,9 @@ import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
   greenRedThresholds, greenThreshold, paletteColor, fixedColor,
-  legendBottom, tooltipMulti, tooltipSingle,
+  legendBottom, tooltipMulti,
   overrideDisplayAndColor, overrideDisplayName,
-  SPAN_NULLS_MS,
+  SPAN_NULLS_MS, timeseriesPanel,
 } from '../helpers.ts';
 
 export function housePanels(): cog.Builder<dashboard.Panel>[] {
@@ -119,17 +119,11 @@ export function housePanels(): cog.Builder<dashboard.Panel>[] {
     .gridPos({ h: 7, w: 8, x: 12, y: 8 });
 
   // AQI - Luftkvalitét (timeseries, 7d range)
-  const aqi = new TimeseriesBuilder()
-    .title('AQI - Luftkvalitét')
-    .datasource(VM_DS)
+  const aqi = timeseriesPanel('AQI - Luftkvalitét')
     .min(0)
     .max(100)
     .interval('1h')
-    .colorScheme(paletteColor())
     .thresholds(greenThreshold())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .overrides([overrideDisplayName('aqi', 'Luftkvalitet (AQI)')])
     .withTarget(
       vmMetric('A', 'air_quality', 'aqi', { agg: 'LAST_VALUE' }),
