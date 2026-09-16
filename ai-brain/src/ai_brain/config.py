@@ -16,14 +16,16 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # brain instead of a chain with zero providers -- which builds fine, raises
 # ChainExhausted on every cycle, and emits no ledger series at all, so the
 # misconfiguration is invisible in both the logs and Grafana.
-# Local first, cloud last. ``lan:`` is a model on whatever machine in the house
-# is awake and has it pulled (see ai_brain.discovery); ``ollama:`` is the small
-# model on the rpi5 itself; the gemini entries are the metered worst case.
+# Best model first, and local hardware is what the free tier falls back to
+# rather than the other way round: the flash models answer until the ledger
+# says their quota is gone, and only then does the chain reach for a machine in
+# the house -- ``lan:`` on whatever LAN box is awake and has it pulled (see
+# ai_brain.discovery), then the small model on the rpi5 itself.
 DEFAULT_LLM_CHAIN = (
-    "lan:deepseek-r1:8b,"
-    "ollama:llama3.2:3b,"
     "gemini:gemini-3.8-flash,"
-    "gemini:gemini-3.5-flash-lite"
+    "gemini:gemini-3.5-flash-lite,"
+    "lan:deepseek-r1:8b,"
+    "ollama:llama3.2:3b"
 )
 
 # Every expert the image ships a persona for. Brain-only was the rollout

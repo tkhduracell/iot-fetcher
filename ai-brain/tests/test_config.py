@@ -8,10 +8,10 @@ def test_defaults_from_empty_env():
     assert s.memory_root == Path("/memory")
     assert s.seed_root == DEFAULT_SEED_ROOT
     assert s.llm_chain == [
-        "lan:deepseek-r1:8b",
-        "ollama:llama3.2:3b",
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
+        "lan:deepseek-r1:8b",
+        "ollama:llama3.2:3b",
     ]
     assert s.experts == ["energy", "health", "house-ops", "researcher"]
     assert s.brain_heartbeat_s == 30 * 60

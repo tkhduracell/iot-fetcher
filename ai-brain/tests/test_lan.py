@@ -244,14 +244,14 @@ def test_a_lan_key_is_unmetered_and_the_rest_are_not():
     assert limits["gemini:flash"] == Limits(rpm=3, tpm=500, rpd=40)
 
 
-def test_the_lan_provider_leads_the_default_chain(tmp_path):
+def test_the_lan_provider_keeps_its_place_in_the_chain(tmp_path):
     from ai_brain.ledger import Ledger
 
-    settings = load_settings({"LLM_CHAIN": f"lan:{MODEL},fake:x"})
+    settings = load_settings({"LLM_CHAIN": f"fake:x,lan:{MODEL}"})
     ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
     chain = ProviderChain.from_settings(settings, ledger)
 
-    assert [p.key for p in chain.providers] == [f"lan:{MODEL}", "fake:x"]
+    assert [p.key for p in chain.providers] == ["fake:x", f"lan:{MODEL}"]
     # The supervisor drives the sweep through this handle.
     assert chain.lan_finder is not None
     assert chain.lan_finder.model == MODEL

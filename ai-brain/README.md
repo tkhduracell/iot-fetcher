@@ -36,10 +36,11 @@ then owned by you) is the only fixed text; `goals.md` and every persona file
 are rewritten by the brain over time. Deleting the volume resets it to the
 seed; editing `constitution.md` on the volume is how you steer it.
 
-**Local first, cloud last.** All inference runs through a provider chain
-(`LLM_CHAIN`), tried in order until one answers: a model on a machine on the
-LAN, then the rpi5's own small one, then the metered Gemini free tier as the
-worst case (see [Local models](#local-models)). Every entry is `provider:model`
+**Best model first, local hardware as the fallback.** All inference runs
+through a provider chain (`LLM_CHAIN`), tried in order until one answers: the
+Gemini free tier until the ledger says each key's quota is gone, then a model
+on a machine on the LAN, then the rpi5's own small one (see
+[Local models](#local-models)). Every entry is `provider:model`
 — a bare model id has no provider to dispatch to and the container refuses to
 start. A shared quota ledger decides before every Gemini call whether that
 model may be dialled at all, so the process stays inside the free allowance
@@ -89,7 +90,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | --- | --- | --- |
 | `MEMORY_ROOT` | `/memory` | Where agent memory lives. The volume mount point. |
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
-| `LLM_CHAIN` | `lan:deepseek-r1:8b,ollama:llama3.2:3b,gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
+| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:deepseek-r1:8b,ollama:llama3.2:3b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
 | `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Unset **or blank** means all four; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
@@ -221,13 +222,15 @@ Two guarantees are worth knowing when reading logs:
 
 ## Local models
 
-The chain runs local first and cloud last:
+The chain spends the free tier first and falls back to hardware in the house:
 
 ```
-lan:deepseek-r1:8b → ollama:llama3.2:3b → gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite
+gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite → lan:deepseek-r1:8b → ollama:llama3.2:3b
 ```
 
-`ollama:` is the rpi5's own service. **`lan:` is a model on whatever machine in
+Each Gemini key answers until the ledger says its quota is gone (or three 429s
+park it), and the local entries are what the cycle uses from then until the day
+rolls over. `ollama:` is the rpi5's own service, the last resort. **`lan:` is a model on whatever machine in
 the house is awake and has it pulled** — the desktop in the next room can run
 something worth asking, but it is not a fixed address, so the provider goes and
 finds it.

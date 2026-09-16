@@ -344,20 +344,20 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
     env = parse_env_file(ENV_EXAMPLE)
     assert env["LLM_CHAIN"] == (
-        "lan:deepseek-r1:8b,ollama:llama3.2:3b,"
-        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite"
+        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,"
+        "lan:deepseek-r1:8b,ollama:llama3.2:3b"
     )
 
     settings = load_settings({**env, "GEMINI_API_KEY": "k"})
     ledger, _ = make_ledger(tmp_path, settings.llm_chain)
     chain = ProviderChain.from_settings(settings, ledger)
 
-    # Local first, cloud last, in the order the file lists them.
+    # The free tier first, local hardware behind it, in the file's order.
     assert [p.key for p in chain.providers] == [
-        "lan:deepseek-r1:8b",
-        "ollama:llama3.2:3b",
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
+        "lan:deepseek-r1:8b",
+        "ollama:llama3.2:3b",
     ]
 
 
