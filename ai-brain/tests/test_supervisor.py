@@ -125,7 +125,8 @@ def test_build_passes_the_effort_knobs_to_every_loop(tmp_path):
 
 
 def test_build_starts_every_expert_by_default(tmp_path):
-    # The shared env() helper blanks EXPERTS; an absent one is the real default.
+    # The shared env() helper opts out with EXPERTS=none; an absent one, like
+    # a blank one, is the real default.
     settings = load_settings({k: v for k, v in env(tmp_path).items() if k != "EXPERTS"})
     assert sorted(build(settings, chain_factory=fake_chain).loops) == [
         "brain",
