@@ -8,9 +8,10 @@ def test_defaults_from_empty_env():
     assert s.memory_root == Path("/memory")
     assert s.seed_root == DEFAULT_SEED_ROOT
     assert s.llm_chain == [
+        "lan:deepseek-r1:8b",
+        "ollama:llama3.2:3b",
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
-        "ollama:llama3.2:3b",
     ]
     assert s.experts == ["energy", "health", "house-ops", "researcher"]
     assert s.brain_heartbeat_s == 30 * 60
@@ -49,23 +50,14 @@ def test_effort_knobs_are_overridable():
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
 
 
-def test_ultra_mode_is_on_unless_switched_off():
+def test_lan_sweep_defaults_and_overrides():
     s = load_settings({})
-    assert s.ultra is True
-    assert s.ultra_model == "deepseek-r1:8b"
-    assert s.ultra_subnets == []
-    assert s.ultra_scan_s == 600
-    assert load_settings({"ULTRA_MODE": "0"}).ultra is False
-    # Only "0" is an opt-out; a blank or odd value leaves it on rather than
-    # silently disabling the mode a deployment is relying on.
-    assert load_settings({"ULTRA_MODE": ""}).ultra is True
-    assert load_settings({"ULTRA_MODE": "yes"}).ultra is True
+    assert s.lan_subnets == []
+    assert s.lan_scan_s == 600
 
-
-def test_ultra_subnets_and_interval_are_configurable():
-    s = load_settings({"ULTRA_SUBNETS": "10.0.0.0/24, 192.168.1.0/24", "ULTRA_SCAN_MIN": "2"})
-    assert s.ultra_subnets == ["10.0.0.0/24", "192.168.1.0/24"]
-    assert s.ultra_scan_s == 120
+    s = load_settings({"LAN_SUBNETS": "10.0.0.0/24, 192.168.1.0/24", "LAN_SCAN_MIN": "2"})
+    assert s.lan_subnets == ["10.0.0.0/24", "192.168.1.0/24"]
+    assert s.lan_scan_s == 120
 
 
 def test_default_seed_root_is_the_shipped_seed_dir():
@@ -115,7 +107,7 @@ def test_default_chain_entries_are_all_provider_qualified():
     for entry in DEFAULT_LLM_CHAIN.split(","):
         provider, sep, model = entry.partition(":")
         assert sep == ":"
-        assert provider in ("gemini", "ollama")
+        assert provider in ("lan", "gemini", "ollama")
         assert model
 
 

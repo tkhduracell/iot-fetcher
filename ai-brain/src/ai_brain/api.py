@@ -151,15 +151,15 @@ def _ledger_json(system: System) -> dict:
     return usage
 
 
-def _ultra_json(system: System) -> dict:
-    """Ultra mode's current LAN host, so "why is it on Gemini" is answerable."""
-    finder = getattr(system.chain, "ultra_finder", None)
-    if not system.settings.ultra or finder is None:
+def _lan_json(system: System) -> dict:
+    """The discovered LAN host, so "why is it on Gemini" is answerable."""
+    finder = getattr(system.chain, "lan_finder", None)
+    if finder is None:
         return {"enabled": False}
     host = finder.current()
     return {
         "enabled": True,
-        "model": system.settings.ultra_model,
+        "model": finder.model,
         "host": host.base_url if host else None,
         "found_at": host.found_at if host else None,
         "subnets": [str(network) for network in finder.networks],
@@ -237,7 +237,7 @@ def build_app(
                     "queued": out.queued_count() if out is not None else 0,
                     "sessions": len(out.sessions()) if out is not None else 0,
                 },
-                "ultra": _ultra_json(system),
+                "lan_host": _lan_json(system),
                 "ledger": _ledger_json(system),
                 "proposals": {
                     "pending": sum(1 for p in proposals if p.status == "pending"),

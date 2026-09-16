@@ -52,7 +52,7 @@ TIMEOUT_CHARGE_TOKENS = 4000
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
 # cycle, and so the two lists cannot drift apart.
-PROVIDER_PREFIXES: frozenset[str] = frozenset({"gemini", "ollama", "fake"})
+PROVIDER_PREFIXES: frozenset[str] = frozenset({"lan", "gemini", "ollama", "fake"})
 
 
 @dataclass(frozen=True)
@@ -117,7 +117,7 @@ class ChainExhausted(Exception):
 class Provider(ABC):
     key: str
     # How many times the chain may call this provider before falling through.
-    # Two is the default "one retry on a blip"; ultra mode raises its own.
+    # Two is the default "one retry on a blip"; the lan provider raises its own.
     max_attempts: int = 2
 
     @abstractmethod
@@ -135,19 +135,18 @@ class Provider(ABC):
         return True
 
 
-# Ultra mode's host is a machine in the house, not a metered API. It still
-# needs a bucket -- the ledger refuses a key it has never heard of -- so it
-# gets one nobody can exhaust.
+# A machine in the house is not a metered API. It still needs a bucket -- the
+# ledger refuses a key it has never heard of -- so it gets one nobody can
+# exhaust, and the free-tier arithmetic stays about the free tier.
 UNMETERED = Limits(rpm=10_000, tpm=100_000_000, rpd=1_000_000)
 
 
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
-    """One budget per chain key, all taken from the same env-configured tier."""
+    """One budget per chain key: the env-configured tier, except for local hosts."""
     limits = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
-    keys = {key: limits for key in settings.llm_chain}
-    if settings.ultra:
-        keys[f"ultra:{settings.ultra_model}"] = UNMETERED
-    return keys
+    return {
+        key: UNMETERED if key.startswith("lan:") else limits for key in settings.llm_chain
+    }
 
 
 class ProviderChain:
@@ -160,9 +159,10 @@ class ProviderChain:
         self.providers = list(providers)
         self.ledger = ledger
         self.call_timeout_s = call_timeout_s
-        # Set by ``from_settings`` in ultra mode. The supervisor needs it to
-        # run the periodic sweep; nothing else in the chain touches it.
-        self.ultra_finder = None
+        # Set by ``from_settings`` when the chain has a ``lan:`` entry. The
+        # supervisor needs it to run the periodic sweep; nothing else in the
+        # chain touches it.
+        self.lan_finder = None
 
     @staticmethod
     def from_settings(
@@ -171,23 +171,21 @@ class ProviderChain:
         call_timeout_s: float | None = None,
     ) -> ProviderChain:
         providers: list[Provider] = []
-        if settings.ultra:
-            # Deliberately first: a host in the house costs nothing and is
-            # never rate limited, so it answers while it can and the metered
-            # chain below is what happens when it cannot.
-            from ai_brain.discovery import OllamaFinder, subnets_for
-            from ai_brain.llm.ultra import UltraOllamaProvider
-
-            finder = OllamaFinder(
-                settings.ultra_model,
-                subnets_for(settings.ultra_subnets, settings.ha_url),
-            )
-            ultra = UltraOllamaProvider(finder)
-            providers.append(ultra)
-
+        lan_finder = None
         for entry in settings.llm_chain:
             name, _, model = entry.partition(":")
-            if name == "gemini":
+            if name == "lan":
+                # A model on some machine in the house. Which machine is not
+                # known until a scan finds one, so the provider carries a
+                # finder rather than an address.
+                from ai_brain.discovery import OllamaFinder, subnets_for
+                from ai_brain.llm.lan import LanOllamaProvider
+
+                lan_finder = OllamaFinder(
+                    model, subnets_for(settings.lan_subnets, settings.ha_url)
+                )
+                providers.append(LanOllamaProvider(lan_finder))
+            elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
                 # the concrete provider module or its API client.
                 from ai_brain.llm.gemini import GeminiProvider
@@ -213,8 +211,7 @@ class ProviderChain:
         if call_timeout_s is None:
             call_timeout_s = getattr(settings, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S)
         chain = ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
-        if settings.ultra:
-            chain.ultra_finder = ultra.finder
+        chain.lan_finder = lan_finder
         return chain
 
     async def complete(

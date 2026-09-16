@@ -16,7 +16,15 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # brain instead of a chain with zero providers -- which builds fine, raises
 # ChainExhausted on every cycle, and emits no ledger series at all, so the
 # misconfiguration is invisible in both the logs and Grafana.
-DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
+# Local first, cloud last. ``lan:`` is a model on whatever machine in the house
+# is awake and has it pulled (see ai_brain.discovery); ``ollama:`` is the small
+# model on the rpi5 itself; the gemini entries are the metered worst case.
+DEFAULT_LLM_CHAIN = (
+    "lan:deepseek-r1:8b,"
+    "ollama:llama3.2:3b,"
+    "gemini:gemini-3.8-flash,"
+    "gemini:gemini-3.5-flash-lite"
+)
 
 # Every expert the image ships a persona for. Brain-only was the rollout
 # default while the loops were unproven; with them proven the useful default is
@@ -29,12 +37,6 @@ DEFAULT_EXPERTS = "energy,health,house-ops,researcher"
 # ``brain`` is accepted too: the brain is not an expert, so naming it is the
 # same statement as naming none.
 NO_EXPERTS = frozenset({"none", "brain"})
-
-# Ultra mode's model, deliberately not configurable: the point of the mode is
-# that any machine in the house either has this pulled or is not a host, and a
-# per-deployment name would make "why is it not using the desktop" a question
-# with two answers instead of one.
-ULTRA_MODEL = "deepseek-r1:8b"
 
 
 @dataclass(frozen=True)
@@ -60,10 +62,8 @@ class Settings:
     slack_app_token: str
     slack_user_id: str
     dry_run: bool
-    ultra: bool
-    ultra_model: str
-    ultra_subnets: list[str]
-    ultra_scan_s: int
+    lan_subnets: list[str]
+    lan_scan_s: int
     max_rounds: int
     max_tokens: int
     thinking_budget: int
@@ -138,12 +138,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
         dry_run=get("DRY_RUN") == "1",
-        # On unless switched off: a household with no such machine simply
-        # never finds one, and pays a sweep every ULTRA_SCAN_MIN for it.
-        ultra=get("ULTRA_MODE", "1") != "0",
-        ultra_model=ULTRA_MODEL,
-        ultra_subnets=_csv(get("ULTRA_SUBNETS")),
-        ultra_scan_s=get_int("ULTRA_SCAN_MIN", 10) * 60,
+        lan_subnets=_csv(get("LAN_SUBNETS")),
+        lan_scan_s=get_int("LAN_SCAN_MIN", 10) * 60,
         max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
         max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),

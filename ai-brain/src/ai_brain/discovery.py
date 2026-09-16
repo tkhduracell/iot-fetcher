@@ -1,9 +1,9 @@
-"""Finding an Ollama host on the LAN, so ultra mode has something to talk to.
+"""Finding an Ollama host on the LAN for the ``lan:`` chain provider.
 
-The rpi5 can run a 3B model; the desktop in the next room can run something
-worth asking. That machine is not a fixed address -- it is whatever is powered
-on right now -- so ultra mode sweeps the local network for it instead of being
-told where it lives.
+The rpi5's own Ollama runs a 3B model; the desktop in the next room can run
+something worth asking. That machine is not a fixed address -- it is whatever
+is powered on right now -- so the provider sweeps the local network for it
+instead of being told where it lives.
 
 The sweep is a TCP connect to the Ollama port across a /24, which is cheap and
 quiet, followed by ``GET /api/tags`` on whatever answered. A host only counts
@@ -45,7 +45,7 @@ TAGS_TIMEOUT_S = 5
 # Hard ceiling on one scan, whatever it is doing. Every step below is bounded
 # on its own, but a host can accept a connection and then never speak, and a
 # sweep that hangs would hold the scan lock forever -- which means the finder
-# never re-checks and ultra mode is stuck on a machine that has gone away.
+# never re-checks and the provider is stuck on a machine that has gone away.
 SCAN_TIMEOUT_S = 30
 # One /24 of connects at SWEEP_CONCURRENCY is ~2s; ten times that is a network
 # behaving in a way we should abandon rather than wait out.
@@ -77,15 +77,15 @@ def subnets_for(configured: list[str], ha_url: str) -> list[ipaddress.IPv4Networ
         try:
             network = ipaddress.ip_network(entry, strict=False)
         except ValueError:
-            log.warning("[ultra] ignoring unparsable subnet %r", entry)
+            log.warning("[lan] ignoring unparsable subnet %r", entry)
             continue
         if not isinstance(network, ipaddress.IPv4Network) or not network.is_private:
             # A public range is not this house's network, and sweeping one is
             # not something this process should ever do by accident.
-            log.warning("[ultra] refusing to sweep non-private subnet %s", network)
+            log.warning("[lan] refusing to sweep non-private subnet %s", network)
             continue
         if network.num_addresses > 1024:
-            log.warning("[ultra] refusing to sweep %s: wider than a /22", network)
+            log.warning("[lan] refusing to sweep %s: wider than a /22", network)
             continue
         out.append(network)
     return out
@@ -152,7 +152,7 @@ class OllamaFinder:
     def forget(self) -> None:
         """Drop the current host after it has failed us, so the next scan re-sweeps."""
         if self._host is not None:
-            log.info("[ultra] dropping %s", self._host.base_url)
+            log.info("[lan] dropping %s", self._host.base_url)
         self._host = None
 
     async def scan(self) -> OllamaHost | None:
@@ -166,10 +166,10 @@ class OllamaFinder:
             try:
                 return await asyncio.wait_for(self._scan_with(client), timeout=SCAN_TIMEOUT_S)
             except TimeoutError:
-                log.warning("[ultra] scan exceeded %ss, abandoned", SCAN_TIMEOUT_S)
+                log.warning("[lan] scan exceeded %ss, abandoned", SCAN_TIMEOUT_S)
                 return self._host
             except Exception:  # discovery is best effort, always
-                log.exception("[ultra] scan failed")
+                log.exception("[lan] scan failed")
                 return self._host
             finally:
                 if self._client is None:
@@ -181,20 +181,20 @@ class OllamaFinder:
             ip = urlparse(known.base_url).hostname or ""
             if await _has_model(client, ip, self.model):
                 return known
-            log.info("[ultra] %s stopped answering, re-sweeping", known.base_url)
+            log.info("[lan] %s stopped answering, re-sweeping", known.base_url)
             self._host = None
 
         semaphore = asyncio.Semaphore(SWEEP_CONCURRENCY)
         for network in self.networks:
             hosts = [str(ip) for ip in network.hosts()]
-            log.info("[ultra] sweeping %s (%d hosts)", network, len(hosts))
+            log.info("[lan] sweeping %s (%d hosts)", network, len(hosts))
             try:
                 open_ports = await asyncio.wait_for(
                     asyncio.gather(*(_port_open(ip, semaphore) for ip in hosts)),
                     timeout=SWEEP_TIMEOUT_S,
                 )
             except TimeoutError:
-                log.warning("[ultra] sweep of %s exceeded %ss, skipped", network, SWEEP_TIMEOUT_S)
+                log.warning("[lan] sweep of %s exceeded %ss, skipped", network, SWEEP_TIMEOUT_S)
                 continue
             for ip in [ip for ip in open_ports if ip]:
                 if await _has_model(client, ip, self.model):
@@ -203,8 +203,8 @@ class OllamaFinder:
                         model=self.model,
                         found_at=self._clock(),
                     )
-                    log.info("[ultra] found %s with %s", self._host.base_url, self.model)
+                    log.info("[lan] found %s with %s", self._host.base_url, self.model)
                     return self._host
-                log.info("[ultra] %s runs ollama but has no %s", ip, self.model)
-        log.info("[ultra] no host with %s on the network", self.model)
+                log.info("[lan] %s runs ollama but has no %s", ip, self.model)
+        log.info("[lan] no host with %s on the network", self.model)
         return None

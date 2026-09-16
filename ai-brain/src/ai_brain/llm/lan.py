@@ -1,4 +1,4 @@
-"""Ultra mode's provider: the LAN Ollama host, first in the chain.
+"""The ``lan:`` provider: an Ollama host discovered on the local network.
 
 It is an :class:`~ai_brain.llm.ollama.OllamaProvider` whose base URL is not
 known until a scan finds one, so the address is resolved per call rather than
@@ -7,8 +7,8 @@ at construction. Two hooks in the chain make that work:
 * ``available()`` is False while no host is known, so the chain steps straight
   past it instead of spending an attempt on a call that cannot be made.
 * ``max_attempts`` is 3 rather than the chain's usual 2: a local box that
-  answers in seconds is worth a couple of extra tries before falling back to
-  the metered cloud model.
+  answers in seconds is worth a couple of extra tries before the chain moves
+  on down to the metered cloud models.
 
 A host that fails all three attempts is forgotten, so the next scan sweeps for
 another one instead of re-dialling a machine that has gone to sleep.
@@ -26,11 +26,11 @@ from ai_brain.llm.ollama import OllamaProvider
 
 log = logging.getLogger(__name__)
 
-ULTRA_ATTEMPTS = 3
+LAN_ATTEMPTS = 3
 
 
-class UltraOllamaProvider(Provider):
-    max_attempts = ULTRA_ATTEMPTS
+class LanOllamaProvider(Provider):
+    max_attempts = LAN_ATTEMPTS
 
     def __init__(
         self,
@@ -40,10 +40,10 @@ class UltraOllamaProvider(Provider):
     ) -> None:
         self.finder = finder
         self.model = finder.model
-        self.key = f"ultra:{finder.model}"
+        self.key = f"lan:{finder.model}"
         self._client = client
         self._timeout_s = timeout_s
-        self._attempts_left = ULTRA_ATTEMPTS
+        self._attempts_left = LAN_ATTEMPTS
 
     def available(self) -> bool:
         return self.finder.current() is not None
@@ -66,12 +66,12 @@ class UltraOllamaProvider(Provider):
                 # Out of tries against this machine: let the chain fall through
                 # to the cloud, and make the next scan look for another host.
                 self.finder.forget()
-                self._attempts_left = ULTRA_ATTEMPTS
+                self._attempts_left = LAN_ATTEMPTS
             raise
         finally:
             if self._client is None:
                 await provider.aclose()
-        self._attempts_left = ULTRA_ATTEMPTS
+        self._attempts_left = LAN_ATTEMPTS
         # The chain reports which model answered; without this the trace would
         # say deepseek-r1:8b and never say it came from the LAN.
         return Reply(

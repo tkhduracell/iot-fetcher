@@ -250,7 +250,7 @@ def test_from_settings_builds_keys_in_order(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "ai_brain.llm.gemini", stub)
 
     settings = load_settings(
-        {"LLM_CHAIN": "gemini:flash,gemini:pro,fake:x", "GEMINI_API_KEY": "k", "ULTRA_MODE": "0"}
+        {"LLM_CHAIN": "gemini:flash,gemini:pro,fake:x", "GEMINI_API_KEY": "k"}
     )
     ledger, _ = make_ledger(tmp_path, ["gemini:flash", "gemini:pro", "fake:x"])
     chain = ProviderChain.from_settings(settings, ledger)
@@ -269,13 +269,7 @@ def test_from_settings_rejects_unknown_provider(tmp_path):
 
 def test_limits_from_settings_covers_every_chain_key():
     settings = load_settings(
-        {
-            "LLM_CHAIN": "gemini:flash,fake:x",
-            "RPM": "3",
-            "TPM": "500",
-            "RPD": "40",
-            "ULTRA_MODE": "0",
-        }
+        {"LLM_CHAIN": "gemini:flash,fake:x", "RPM": "3", "TPM": "500", "RPD": "40"}
     )
     limits = limits_from_settings(settings)
     assert limits == {
@@ -350,20 +344,20 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
     env = parse_env_file(ENV_EXAMPLE)
     assert env["LLM_CHAIN"] == (
-        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
+        "lan:deepseek-r1:8b,ollama:llama3.2:3b,"
+        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite"
     )
 
     settings = load_settings({**env, "GEMINI_API_KEY": "k"})
     ledger, _ = make_ledger(tmp_path, settings.llm_chain)
     chain = ProviderChain.from_settings(settings, ledger)
 
-    # The shipped file has ultra mode on, so the LAN host leads and the
-    # documented cloud chain follows it in order.
+    # Local first, cloud last, in the order the file lists them.
     assert [p.key for p in chain.providers] == [
-        "ultra:deepseek-r1:8b",
+        "lan:deepseek-r1:8b",
+        "ollama:llama3.2:3b",
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
-        "ollama:llama3.2:3b",
     ]
 
 

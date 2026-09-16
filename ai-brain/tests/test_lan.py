@@ -9,7 +9,7 @@ from ai_brain.discovery import OllamaFinder, OllamaHost, subnets_for
 from ai_brain.ledger import Ledger, Limits
 from ai_brain.llm import Message, ProviderChain, ProviderError, Reply, Usage
 from ai_brain.llm.fake import FakeProvider
-from ai_brain.llm.ultra import ULTRA_ATTEMPTS, UltraOllamaProvider
+from ai_brain.llm.lan import LAN_ATTEMPTS, LanOllamaProvider
 
 MODEL = "deepseek-r1:8b"
 MSGS = [Message(role="user", content="hi")]
@@ -142,7 +142,7 @@ async def test_scan_never_raises(monkeypatch):
 @respx.mock
 async def test_provider_is_unavailable_until_a_host_is_found():
     finder = finder_for()
-    provider = UltraOllamaProvider(finder)
+    provider = LanOllamaProvider(finder)
     assert provider.available() is False
 
     finder._host = OllamaHost("http://192.168.68.9:11434", MODEL, 0.0)
@@ -156,7 +156,7 @@ async def test_provider_calls_the_discovered_host():
     )
     finder = finder_for()
     finder._host = OllamaHost("http://192.168.68.9:11434", MODEL, 0.0)
-    reply = await UltraOllamaProvider(finder).complete(MSGS, [], 64)
+    reply = await LanOllamaProvider(finder).complete(MSGS, [], 64)
 
     assert route.called
     assert reply.text == "from-the-lan"
@@ -171,9 +171,9 @@ async def test_the_host_is_forgotten_after_its_attempts_run_out():
     )
     finder = finder_for()
     finder._host = OllamaHost("http://192.168.68.9:11434", MODEL, 0.0)
-    provider = UltraOllamaProvider(finder)
+    provider = LanOllamaProvider(finder)
 
-    for _ in range(ULTRA_ATTEMPTS):
+    for _ in range(LAN_ATTEMPTS):
         assert finder.current() is not None
         with pytest.raises(ProviderError):
             await provider.complete(MSGS, [], 64)
@@ -183,6 +183,12 @@ async def test_the_host_is_forgotten_after_its_attempts_run_out():
 
 
 # --- the chain ------------------------------------------------------------
+
+
+def limits_for(settings):
+    from ai_brain.llm import limits_from_settings
+
+    return limits_from_settings(settings)
 
 
 def make_ledger(tmp_path, keys):
@@ -225,12 +231,39 @@ async def test_chain_honours_a_providers_own_attempt_budget(tmp_path):
     assert len(a.calls) == 3
 
 
-def test_ultra_key_gets_an_unmetered_budget(tmp_path):
+def test_a_lan_key_is_unmetered_and_the_rest_are_not():
+    from ai_brain.ledger import Limits
     from ai_brain.llm import UNMETERED, limits_from_settings
 
-    settings = load_settings({"ULTRA_MODE": "1", "LLM_CHAIN": "fake:a"})
+    settings = load_settings(
+        {"LLM_CHAIN": f"lan:{MODEL},gemini:flash", "RPM": "3", "TPM": "500", "RPD": "40"}
+    )
     limits = limits_from_settings(settings)
-    assert limits[f"ultra:{MODEL}"] == UNMETERED
+
+    assert limits[f"lan:{MODEL}"] == UNMETERED
+    assert limits["gemini:flash"] == Limits(rpm=3, tpm=500, rpd=40)
+
+
+def test_the_lan_provider_leads_the_default_chain(tmp_path):
+    from ai_brain.ledger import Ledger
+
+    settings = load_settings({"LLM_CHAIN": f"lan:{MODEL},fake:x"})
+    ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
+    chain = ProviderChain.from_settings(settings, ledger)
+
+    assert [p.key for p in chain.providers] == [f"lan:{MODEL}", "fake:x"]
+    # The supervisor drives the sweep through this handle.
+    assert chain.lan_finder is not None
+    assert chain.lan_finder.model == MODEL
+
+
+def test_a_chain_without_a_lan_entry_has_no_finder(tmp_path):
+    from ai_brain.ledger import Ledger
+
+    settings = load_settings({"LLM_CHAIN": "fake:x"})
+    ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
+
+    assert ProviderChain.from_settings(settings, ledger).lan_finder is None
 
 
 # --- hard timeouts --------------------------------------------------------
