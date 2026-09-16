@@ -108,6 +108,9 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `RPM` | `8` | Requests per minute, per model key. |
 | `TPM` | `200000` | Tokens per minute, per model key. |
 | `RPD` | `200` | Requests per day, per model key. |
+| `ULTRA_MODE` | `0` | Exactly `"1"` sweeps the LAN for an Ollama host and puts it first in the chain — see [Ultra mode](#ultra-mode). |
+| `ULTRA_SUBNETS` | *(empty)* | Subnets to sweep. Empty means the /24 `HA_URL` is on. |
+| `ULTRA_SCAN_MIN` | `10` | Minutes between sweeps. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
 | `CYCLE_MAX_ROUNDS` | `16` | Tool rounds one cycle may take before the loop stops waiting for `end_cycle`. |
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
@@ -214,6 +217,35 @@ Two guarantees are worth knowing when reading logs:
   the safe failure is "did not retry", not "spoke twice".
 - **Quiet hours.** `sonos_say` refuses between 22:00 and 07:00 Europe/Stockholm
   and records `blocked_quiet_hours`.
+
+## Ultra mode
+
+`ULTRA_MODE=1` says: if there is a machine in this house that can run a real
+model, use it and leave the free tier alone.
+
+Every `ULTRA_SCAN_MIN` minutes the process sweeps the LAN — a TCP connect to
+port 11434 across the subnet, then `GET /api/tags` on whatever answered. A host
+counts only if it has **`deepseek-r1:8b`** pulled; the model name is fixed in
+code, so "is the desktop being used" has one answer rather than one per
+deployment. A machine running Ollama with nothing installed would otherwise be
+picked and then 404 every call.
+
+The subnet to sweep is `ULTRA_SUBNETS` when set, and otherwise the /24 that
+`HA_URL` is on — this container's own address is a docker bridge (172.x), so
+sweeping its own network would find nothing. Public ranges and anything wider
+than a /22 are refused.
+
+When a host is found it goes **first** in the chain, ahead of Gemini, with its
+own unmetered ledger bucket: nothing about the free tier applies to a computer
+you own. It gets three attempts per cycle; after the third failure the host is
+forgotten and the next sweep looks for another one, while the cycle falls
+through to `gemini-3.8-flash` as usual. Until a host is found the provider
+reports itself unavailable, so the chain steps past it without spending a
+thing.
+
+`GET /api/status` reports what it found (`ultra.host`, `ultra.model`,
+`ultra.subnets`), which is where to look when you expect the desktop to be
+answering and Gemini is.
 
 ## Quota
 

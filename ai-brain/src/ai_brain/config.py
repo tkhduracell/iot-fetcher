@@ -30,6 +30,12 @@ DEFAULT_EXPERTS = "energy,health,house-ops,researcher"
 # same statement as naming none.
 NO_EXPERTS = frozenset({"none", "brain"})
 
+# Ultra mode's model, deliberately not configurable: the point of the mode is
+# that any machine in the house either has this pulled or is not a host, and a
+# per-deployment name would make "why is it not using the desktop" a question
+# with two answers instead of one.
+ULTRA_MODEL = "deepseek-r1:8b"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -54,6 +60,10 @@ class Settings:
     slack_app_token: str
     slack_user_id: str
     dry_run: bool
+    ultra: bool
+    ultra_model: str
+    ultra_subnets: list[str]
+    ultra_scan_s: int
     max_rounds: int
     max_tokens: int
     thinking_budget: int
@@ -128,6 +138,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
         dry_run=get("DRY_RUN") == "1",
+        ultra=get("ULTRA_MODE") == "1",
+        ultra_model=ULTRA_MODEL,
+        ultra_subnets=_csv(get("ULTRA_SUBNETS")),
+        ultra_scan_s=get_int("ULTRA_SCAN_MIN", 10) * 60,
         max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
         max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),

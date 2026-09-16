@@ -116,17 +116,38 @@ class ChainExhausted(Exception):
 
 class Provider(ABC):
     key: str
+    # How many times the chain may call this provider before falling through.
+    # Two is the default "one retry on a blip"; ultra mode raises its own.
+    max_attempts: int = 2
 
     @abstractmethod
     async def complete(
         self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> Reply: ...
 
+    def available(self) -> bool:
+        """False when the provider has nothing to dial at all.
+
+        Distinct from being out of quota, which is the ledger's answer and is
+        worth logging: a provider whose host has not been found yet is not a
+        problem, it is simply not there this minute.
+        """
+        return True
+
+
+# Ultra mode's host is a machine in the house, not a metered API. It still
+# needs a bucket -- the ledger refuses a key it has never heard of -- so it
+# gets one nobody can exhaust.
+UNMETERED = Limits(rpm=10_000, tpm=100_000_000, rpd=1_000_000)
+
 
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
     """One budget per chain key, all taken from the same env-configured tier."""
     limits = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
-    return {key: limits for key in settings.llm_chain}
+    keys = {key: limits for key in settings.llm_chain}
+    if settings.ultra:
+        keys[f"ultra:{settings.ultra_model}"] = UNMETERED
+    return keys
 
 
 class ProviderChain:
@@ -139,6 +160,9 @@ class ProviderChain:
         self.providers = list(providers)
         self.ledger = ledger
         self.call_timeout_s = call_timeout_s
+        # Set by ``from_settings`` in ultra mode. The supervisor needs it to
+        # run the periodic sweep; nothing else in the chain touches it.
+        self.ultra_finder = None
 
     @staticmethod
     def from_settings(
@@ -147,6 +171,20 @@ class ProviderChain:
         call_timeout_s: float | None = None,
     ) -> ProviderChain:
         providers: list[Provider] = []
+        if settings.ultra:
+            # Deliberately first: a host in the house costs nothing and is
+            # never rate limited, so it answers while it can and the metered
+            # chain below is what happens when it cannot.
+            from ai_brain.discovery import OllamaFinder, subnets_for
+            from ai_brain.llm.ultra import UltraOllamaProvider
+
+            finder = OllamaFinder(
+                settings.ultra_model,
+                subnets_for(settings.ultra_subnets, settings.ha_url),
+            )
+            ultra = UltraOllamaProvider(finder)
+            providers.append(ultra)
+
         for entry in settings.llm_chain:
             name, _, model = entry.partition(":")
             if name == "gemini":
@@ -174,7 +212,10 @@ class ProviderChain:
                 raise ValueError(f"provider '{name}' not implemented")
         if call_timeout_s is None:
             call_timeout_s = getattr(settings, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S)
-        return ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
+        chain = ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
+        if settings.ultra:
+            chain.ultra_finder = ultra.finder
+        return chain
 
     async def complete(
         self,
@@ -192,6 +233,9 @@ class ProviderChain:
 
         for provider in self.providers:
             key = provider.key
+            if not provider.available():
+                log.debug("skipping %s: nothing to dial", key)
+                continue
             decision = self.ledger.can_spend(key, priority)
             if not decision.allowed:
                 log.warning("skipping %s: %s", key, decision.reason)
@@ -216,10 +260,11 @@ class ProviderChain:
         priority: Priority,
         remember: Callable[[float | None], None],
     ) -> Reply | None:
-        """One provider's turn: up to two attempts, then None to fall through."""
+        """One provider's turn: up to ``max_attempts`` of them, then None."""
         key = provider.key
-        for attempt in (1, 2):
-            if attempt == 2:
+        attempts = max(1, provider.max_attempts)
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
                 # The first attempt spent budget, and on a small free tier that
                 # can be the last of it. Retrying anyway sends a request the
                 # ledger has already said no to -- and against a provider that
@@ -244,7 +289,7 @@ class ProviderChain:
                     f"call exceeded {self.call_timeout_s}s", kind="timeout"
                 )
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
-                if attempt == 1:
+                if attempt < attempts:
                     continue
                 return None
             except ProviderError as err:
@@ -260,7 +305,7 @@ class ProviderChain:
                     self.ledger.record_429(key, err.retry_after_s)
                     remember(self.ledger.can_spend(key, priority).retry_at)
                     return None
-                if err.kind in RETRYABLE and attempt == 1:
+                if err.kind in RETRYABLE and attempt < attempts:
                     continue
                 return None
             else:

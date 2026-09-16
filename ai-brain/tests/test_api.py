@@ -100,6 +100,34 @@ async def test_status_reports_the_supervisor_at_a_glance(client, system):
     assert first["recent_requests"] == 0
 
 
+async def test_status_reports_ultra_mode_off(client):
+    assert (await get_json(client, "/api/status"))["ultra"] == {"enabled": False}
+
+
+async def test_status_reports_the_ultra_host_when_one_is_found(tmp_path):
+    import ipaddress
+
+    from ai_brain.discovery import OllamaFinder, OllamaHost
+
+    settings = load_settings(env(tmp_path, ULTRA_MODE="1"))
+    system = build(settings, chain_factory=fake_chain, clock=lambda: NOW)
+    finder = OllamaFinder(settings.ultra_model, [ipaddress.ip_network("192.168.68.0/24")])
+    finder._host = OllamaHost("http://192.168.68.9:11434", settings.ultra_model, NOW)
+    system.chain.ultra_finder = finder
+
+    app = build_app(system, started_at=STARTED_AT, clock=lambda: NOW)
+    async with TestClient(TestServer(app)) as test_client:
+        ultra = (await get_json(test_client, "/api/status"))["ultra"]
+
+    assert ultra == {
+        "enabled": True,
+        "model": "deepseek-r1:8b",
+        "host": "http://192.168.68.9:11434",
+        "found_at": NOW,
+        "subnets": ["192.168.68.0/24"],
+    }
+
+
 async def test_status_settings_are_an_allowlist_not_the_whole_dataclass(client):
     settings = (await get_json(client, "/api/status"))["settings"]
     assert set(settings) == {

@@ -49,6 +49,23 @@ def test_effort_knobs_are_overridable():
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
 
 
+def test_ultra_mode_is_off_unless_asked_for():
+    s = load_settings({})
+    assert s.ultra is False
+    assert s.ultra_model == "deepseek-r1:8b"
+    assert s.ultra_subnets == []
+    assert s.ultra_scan_s == 600
+    # Exactly "1", like DRY_RUN -- "true" is not an accident we want to honour.
+    assert load_settings({"ULTRA_MODE": "true"}).ultra is False
+    assert load_settings({"ULTRA_MODE": "1"}).ultra is True
+
+
+def test_ultra_subnets_and_interval_are_configurable():
+    s = load_settings({"ULTRA_SUBNETS": "10.0.0.0/24, 192.168.1.0/24", "ULTRA_SCAN_MIN": "2"})
+    assert s.ultra_subnets == ["10.0.0.0/24", "192.168.1.0/24"]
+    assert s.ultra_scan_s == 120
+
+
 def test_default_seed_root_is_the_shipped_seed_dir():
     assert DEFAULT_SEED_ROOT.is_dir()
     assert (DEFAULT_SEED_ROOT / "constitution.md").is_file()
