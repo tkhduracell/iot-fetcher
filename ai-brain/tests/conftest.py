@@ -14,6 +14,7 @@ def env(tmp_path: Path, **extra) -> dict[str, str]:
     base = {
         "MEMORY_ROOT": str(tmp_path / "memory"),
         "SEED_ROOT": str(SEED),
+        # No lan: entry, so tests that do not care never sweep a subnet.
         "LLM_CHAIN": "fake:a,fake:b",
         # The explicit opt-out: blank now means the default set, which would
         # start four extra loops in every test that only cares about the brain.

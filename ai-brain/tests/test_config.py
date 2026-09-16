@@ -10,6 +10,7 @@ def test_defaults_from_empty_env():
     assert s.llm_chain == [
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
+        "lan:qwen3-coder:30b",
         "ollama:llama3.2:3b",
     ]
     assert s.experts == ["energy", "health", "house-ops", "researcher"]
@@ -47,6 +48,16 @@ def test_experts_none_is_the_opt_out():
 def test_effort_knobs_are_overridable():
     s = load_settings({"CYCLE_MAX_ROUNDS": "4", "CYCLE_MAX_TOKENS": "1000", "GEMINI_THINKING_BUDGET": "0"})
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
+
+
+def test_lan_sweep_defaults_and_overrides():
+    s = load_settings({})
+    assert s.lan_subnets == []
+    assert s.lan_scan_s == 600
+
+    s = load_settings({"LAN_SUBNETS": "10.0.0.0/24, 192.168.1.0/24", "LAN_SCAN_MIN": "2"})
+    assert s.lan_subnets == ["10.0.0.0/24", "192.168.1.0/24"]
+    assert s.lan_scan_s == 120
 
 
 def test_default_seed_root_is_the_shipped_seed_dir():
@@ -96,7 +107,7 @@ def test_default_chain_entries_are_all_provider_qualified():
     for entry in DEFAULT_LLM_CHAIN.split(","):
         provider, sep, model = entry.partition(":")
         assert sep == ":"
-        assert provider in ("gemini", "ollama")
+        assert provider in ("lan", "gemini", "ollama")
         assert model
 
 

@@ -52,7 +52,7 @@ TIMEOUT_CHARGE_TOKENS = 4000
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
 # cycle, and so the two lists cannot drift apart.
-PROVIDER_PREFIXES: frozenset[str] = frozenset({"gemini", "ollama", "fake"})
+PROVIDER_PREFIXES: frozenset[str] = frozenset({"lan", "gemini", "ollama", "fake"})
 
 
 @dataclass(frozen=True)
@@ -116,17 +116,37 @@ class ChainExhausted(Exception):
 
 class Provider(ABC):
     key: str
+    # How many times the chain may call this provider before falling through.
+    # Two is the default "one retry on a blip"; the lan provider raises its own.
+    max_attempts: int = 2
 
     @abstractmethod
     async def complete(
         self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> Reply: ...
 
+    def available(self) -> bool:
+        """False when the provider has nothing to dial at all.
+
+        Distinct from being out of quota, which is the ledger's answer and is
+        worth logging: a provider whose host has not been found yet is not a
+        problem, it is simply not there this minute.
+        """
+        return True
+
+
+# A machine in the house is not a metered API. It still needs a bucket -- the
+# ledger refuses a key it has never heard of -- so it gets one nobody can
+# exhaust, and the free-tier arithmetic stays about the free tier.
+UNMETERED = Limits(rpm=10_000, tpm=100_000_000, rpd=1_000_000)
+
 
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
-    """One budget per chain key, all taken from the same env-configured tier."""
+    """One budget per chain key: the env-configured tier, except for local hosts."""
     limits = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
-    return {key: limits for key in settings.llm_chain}
+    return {
+        key: UNMETERED if key.startswith("lan:") else limits for key in settings.llm_chain
+    }
 
 
 class ProviderChain:
@@ -139,6 +159,10 @@ class ProviderChain:
         self.providers = list(providers)
         self.ledger = ledger
         self.call_timeout_s = call_timeout_s
+        # Set by ``from_settings`` when the chain has a ``lan:`` entry. The
+        # supervisor needs it to run the periodic sweep; nothing else in the
+        # chain touches it.
+        self.lan_finder = None
 
     @staticmethod
     def from_settings(
@@ -147,9 +171,21 @@ class ProviderChain:
         call_timeout_s: float | None = None,
     ) -> ProviderChain:
         providers: list[Provider] = []
+        lan_finder = None
         for entry in settings.llm_chain:
             name, _, model = entry.partition(":")
-            if name == "gemini":
+            if name == "lan":
+                # A model on some machine in the house. Which machine is not
+                # known until a scan finds one, so the provider carries a
+                # finder rather than an address.
+                from ai_brain.discovery import OllamaFinder, subnets_for
+                from ai_brain.llm.lan import LanOllamaProvider
+
+                lan_finder = OllamaFinder(
+                    model, subnets_for(settings.lan_subnets, settings.ha_url)
+                )
+                providers.append(LanOllamaProvider(lan_finder))
+            elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
                 # the concrete provider module or its API client.
                 from ai_brain.llm.gemini import GeminiProvider
@@ -174,7 +210,9 @@ class ProviderChain:
                 raise ValueError(f"provider '{name}' not implemented")
         if call_timeout_s is None:
             call_timeout_s = getattr(settings, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S)
-        return ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
+        chain = ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
+        chain.lan_finder = lan_finder
+        return chain
 
     async def complete(
         self,
@@ -192,6 +230,9 @@ class ProviderChain:
 
         for provider in self.providers:
             key = provider.key
+            if not provider.available():
+                log.debug("skipping %s: nothing to dial", key)
+                continue
             decision = self.ledger.can_spend(key, priority)
             if not decision.allowed:
                 log.warning("skipping %s: %s", key, decision.reason)
@@ -216,10 +257,11 @@ class ProviderChain:
         priority: Priority,
         remember: Callable[[float | None], None],
     ) -> Reply | None:
-        """One provider's turn: up to two attempts, then None to fall through."""
+        """One provider's turn: up to ``max_attempts`` of them, then None."""
         key = provider.key
-        for attempt in (1, 2):
-            if attempt == 2:
+        attempts = max(1, provider.max_attempts)
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
                 # The first attempt spent budget, and on a small free tier that
                 # can be the last of it. Retrying anyway sends a request the
                 # ledger has already said no to -- and against a provider that
@@ -244,7 +286,7 @@ class ProviderChain:
                     f"call exceeded {self.call_timeout_s}s", kind="timeout"
                 )
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
-                if attempt == 1:
+                if attempt < attempts:
                     continue
                 return None
             except ProviderError as err:
@@ -260,7 +302,7 @@ class ProviderChain:
                     self.ledger.record_429(key, err.retry_after_s)
                     remember(self.ledger.can_spend(key, priority).retry_at)
                     return None
-                if err.kind in RETRYABLE and attempt == 1:
+                if err.kind in RETRYABLE and attempt < attempts:
                     continue
                 return None
             else:

@@ -249,7 +249,9 @@ def test_from_settings_builds_keys_in_order(tmp_path, monkeypatch):
     stub.GeminiProvider = StubGemini
     monkeypatch.setitem(sys.modules, "ai_brain.llm.gemini", stub)
 
-    settings = load_settings({"LLM_CHAIN": "gemini:flash,gemini:pro,fake:x", "GEMINI_API_KEY": "k"})
+    settings = load_settings(
+        {"LLM_CHAIN": "gemini:flash,gemini:pro,fake:x", "GEMINI_API_KEY": "k"}
+    )
     ledger, _ = make_ledger(tmp_path, ["gemini:flash", "gemini:pro", "fake:x"])
     chain = ProviderChain.from_settings(settings, ledger)
 
@@ -342,16 +344,19 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
     env = parse_env_file(ENV_EXAMPLE)
     assert env["LLM_CHAIN"] == (
-        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
+        "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,"
+        "lan:qwen3-coder:30b,ollama:llama3.2:3b"
     )
 
     settings = load_settings({**env, "GEMINI_API_KEY": "k"})
     ledger, _ = make_ledger(tmp_path, settings.llm_chain)
     chain = ProviderChain.from_settings(settings, ledger)
 
+    # The free tier first, local hardware behind it, in the file's order.
     assert [p.key for p in chain.providers] == [
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
+        "lan:qwen3-coder:30b",
         "ollama:llama3.2:3b",
     ]
 

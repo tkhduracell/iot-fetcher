@@ -66,6 +66,7 @@ class System:
     executors: Executors
     settings: Settings
     wake: Callable[[str], None]
+    chain: ProviderChain | None = None
     slack_out: object | None = None
 
 
@@ -210,6 +211,7 @@ def build(
         executors=executors,
         settings=settings,
         wake=wake,
+        chain=chain,
     )
 
 
@@ -312,6 +314,13 @@ async def run(settings: Settings) -> None:
     tasks.append(asyncio.create_task(_every(METRICS_EVERY_S, publish_metrics)))
     tasks.append(asyncio.create_task(_every(EXPIRE_EVERY_S, expire_proposals)))
     tasks.append(asyncio.create_task(_every(DAY_ROLL_EVERY_S, watch_day_roll)))
+
+    finder = getattr(system.chain, "lan_finder", None)
+    if finder is not None:
+        # Scan once before the loops start thinking, so the first cycle of the
+        # process can already use the LAN host rather than the cloud.
+        await finder.scan()
+        tasks.append(asyncio.create_task(_every(settings.lan_scan_s, finder.scan)))
     if system.slack_out is not None:
         tasks.append(asyncio.create_task(_every(FLUSH_EVERY_S, system.slack_out.flush_queue)))
 

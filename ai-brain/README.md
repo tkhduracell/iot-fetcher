@@ -36,12 +36,15 @@ then owned by you) is the only fixed text; `goals.md` and every persona file
 are rewritten by the brain over time. Deleting the volume resets it to the
 seed; editing `constitution.md` on the volume is how you steer it.
 
-**Gemini free tier.** All inference runs through a provider chain
-(`LLM_CHAIN`, default `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite`)
-against a free-tier key. Every entry is `provider:model` — a bare model id has
-no provider to dispatch to and the container refuses to start. A shared quota ledger decides before every call whether a model
-may be dialled at all, so the process stays inside the free allowance without
-relying on the API to say no (see [Quota](#quota)).
+**Best model first, local hardware as the fallback.** All inference runs
+through a provider chain (`LLM_CHAIN`), tried in order until one answers: the
+Gemini free tier until the ledger says each key's quota is gone, then a model
+on a machine on the LAN, then the rpi5's own small one (see
+[Local models](#local-models)). Every entry is `provider:model`
+— a bare model id has no provider to dispatch to and the container refuses to
+start. A shared quota ledger decides before every Gemini call whether that
+model may be dialled at all, so the process stays inside the free allowance
+without relying on the API to say no (see [Quota](#quota)).
 
 ## Memory layout
 
@@ -87,7 +90,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | --- | --- | --- |
 | `MEMORY_ROOT` | `/memory` | Where agent memory lives. The volume mount point. |
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
-| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite` | `provider:model` entries tried in order until one answers. |
+| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b,ollama:llama3.2:3b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
 | `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Unset **or blank** means all four; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
@@ -108,6 +111,8 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `RPM` | `8` | Requests per minute, per model key. |
 | `TPM` | `200000` | Tokens per minute, per model key. |
 | `RPD` | `200` | Requests per day, per model key. |
+| `LAN_SUBNETS` | *(empty)* | Subnets to sweep for the `lan:` model's host. Empty means the /24 `HA_URL` is on — see [Local models](#local-models). |
+| `LAN_SCAN_MIN` | `10` | Minutes between sweeps. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
 | `CYCLE_MAX_ROUNDS` | `16` | Tool rounds one cycle may take before the loop stops waiting for `end_cycle`. |
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
@@ -214,6 +219,47 @@ Two guarantees are worth knowing when reading logs:
   the safe failure is "did not retry", not "spoke twice".
 - **Quiet hours.** `sonos_say` refuses between 22:00 and 07:00 Europe/Stockholm
   and records `blocked_quiet_hours`.
+
+## Local models
+
+The chain spends the free tier first and falls back to hardware in the house:
+
+```
+gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite → lan:qwen3-coder:30b → ollama:llama3.2:3b
+```
+
+Each Gemini key answers until the ledger says its quota is gone (or three 429s
+park it), and the local entries are what the cycle uses from then until the day
+rolls over. `ollama:` is the rpi5's own service, the last resort. **`lan:` is a model on whatever machine in
+the house is awake and has it pulled** — the desktop in the next room can run
+something worth asking, but it is not a fixed address, so the provider goes and
+finds it.
+
+Every `LAN_SCAN_MIN` minutes the process sweeps the network: a TCP connect to
+port 11434 across the subnet, then `GET /api/tags` on whatever answered. A host
+counts only if it has the chain's `lan:` model pulled — a machine running Ollama
+with nothing installed would otherwise be picked and then 404 every call. A
+known host is re-confirmed with one request; only a host that stopped answering
+costs a full sweep.
+
+The subnet is `LAN_SUBNETS` when set, and otherwise the /24 that `HA_URL` is on
+— this container's own address is a docker bridge (172.x), so sweeping its own
+network would find nothing. Public ranges and anything wider than a /22 are
+refused. Every scan is bounded: 30s for the scan, 20s per subnet sweep, 5s per
+`/api/tags`, 0.4s per connect.
+
+The `lan:` key gets an unmetered ledger bucket — nothing about a free tier
+applies to a computer you own — and three attempts rather than the usual two.
+After the third failure the host is forgotten, the next sweep looks for another
+one, and the cycle falls through to the rest of the chain. Until a host is
+found the provider reports itself unavailable, so the chain steps past it
+without spending anything.
+
+`GET /api/status` reports what it found (`lan_host.host`, `lan_host.model`,
+`lan_host.subnets`), which is where to look when you expect the desktop to be
+answering and Gemini is.
+
+Drop the `lan:` entry from `LLM_CHAIN` to switch the sweep off entirely.
 
 ## Quota
 

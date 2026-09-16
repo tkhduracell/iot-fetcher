@@ -100,6 +100,34 @@ async def test_status_reports_the_supervisor_at_a_glance(client, system):
     assert first["recent_requests"] == 0
 
 
+async def test_status_reports_no_lan_host_without_a_lan_entry(client):
+    assert (await get_json(client, "/api/status"))["lan_host"] == {"enabled": False}
+
+
+async def test_status_reports_the_lan_host_when_one_is_found(tmp_path):
+    import ipaddress
+
+    from ai_brain.discovery import OllamaFinder, OllamaHost
+
+    settings = load_settings(env(tmp_path))
+    system = build(settings, chain_factory=fake_chain, clock=lambda: NOW)
+    finder = OllamaFinder("qwen3-coder:30b", [ipaddress.ip_network("192.168.68.0/24")])
+    finder._host = OllamaHost("http://192.168.68.9:11434", "qwen3-coder:30b", NOW)
+    system.chain.lan_finder = finder
+
+    app = build_app(system, started_at=STARTED_AT, clock=lambda: NOW)
+    async with TestClient(TestServer(app)) as test_client:
+        lan = (await get_json(test_client, "/api/status"))["lan_host"]
+
+    assert lan == {
+        "enabled": True,
+        "model": "qwen3-coder:30b",
+        "host": "http://192.168.68.9:11434",
+        "found_at": NOW,
+        "subnets": ["192.168.68.0/24"],
+    }
+
+
 async def test_status_settings_are_an_allowlist_not_the_whole_dataclass(client):
     settings = (await get_json(client, "/api/status"))["settings"]
     assert set(settings) == {

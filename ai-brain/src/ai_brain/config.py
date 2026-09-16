@@ -16,7 +16,21 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # brain instead of a chain with zero providers -- which builds fine, raises
 # ChainExhausted on every cycle, and emits no ledger series at all, so the
 # misconfiguration is invisible in both the logs and Grafana.
-DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama:llama3.2:3b"
+# Best model first, and local hardware is what the free tier falls back to
+# rather than the other way round: the flash models answer until the ledger
+# says their quota is gone, and only then does the chain reach for a machine in
+# the house -- ``lan:`` on whatever LAN box is awake and has it pulled (see
+# ai_brain.discovery), then the small model on the rpi5 itself.
+#
+# The lan: model is a tool-calling one on purpose. A cycle is nothing but tool
+# calls -- every round ends in end_cycle -- so a reasoning model that answers
+# in prose burns its rounds and writes nothing, however well it reasons.
+DEFAULT_LLM_CHAIN = (
+    "gemini:gemini-3.8-flash,"
+    "gemini:gemini-3.5-flash-lite,"
+    "lan:qwen3-coder:30b,"
+    "ollama:llama3.2:3b"
+)
 
 # Every expert the image ships a persona for. Brain-only was the rollout
 # default while the loops were unproven; with them proven the useful default is
@@ -54,6 +68,8 @@ class Settings:
     slack_app_token: str
     slack_user_id: str
     dry_run: bool
+    lan_subnets: list[str]
+    lan_scan_s: int
     max_rounds: int
     max_tokens: int
     thinking_budget: int
@@ -128,6 +144,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
         dry_run=get("DRY_RUN") == "1",
+        lan_subnets=_csv(get("LAN_SUBNETS")),
+        lan_scan_s=get_int("LAN_SCAN_MIN", 10) * 60,
         max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
         max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),
