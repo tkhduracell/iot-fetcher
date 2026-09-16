@@ -37,7 +37,11 @@ from ai_brain.tools import ToolContext, ToolRegistry
 
 log = logging.getLogger(__name__)
 
-MAX_TOKENS = 4000
+# Per-round output budget. A cycle that has to fit its reasoning, its tool
+# calls and its end_cycle summary into a few hundred tokens stops early and
+# writes nothing worth reading, so this is generous; ``CYCLE_MAX_TOKENS``
+# overrides it.
+MAX_TOKENS = 8000
 MIN_BACKOFF_S = 60
 MAX_WAKE_S = 12 * 3600
 
@@ -162,7 +166,8 @@ class AgentLoop:
         constitution: str,
         clock: Callable[[], float],
         pause_file: Path,
-        max_rounds: int = 8,
+        max_rounds: int = 16,
+        max_tokens: int = MAX_TOKENS,
         call_timeout_s: int = 60,
     ) -> None:
         self.name = name
@@ -176,6 +181,7 @@ class AgentLoop:
         self.clock = clock
         self.pause_file = Path(pause_file)
         self.max_rounds = max_rounds
+        self.max_tokens = max_tokens
         self.call_timeout_s = call_timeout_s
 
         self.wake = asyncio.Event()
@@ -219,7 +225,7 @@ class AgentLoop:
             while rounds < self.max_rounds:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
                 # only takes effect at the next cycle boundary is no pause at
-                # all when a cycle is eight provider calls long.
+                # all when a cycle is a dozen provider calls long.
                 if self.pause_file.exists():
                     status, summary = "paused", "paused mid-cycle"
                     log.info("[%s] PAUSE appeared mid-cycle, stopping", self.name)
@@ -228,7 +234,7 @@ class AgentLoop:
                     self.chain.complete(
                         messages,
                         self.registry.specs_for(self.name),
-                        MAX_TOKENS,
+                        self.max_tokens,
                         self.priority,
                     ),
                     timeout=self.call_timeout_s * CHAIN_TIMEOUT_FACTOR,

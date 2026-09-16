@@ -10,6 +10,9 @@ argue its way past:
 * **DRY_RUN.** Set it and nothing leaves the process; the call is logged and
   returns ``"dry-run"``. Tests assert on an untouched respx router, which is
   the only honest way to prove a speaker was never dialled.
+* **Allowlists.** ``ha_service`` is the one executor whose target is named by
+  the model rather than by configuration, so both the service and the data
+  keys it may carry are checked against a fixed set first.
 
 Executors are deliberately dumb: no retries, no queueing, no state. A failure
 raises, and ``Approvals`` is what decides that a raised exception means a
@@ -34,6 +37,46 @@ DEFAULT_TZ = "Europe/Stockholm"
 QUIET_FROM_HOUR = 22
 QUIET_TO_HOUR = 7
 TIMEOUT_S = 20
+
+# The Home Assistant services an approved proposal may call. An allowlist, not
+# a filter: ``ha_service`` takes a service name from a language model, and the
+# set of things HA can be asked to do includes deleting backups and restarting
+# the host. Anything not named here is refused before a request is built.
+HA_ALLOWED_SERVICES = frozenset(
+    {
+        "light.turn_on",
+        "light.turn_off",
+        "light.toggle",
+        "switch.turn_on",
+        "switch.turn_off",
+        "switch.toggle",
+        "scene.turn_on",
+        "script.turn_on",
+        "climate.set_temperature",
+        "cover.open_cover",
+        "cover.close_cover",
+        "fan.turn_on",
+        "fan.turn_off",
+        "media_player.media_pause",
+        "media_player.volume_set",
+    }
+)
+
+# Service data the model may pass through. Free-form data would let a caller
+# reach fields the allowlist is meant to bound (``entity_id`` above all, which
+# is supplied separately and never from here).
+HA_ALLOWED_DATA_KEYS = frozenset(
+    {
+        "brightness_pct",
+        "color_temp_kelvin",
+        "transition",
+        "temperature",
+        "hvac_mode",
+        "position",
+        "percentage",
+        "volume_level",
+    }
+)
 
 
 class QuietHours(Exception):
@@ -83,11 +126,41 @@ class Executors:
         _raise_for_status(response, "ha_todo_add")
         return f"added: {item}"
 
+    async def ha_service(self, service: str, entity_id: str, data: dict | None = None) -> str:
+        if service not in HA_ALLOWED_SERVICES:
+            raise ValueError(f"service not allowed: {service}")
+        domain, _, name = service.partition(".")
+        extra = dict(data or {})
+        unknown = sorted(set(extra) - HA_ALLOWED_DATA_KEYS)
+        if unknown:
+            raise ValueError(f"{service} data has unsupported keys: {', '.join(unknown)}")
+        if self.settings.dry_run:
+            log.info("[dry-run] ha_service %s on %s data=%s", service, entity_id, extra)
+            return "dry-run"
+        url = f"{self.settings.ha_url.rstrip('/')}/api/services/{domain}/{name}"
+        response = await self.http.post(
+            url,
+            json={"entity_id": entity_id, **extra},
+            headers={"Authorization": f"Bearer {self.settings.ha_token}"},
+            timeout=TIMEOUT_S,
+        )
+        _raise_for_status(response, "ha_service")
+        return f"called {service} on {entity_id}"
+
     async def run(self, kind: str, payload: dict) -> str:
         if kind == "sonos_say":
             return await self.sonos_say(_require(payload, "text", kind))
         if kind == "ha_todo_add":
             return await self.ha_todo_add(_require(payload, "item", kind))
+        if kind == "ha_service":
+            data = payload.get("data")
+            if data is not None and not isinstance(data, dict):
+                raise ValueError("ha_service data must be an object")
+            return await self.ha_service(
+                _require(payload, "service", kind),
+                _require(payload, "entity_id", kind),
+                data,
+            )
         raise ValueError(f"unknown kind: {kind}")
 
 

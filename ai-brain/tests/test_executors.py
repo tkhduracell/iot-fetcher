@@ -188,3 +188,78 @@ async def test_run_rejects_an_unknown_kind(settings, http):
 async def test_run_rejects_a_payload_missing_its_key(settings, http):
     with pytest.raises(ValueError, match="text"):
         await make_executors(settings, http).run("sonos_say", {"nope": "hi"})
+
+
+# -- ha_service -----------------------------------------------------------
+
+
+@respx.mock
+async def test_ha_service_calls_the_domain_endpoint(settings, http):
+    route = respx.post("http://ha:8123/api/services/light/turn_off").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    result = await make_executors(settings, http).ha_service("light.turn_off", "light.kitchen")
+
+    assert route.called
+    assert json.loads(route.calls[0].request.content) == {"entity_id": "light.kitchen"}
+    assert route.calls[0].request.headers["authorization"] == "Bearer ha-token"
+    assert result == "called light.turn_off on light.kitchen"
+
+
+@respx.mock
+async def test_ha_service_passes_allowed_data(settings, http):
+    route = respx.post("http://ha:8123/api/services/light/turn_on").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    await make_executors(settings, http).ha_service(
+        "light.turn_on", "light.kitchen", {"brightness_pct": 40}
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "entity_id": "light.kitchen",
+        "brightness_pct": 40,
+    }
+
+
+@respx.mock
+async def test_ha_service_refuses_a_service_outside_the_allowlist(settings, http):
+    with pytest.raises(ValueError, match="not allowed"):
+        await make_executors(settings, http).ha_service("homeassistant.restart", "all")
+    assert not respx.calls
+
+
+@respx.mock
+async def test_ha_service_refuses_unknown_data_keys(settings, http):
+    with pytest.raises(ValueError, match="unsupported keys"):
+        await make_executors(settings, http).ha_service(
+            "light.turn_on", "light.kitchen", {"entity_id": "light.everything"}
+        )
+    assert not respx.calls
+
+
+@respx.mock
+async def test_ha_service_is_silent_in_dry_run(http):
+    settings = load_settings({**ENV, "DRY_RUN": "1"})
+    assert await make_executors(settings, http).ha_service("light.turn_off", "light.kitchen") == (
+        "dry-run"
+    )
+    assert not respx.calls
+
+
+@respx.mock
+async def test_run_dispatches_ha_service(settings, http):
+    route = respx.post("http://ha:8123/api/services/switch/turn_on").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    await make_executors(settings, http).run(
+        "ha_service", {"service": "switch.turn_on", "entity_id": "switch.pump"}
+    )
+    assert route.called
+
+
+async def test_run_rejects_non_object_ha_service_data(settings, http):
+    with pytest.raises(ValueError, match="must be an object"):
+        await make_executors(settings, http).run(
+            "ha_service",
+            {"service": "light.turn_on", "entity_id": "light.kitchen", "data": "bright"},
+        )

@@ -48,6 +48,19 @@ log = logging.getLogger(__name__)
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
 TEMPERATURE = 0.7
 
+# ``-1`` is Gemini's "think as long as the question deserves". Sending nothing
+# leaves the model on its own default, which on a flash model is the shallowest
+# pass it can get away with -- fine for a chat turn, not for a cycle that has
+# to read the house and decide what matters. ``0`` means send no
+# ``thinkingConfig`` at all.
+DEFAULT_THINKING_BUDGET = -1
+
+# Not every model in the chain accepts the field: flash-lite and the older
+# flashes 400 on it. A model that refuses it is not a failed cycle -- the field
+# is dropped for that provider and the call is retried once, so the chain never
+# falls through to a weaker model over a knob we added.
+_THINKING_REJECTED = re.compile(r"thinking|thought", re.IGNORECASE)
+
 # Gemini reports backoff as a protobuf duration string, e.g. "7s" or "12.5s".
 _RETRY_DELAY = re.compile(r"^(\d+(?:\.\d+)?)s$")
 
@@ -71,11 +84,13 @@ class GeminiProvider(Provider):
         api_key: str,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 60,
+        thinking_budget: int = DEFAULT_THINKING_BUDGET,
     ):
         self.model = model
         self.key = f"gemini:{model}"
         self._api_key = api_key
         self._timeout_s = timeout_s
+        self._thinking_budget = thinking_budget
         self._client = client
         # A client we were handed belongs to the caller; only one we made
         # ourselves is ours to close.
@@ -97,7 +112,19 @@ class GeminiProvider(Provider):
     async def complete(
         self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> Reply:
-        payload = build_request(messages, tools, max_tokens)
+        response = await self._post(messages, tools, max_tokens)
+
+        if response.status_code >= 400:
+            if self._disable_thinking(response):
+                response = await self._post(messages, tools, max_tokens)
+            if response.status_code >= 400:
+                raise self._error(response)
+        return self._reply(response.json())
+
+    async def _post(
+        self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+    ) -> httpx.Response:
+        payload = build_request(messages, tools, max_tokens, self._thinking_budget)
         body = json.dumps(payload)
         log.debug(
             "%s request: %d bytes, %d contents",
@@ -107,7 +134,7 @@ class GeminiProvider(Provider):
         )
 
         try:
-            response = await self._http().post(
+            return await self._http().post(
                 self.url,
                 content=body,
                 headers={
@@ -120,9 +147,20 @@ class GeminiProvider(Provider):
         except httpx.HTTPError as err:
             raise ProviderError(f"{self.key} transport error: {err}", kind="server") from err
 
-        if response.status_code >= 400:
-            raise self._error(response)
-        return self._reply(response.json())
+    def _disable_thinking(self, response: httpx.Response) -> bool:
+        """True when this 400 was our thinking budget, which is now switched off.
+
+        Permanent for the life of the provider: the model will not start
+        accepting the field mid-run, and retrying it every call would double
+        every request this process makes.
+        """
+        if self._thinking_budget == 0 or response.status_code != 400:
+            return False
+        if not _THINKING_REJECTED.search(_error_message(response)):
+            return False
+        log.warning("%s rejected thinkingConfig; continuing without it", self.key)
+        self._thinking_budget = 0
+        return True
 
     def _error(self, response: httpx.Response) -> ProviderError:
         status = response.status_code
@@ -191,7 +229,12 @@ class GeminiProvider(Provider):
         )
 
 
-def build_request(messages: list[Message], tools: list[ToolSpec], max_tokens: int) -> dict:
+def build_request(
+    messages: list[Message],
+    tools: list[ToolSpec],
+    max_tokens: int,
+    thinking_budget: int = DEFAULT_THINKING_BUDGET,
+) -> dict:
     """Our message list as a Gemini ``generateContent`` body."""
     system: list[str] = []
     contents: list[dict[str, Any]] = []
@@ -250,7 +293,10 @@ def build_request(messages: list[Message], tools: list[ToolSpec], max_tokens: in
                 ]
             }
         ]
-    payload["generationConfig"] = {"maxOutputTokens": max_tokens, "temperature": TEMPERATURE}
+    generation: dict[str, Any] = {"maxOutputTokens": max_tokens, "temperature": TEMPERATURE}
+    if thinking_budget != 0:
+        generation["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+    payload["generationConfig"] = generation
     return payload
 
 

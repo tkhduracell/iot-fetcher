@@ -162,7 +162,11 @@ async def test_request_body_mapping():
                 ]
             }
         ],
-        "generationConfig": {"maxOutputTokens": 512, "temperature": 0.7},
+        "generationConfig": {
+            "maxOutputTokens": 512,
+            "temperature": 0.7,
+            "thinkingConfig": {"thinkingBudget": -1},
+        },
     }
 
 
@@ -599,3 +603,55 @@ def test_a_turn_with_text_keeps_the_signature_on_the_text():
 
     assert parts[0] == {"text": "thinking out loud", "thoughtSignature": "sig-turn"}
     assert "thoughtSignature" not in parts[1]
+
+
+# -- thinking budget ------------------------------------------------------
+
+
+@respx.mock
+async def test_thinking_budget_is_sent_and_can_be_switched_off():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    await provider(thinking_budget=2048).complete([Message(role="user", content="hi")], [], 64)
+    assert json.loads(route.calls.last.request.content)["generationConfig"]["thinkingConfig"] == {
+        "thinkingBudget": 2048
+    }
+
+    await provider(thinking_budget=0).complete([Message(role="user", content="hi")], [], 64)
+    assert "thinkingConfig" not in json.loads(route.calls.last.request.content)["generationConfig"]
+
+
+@respx.mock
+async def test_a_model_that_rejects_thinking_is_retried_without_it():
+    rejection = httpx.Response(
+        400,
+        json={"error": {"message": "Unknown name \"thinkingConfig\": Cannot find field."}},
+    )
+    route = respx.post(URL).mock(
+        side_effect=[rejection, httpx.Response(200, json=text_response())]
+    )
+    p = provider(thinking_budget=-1)
+    reply = await p.complete([Message(role="user", content="hi")], [], 64)
+
+    assert reply.text == "hello"
+    assert route.call_count == 2
+    first, second = (json.loads(call.request.content) for call in route.calls)
+    assert "thinkingConfig" in first["generationConfig"]
+    assert "thinkingConfig" not in second["generationConfig"]
+
+    # The field stays off — a model does not start accepting it mid-run, and a
+    # retry per call would double every request the process makes.
+    respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    await p.complete([Message(role="user", content="hi")], [], 64)
+    assert "thinkingConfig" not in json.loads(respx.calls.last.request.content)["generationConfig"]
+
+
+@respx.mock
+async def test_an_unrelated_400_is_not_retried():
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(400, json={"error": {"message": "bad contents"}})
+    )
+    with pytest.raises(ProviderError) as excinfo:
+        await provider(thinking_budget=-1).complete([Message(role="user", content="hi")], [], 64)
+
+    assert excinfo.value.kind == "bad_request"
+    assert route.call_count == 1
