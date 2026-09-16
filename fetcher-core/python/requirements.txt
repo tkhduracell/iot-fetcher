@@ -132,7 +132,7 @@ six==1.17.0
     # via
     #   ecdsa
     #   python-dateutil
-tplinkrouterc6u==5.23.0
+tplinkrouterc6u==5.33.0
     # via iot-fetcher (pyproject.toml)
 typing-extensions==4.16.0
     # via reactivex
