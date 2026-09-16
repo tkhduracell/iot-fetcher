@@ -109,6 +109,42 @@ async def stream(
     return response, bytes(body), truncated, None
 
 
+async def stream_tail(
+    ctx: ToolContext,
+    method: str,
+    url: str,
+    *,
+    label: str,
+    max_bytes: int,
+    **kwargs: Any,
+) -> tuple[httpx.Response | None, bytes, bool, str | None]:
+    """Like ``stream``, but keep the *last* ``max_bytes`` instead of the first.
+
+    A log file is written at the end, so capping its head hands back the oldest
+    lines in the file -- exactly the ones nobody is debugging. The buffer is
+    trimmed after every chunk, so the whole body streams through the process
+    while only the tail is ever held.
+    """
+    kwargs.setdefault("timeout", TIMEOUT_S)
+    body = bytearray()
+    truncated = False
+    try:
+        async with (
+            client_for(ctx) as client,
+            client.stream(method, url, **kwargs) as response,
+        ):
+            if not response.is_success:
+                return None, b"", False, f"{label}: backend returned HTTP {response.status_code}"
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > max_bytes:
+                    truncated = True
+                    del body[: len(body) - max_bytes]
+    except httpx.HTTPError as exc:
+        return None, b"", False, f"{label}: {type(exc).__name__}: {exc}"
+    return response, bytes(body), truncated, None
+
+
 def decode_json(response: httpx.Response, label: str) -> tuple[Any, str | None]:
     try:
         return response.json(), None
