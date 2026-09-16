@@ -10,7 +10,7 @@ def test_defaults_from_empty_env():
     assert s.llm_chain == [
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
-        "lan:deepseek-r1:8b",
+        "lan:qwen3-coder:30b",
         "ollama:llama3.2:3b",
     ]
     assert s.experts == ["energy", "health", "house-ops", "researcher"]

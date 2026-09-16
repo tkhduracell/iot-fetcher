@@ -90,7 +90,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | --- | --- | --- |
 | `MEMORY_ROOT` | `/memory` | Where agent memory lives. The volume mount point. |
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
-| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:deepseek-r1:8b,ollama:llama3.2:3b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
+| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b,ollama:llama3.2:3b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
 | `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Unset **or blank** means all four; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
@@ -225,7 +225,7 @@ Two guarantees are worth knowing when reading logs:
 The chain spends the free tier first and falls back to hardware in the house:
 
 ```
-gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite → lan:deepseek-r1:8b → ollama:llama3.2:3b
+gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite → lan:qwen3-coder:30b → ollama:llama3.2:3b
 ```
 
 Each Gemini key answers until the ledger says its quota is gone (or three 429s

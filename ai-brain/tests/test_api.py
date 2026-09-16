@@ -111,8 +111,8 @@ async def test_status_reports_the_lan_host_when_one_is_found(tmp_path):
 
     settings = load_settings(env(tmp_path))
     system = build(settings, chain_factory=fake_chain, clock=lambda: NOW)
-    finder = OllamaFinder("deepseek-r1:8b", [ipaddress.ip_network("192.168.68.0/24")])
-    finder._host = OllamaHost("http://192.168.68.9:11434", "deepseek-r1:8b", NOW)
+    finder = OllamaFinder("qwen3-coder:30b", [ipaddress.ip_network("192.168.68.0/24")])
+    finder._host = OllamaHost("http://192.168.68.9:11434", "qwen3-coder:30b", NOW)
     system.chain.lan_finder = finder
 
     app = build_app(system, started_at=STARTED_AT, clock=lambda: NOW)
@@ -121,7 +121,7 @@ async def test_status_reports_the_lan_host_when_one_is_found(tmp_path):
 
     assert lan == {
         "enabled": True,
-        "model": "deepseek-r1:8b",
+        "model": "qwen3-coder:30b",
         "host": "http://192.168.68.9:11434",
         "found_at": NOW,
         "subnets": ["192.168.68.0/24"],

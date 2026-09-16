@@ -11,7 +11,7 @@ from ai_brain.llm import Message, ProviderChain, ProviderError, Reply, Usage
 from ai_brain.llm.fake import FakeProvider
 from ai_brain.llm.lan import LAN_ATTEMPTS, LanOllamaProvider
 
-MODEL = "deepseek-r1:8b"
+MODEL = "qwen3-coder:30b"
 MSGS = [Message(role="user", content="hi")]
 
 

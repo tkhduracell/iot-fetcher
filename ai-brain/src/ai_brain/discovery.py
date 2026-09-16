@@ -124,8 +124,9 @@ async def _has_model(client: httpx.AsyncClient, ip: str, model: str) -> bool:
         for entry in (body.get("models") or [])
         if isinstance(entry, dict)
     }
-    # Ollama reports "deepseek-r1:8b"; a host that pulled it without a tag
-    # reports "deepseek-r1:latest", which is a different model to us.
+    # Exact tags: ollama reports "qwen3-coder:30b", and a host that pulled the
+    # same model untagged reports "qwen3-coder:latest", which is a name we
+    # cannot ask it to run.
     return model in names
 
 

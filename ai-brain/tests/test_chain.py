@@ -345,7 +345,7 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
     env = parse_env_file(ENV_EXAMPLE)
     assert env["LLM_CHAIN"] == (
         "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,"
-        "lan:deepseek-r1:8b,ollama:llama3.2:3b"
+        "lan:qwen3-coder:30b,ollama:llama3.2:3b"
     )
 
     settings = load_settings({**env, "GEMINI_API_KEY": "k"})
@@ -356,7 +356,7 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
     assert [p.key for p in chain.providers] == [
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
-        "lan:deepseek-r1:8b",
+        "lan:qwen3-coder:30b",
         "ollama:llama3.2:3b",
     ]
 

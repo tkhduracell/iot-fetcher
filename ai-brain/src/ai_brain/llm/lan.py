@@ -73,7 +73,7 @@ class LanOllamaProvider(Provider):
                 await provider.aclose()
         self._attempts_left = LAN_ATTEMPTS
         # The chain reports which model answered; without this the trace would
-        # say deepseek-r1:8b and never say it came from the LAN.
+        # name the model and never say which machine ran it.
         return Reply(
             text=reply.text,
             tool_calls=reply.tool_calls,

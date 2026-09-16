@@ -21,10 +21,14 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # says their quota is gone, and only then does the chain reach for a machine in
 # the house -- ``lan:`` on whatever LAN box is awake and has it pulled (see
 # ai_brain.discovery), then the small model on the rpi5 itself.
+#
+# The lan: model is a tool-calling one on purpose. A cycle is nothing but tool
+# calls -- every round ends in end_cycle -- so a reasoning model that answers
+# in prose burns its rounds and writes nothing, however well it reasons.
 DEFAULT_LLM_CHAIN = (
     "gemini:gemini-3.8-flash,"
     "gemini:gemini-3.5-flash-lite,"
-    "lan:deepseek-r1:8b,"
+    "lan:qwen3-coder:30b,"
     "ollama:llama3.2:3b"
 )
 
