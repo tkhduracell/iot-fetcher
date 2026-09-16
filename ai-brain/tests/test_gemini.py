@@ -655,3 +655,109 @@ async def test_an_unrelated_400_is_not_retried():
 
     assert excinfo.value.kind == "bad_request"
     assert route.call_count == 1
+
+
+# -- a conversation another model started ----------------------------------
+
+
+def lan_turn() -> Message:
+    """What the chain appends after the LAN ollama host answers a round."""
+    return Message(
+        role="assistant",
+        content="looking at the pool",
+        tool_calls=(ToolCall(id="call_1", name="vm_query", args={"q": "pool_power"}),),
+        model="qwen3-coder:30b @ http://192.168.68.100:11434",
+    )
+
+
+@respx.mock
+async def test_another_models_tool_turn_is_replayed_as_text():
+    """The 400 that killed a cycle mid-flight:
+
+    "Function call is missing a thought_signature in functionCall parts."
+    Ollama has no signatures to give, so its turns cannot be echoed back as
+    functionCall parts at all -- and a 400 is bad_request, which the chain
+    refuses to retry, so every round before the switch is wasted.
+    """
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = [
+        Message(role="user", content="go"),
+        lan_turn(),
+        Message(role="tool", name="vm_query", tool_call_id="call_1", content='{"w": 203}'),
+    ]
+    await provider().complete(messages, [WEATHER], 256)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["contents"] == [
+        {"role": "user", "parts": [{"text": "go"}]},
+        {
+            "role": "model",
+            "parts": [{"text": 'looking at the pool\nI called vm_query({"q": "pool_power"})'}],
+        },
+        {"role": "user", "parts": [{"text": 'Result of vm_query: {"w": 203}'}]},
+    ]
+    # Nothing that could be missing a signature survives anywhere in the body.
+    assert "functionCall" not in json.dumps(sent["contents"])
+
+
+@respx.mock
+async def test_the_work_itself_survives_the_switch():
+    """Replaying beats dropping: an agent handed its history minus what it did
+    would repeat every call it had already made."""
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    await provider().complete([Message(role="user", content="go"), lan_turn()], [], 256)
+
+    text = json.loads(route.calls.last.request.content)["contents"][1]["parts"][0]["text"]
+    assert "vm_query" in text and "pool_power" in text
+
+
+@respx.mock
+async def test_this_models_own_turns_are_echoed_as_function_calls():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    own = Message(
+        role="assistant",
+        tool_calls=(ToolCall(id="call_1", name="get_weather", args={}, thought_signature="sig"),),
+        model="gemini-2.0-flash",  # what provider() is
+    )
+    messages = [
+        Message(role="user", content="go"),
+        own,
+        Message(role="tool", name="get_weather", tool_call_id="call_1", content='{"c": 17}'),
+    ]
+    await provider().complete(messages, [WEATHER], 256)
+
+    contents = json.loads(route.calls.last.request.content)["contents"]
+    assert contents[1]["parts"][0]["functionCall"]["name"] == "get_weather"
+    assert contents[2]["parts"][0]["functionResponse"]["name"] == "get_weather"
+
+
+@respx.mock
+async def test_two_gemini_models_do_not_trade_signatures():
+    """A signature belongs to the model that made it, so a turn from the other
+    Gemini in the chain is replayed too rather than echoed with its sig."""
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    other = Message(
+        role="assistant",
+        tool_calls=(ToolCall(id="c", name="vm_query", args={}, thought_signature="sig-3.8"),),
+        model="gemini-3.8-flash",
+    )
+    await provider().complete([Message(role="user", content="go"), other], [], 256)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "sig-3.8" not in json.dumps(sent)
+    assert sent["contents"][1]["parts"] == [{"text": "I called vm_query({})"}]
+
+
+@respx.mock
+async def test_an_unattributed_turn_keeps_the_old_behaviour():
+    """A turn nobody attributed -- handmade, or from before this field -- is
+    left exactly as it was mapped before."""
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    plain = Message(
+        role="assistant",
+        tool_calls=(ToolCall(id="c", name="get_weather", args={"city": "Lund"}),),
+    )
+    await provider().complete([Message(role="user", content="go"), plain], [WEATHER], 256)
+
+    parts = json.loads(route.calls.last.request.content)["contents"][1]["parts"]
+    assert parts == [{"functionCall": {"name": "get_weather", "args": {"city": "Lund"}}}]

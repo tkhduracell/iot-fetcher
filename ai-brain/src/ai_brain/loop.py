@@ -352,6 +352,7 @@ class AgentLoop:
                         reply.text,
                         tool_calls=tuple(reply.tool_calls),
                         thought_signature=reply.thought_signature,
+                        model=reply.model,
                     )
                 )
                 if not reply.tool_calls:

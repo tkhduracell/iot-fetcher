@@ -1054,3 +1054,20 @@ def test_cycle_instructions_set_the_bar_for_a_cycle():
     assert "all systems operating normally" in CYCLE_INSTRUCTIONS
     # Speaking to Filip stays finding-gated rather than becoming a status report.
     assert "The bar for speaking is a finding" in CYCLE_INSTRUCTIONS.replace("Otherwise the b", "The b")
+
+
+async def test_the_turn_records_which_model_produced_it(make_loop):
+    """Without it a provider cannot tell its own history from another's, which
+    is what makes a mid-cycle model switch a 400 rather than a fallback."""
+    loop, provider = make_loop(
+        [
+            reply("looking", call("list_facts", "a"), model="fake:1"),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    convo, _ = provider.calls[-1]
+    assistant = [m for m in convo if m.role == "assistant"]
+    assert assistant and all(m.model == "fake:1" for m in assistant)
