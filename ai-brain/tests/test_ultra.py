@@ -231,3 +231,53 @@ def test_ultra_key_gets_an_unmetered_budget(tmp_path):
     settings = load_settings({"ULTRA_MODE": "1", "LLM_CHAIN": "fake:a"})
     limits = limits_from_settings(settings)
     assert limits[f"ultra:{MODEL}"] == UNMETERED
+
+
+# --- hard timeouts --------------------------------------------------------
+
+
+async def test_a_hung_scan_is_abandoned_and_keeps_the_old_host(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr("ai_brain.discovery.SCAN_TIMEOUT_S", 0.05)
+
+    async def _forever(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    finder = finder_for()
+    known = OllamaHost("http://192.168.68.9:11434", MODEL, 0.0)
+    finder._host = known
+    monkeypatch.setattr("ai_brain.discovery._has_model", _forever)
+
+    # Bounded by SCAN_TIMEOUT_S rather than hanging: the lock is released and
+    # the next scan can run.
+    assert await finder.scan() is known
+    assert not finder._scanning.locked()
+
+
+async def test_a_hung_sweep_is_abandoned(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr("ai_brain.discovery.SWEEP_TIMEOUT_S", 0.05)
+
+    async def _forever(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("ai_brain.discovery._port_open", _forever)
+    assert await finder_for().scan() is None
+
+
+@respx.mock
+async def test_a_host_that_never_finishes_answering_tags_is_not_a_host(monkeypatch, no_ports):
+    import asyncio
+
+    monkeypatch.setattr("ai_brain.discovery.TAGS_TIMEOUT_S", 0.05)
+    no_ports.add("192.168.68.1")
+
+    async def _slow(_request):
+        await asyncio.sleep(5)
+        return httpx.Response(200, json=tags(MODEL))
+
+    respx.get("http://192.168.68.1:11434/api/tags").mock(side_effect=_slow)
+    async with httpx.AsyncClient() as client:
+        assert await finder_for(client=client).scan() is None

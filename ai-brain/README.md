@@ -108,7 +108,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `RPM` | `8` | Requests per minute, per model key. |
 | `TPM` | `200000` | Tokens per minute, per model key. |
 | `RPD` | `200` | Requests per day, per model key. |
-| `ULTRA_MODE` | `0` | Exactly `"1"` sweeps the LAN for an Ollama host and puts it first in the chain — see [Ultra mode](#ultra-mode). |
+| `ULTRA_MODE` | `1` | On by default: sweeps the LAN for an Ollama host and puts it first in the chain. `0` switches it off — see [Ultra mode](#ultra-mode). |
 | `ULTRA_SUBNETS` | *(empty)* | Subnets to sweep. Empty means the /24 `HA_URL` is on. |
 | `ULTRA_SCAN_MIN` | `10` | Minutes between sweeps. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
@@ -220,8 +220,10 @@ Two guarantees are worth knowing when reading logs:
 
 ## Ultra mode
 
-`ULTRA_MODE=1` says: if there is a machine in this house that can run a real
-model, use it and leave the free tier alone.
+Ultra mode says: if there is a machine in this house that can run a real model,
+use it and leave the free tier alone. It is **on by default**; `ULTRA_MODE=0`
+switches it off. A household with no such machine simply never finds one, at
+the cost of one sweep every `ULTRA_SCAN_MIN`.
 
 Every `ULTRA_SCAN_MIN` minutes the process sweeps the LAN — a TCP connect to
 port 11434 across the subnet, then `GET /api/tags` on whatever answered. A host

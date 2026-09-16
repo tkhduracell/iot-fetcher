@@ -42,6 +42,15 @@ CONNECT_TIMEOUT_S = 0.4
 SWEEP_CONCURRENCY = 64
 TAGS_TIMEOUT_S = 5
 
+# Hard ceiling on one scan, whatever it is doing. Every step below is bounded
+# on its own, but a host can accept a connection and then never speak, and a
+# sweep that hangs would hold the scan lock forever -- which means the finder
+# never re-checks and ultra mode is stuck on a machine that has gone away.
+SCAN_TIMEOUT_S = 30
+# One /24 of connects at SWEEP_CONCURRENCY is ~2s; ten times that is a network
+# behaving in a way we should abandon rather than wait out.
+SWEEP_TIMEOUT_S = 20
+
 
 @dataclass(frozen=True)
 class OllamaHost:
@@ -99,11 +108,16 @@ async def _port_open(ip: str, semaphore: asyncio.Semaphore) -> str | None:
 async def _has_model(client: httpx.AsyncClient, ip: str, model: str) -> bool:
     url = f"http://{ip}:{OLLAMA_PORT}/api/tags"
     try:
-        response = await client.get(url, timeout=TAGS_TIMEOUT_S)
+        # httpx's own timeout is per network operation, so a server that keeps
+        # sending a byte at a time never trips it. wait_for bounds the whole
+        # request, which is what we actually care about.
+        response = await asyncio.wait_for(
+            client.get(url, timeout=TAGS_TIMEOUT_S), timeout=TAGS_TIMEOUT_S
+        )
         if not response.is_success:
             return False
         body = response.json()
-    except (httpx.HTTPError, ValueError):
+    except (TimeoutError, httpx.HTTPError, ValueError):
         return False
     names = {
         str(entry.get("name") or "")
@@ -150,7 +164,10 @@ class OllamaFinder:
         async with self._scanning:
             client = self._client or httpx.AsyncClient()
             try:
-                return await self._scan_with(client)
+                return await asyncio.wait_for(self._scan_with(client), timeout=SCAN_TIMEOUT_S)
+            except TimeoutError:
+                log.warning("[ultra] scan exceeded %ss, abandoned", SCAN_TIMEOUT_S)
+                return self._host
             except Exception:  # discovery is best effort, always
                 log.exception("[ultra] scan failed")
                 return self._host
@@ -171,7 +188,14 @@ class OllamaFinder:
         for network in self.networks:
             hosts = [str(ip) for ip in network.hosts()]
             log.info("[ultra] sweeping %s (%d hosts)", network, len(hosts))
-            open_ports = await asyncio.gather(*(_port_open(ip, semaphore) for ip in hosts))
+            try:
+                open_ports = await asyncio.wait_for(
+                    asyncio.gather(*(_port_open(ip, semaphore) for ip in hosts)),
+                    timeout=SWEEP_TIMEOUT_S,
+                )
+            except TimeoutError:
+                log.warning("[ultra] sweep of %s exceeded %ss, skipped", network, SWEEP_TIMEOUT_S)
+                continue
             for ip in [ip for ip in open_ports if ip]:
                 if await _has_model(client, ip, self.model):
                     self._host = OllamaHost(

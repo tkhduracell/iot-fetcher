@@ -18,6 +18,9 @@ def env(tmp_path: Path, **extra) -> dict[str, str]:
         # The explicit opt-out: blank now means the default set, which would
         # start four extra loops in every test that only cares about the brain.
         "EXPERTS": "none",
+        # Ultra mode is on in production; a test that wants it says so, rather
+        # than every unrelated test sweeping a subnet.
+        "ULTRA_MODE": "0",
         "VM_URL": "http://vm.test",
         "INFLUX_TOKEN": "tok",
     }

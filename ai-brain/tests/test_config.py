@@ -49,15 +49,17 @@ def test_effort_knobs_are_overridable():
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
 
 
-def test_ultra_mode_is_off_unless_asked_for():
+def test_ultra_mode_is_on_unless_switched_off():
     s = load_settings({})
-    assert s.ultra is False
+    assert s.ultra is True
     assert s.ultra_model == "deepseek-r1:8b"
     assert s.ultra_subnets == []
     assert s.ultra_scan_s == 600
-    # Exactly "1", like DRY_RUN -- "true" is not an accident we want to honour.
-    assert load_settings({"ULTRA_MODE": "true"}).ultra is False
-    assert load_settings({"ULTRA_MODE": "1"}).ultra is True
+    assert load_settings({"ULTRA_MODE": "0"}).ultra is False
+    # Only "0" is an opt-out; a blank or odd value leaves it on rather than
+    # silently disabling the mode a deployment is relying on.
+    assert load_settings({"ULTRA_MODE": ""}).ultra is True
+    assert load_settings({"ULTRA_MODE": "yes"}).ultra is True
 
 
 def test_ultra_subnets_and_interval_are_configurable():

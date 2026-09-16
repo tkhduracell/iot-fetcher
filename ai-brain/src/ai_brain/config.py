@@ -138,7 +138,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
         dry_run=get("DRY_RUN") == "1",
-        ultra=get("ULTRA_MODE") == "1",
+        # On unless switched off: a household with no such machine simply
+        # never finds one, and pays a sweep every ULTRA_SCAN_MIN for it.
+        ultra=get("ULTRA_MODE", "1") != "0",
         ultra_model=ULTRA_MODEL,
         ultra_subnets=_csv(get("ULTRA_SUBNETS")),
         ultra_scan_s=get_int("ULTRA_SCAN_MIN", 10) * 60,
