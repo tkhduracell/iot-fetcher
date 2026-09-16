@@ -17,10 +17,13 @@ from ai_brain.llm import (
 )
 from ai_brain.llm.fake import FakeProvider
 from ai_brain.loop import (
+    BRAIN_ANGLES,
     CYCLE_INSTRUCTIONS,
+    EXPERT_ANGLES,
     MAX_TOOL_RESULT_CHARS,
     AgentLoop,
     CycleResult,
+    _angle_for,
 )
 from ai_brain.tools import Tool, ToolContext, ToolRegistry
 from ai_brain.tools.memory_tools import register_memory_tools
@@ -996,3 +999,58 @@ async def test_the_trace_is_visible_from_inside_a_tool_while_the_cycle_runs(make
     await loop.run_cycle()
 
     assert seen == {"in_progress": True, "finished_at": None, "rounds": 1}
+
+
+# -- the cycle's angle -------------------------------------------------
+
+
+def test_angle_rotates_with_the_clock():
+    """Two cycles an hour apart get different angles; the same hour repeats."""
+    seen = {_angle_for("brain", "brain", 1_000_000.0 + h * 3600) for h in range(len(BRAIN_ANGLES))}
+    assert len(seen) == len(BRAIN_ANGLES), "a full rotation must cover every angle"
+
+    same_hour = _angle_for("brain", "brain", 1_000_000.0)
+    assert _angle_for("brain", "brain", 1_000_100.0) == same_hour
+
+
+def test_loops_waking_together_do_not_share_an_angle():
+    """Five loops on one heartbeat taking the same angle is the rut, repeated."""
+    now = 1_000_000.0
+    angles = {name: _angle_for(name, "expert", now) for name in ("energy", "health", "house-ops")}
+    assert len(set(angles.values())) > 1, angles
+
+
+def test_experts_are_offered_expert_angles():
+    # An expert cannot propose or reach Slack, so a brain angle telling it to
+    # would be an instruction it can only fail.
+    for h in range(24):
+        angle = _angle_for("energy", "expert", 1_000_000.0 + h * 3600)
+        assert angle in EXPERT_ANGLES
+        assert "propose" not in angle
+
+
+def test_a_restart_does_not_reset_the_rotation():
+    """No stored counter: the angle follows the clock, not the process."""
+    now = 1_000_000.0 + 5 * 3600
+    assert _angle_for("brain", "brain", now) == _angle_for("brain", "brain", now)
+
+
+async def test_the_user_turn_carries_the_angle(make_loop, wall):
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))]
+    )
+
+    await loop.run_cycle()
+
+    user = provider.calls[0][0][1]
+    assert user.role == "user"
+    assert "Angle for this cycle:" in user.content
+    assert _angle_for("brain", "brain", wall()) in user.content
+
+
+def test_cycle_instructions_set_the_bar_for_a_cycle():
+    """The behaviour we are buying: no screensaver cycles, and a voice."""
+    assert "screensaver" in CYCLE_INSTRUCTIONS
+    assert "all systems operating normally" in CYCLE_INSTRUCTIONS
+    # Speaking to Filip stays finding-gated rather than becoming a status report.
+    assert "The bar for speaking is a finding" in CYCLE_INSTRUCTIONS.replace("Otherwise the b", "The b")

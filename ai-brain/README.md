@@ -189,6 +189,35 @@ To pause at any point: `touch volumes/ai-brain-memory/PAUSE`. It takes effect
 at the top of the next round — so mid-cycle, not only at the next cycle — no
 restart needed, and it does not lose queued work.
 
+## What a cycle is supposed to do
+
+A loop that wakes every hour and reads the same gauges will, left alone, write
+"all systems operating normally" forever. Two things push against that:
+
+- **The cycle instructions** (`CYCLE_INSTRUCTIONS` in `loop.py`, shipped in the
+  image) set the bar: a cycle must end with something that was not true of its
+  memory before it started. Normal readings are worth learning once, as a
+  baseline; after that only departures are news. Threads beat snapshots, and
+  the journal is written in the agent's own voice, opinions included.
+- **An angle** is handed to each loop in the user turn — "chase one anomaly",
+  "build a baseline", "pick up an open thread", "read rather than measure",
+  "tend your memory". It rotates hourly and is offset per loop, so five loops
+  waking together do not all take the same one, and a restart does not reset
+  everyone to the first angle. It is explicitly a suggestion: a loop that is
+  mid-investigation is told to ignore it.
+
+The bar for Slack is unchanged and deliberate: a finding, not a status report.
+A quiet day stays quiet.
+
+> **Changing the personality of a running deployment.** `seed/personas/brain.md`
+> and `seed/constitution.md` are copied to the volume on **first boot only** —
+> after that they are yours, and a new image will not overwrite them. To change
+> how a running brain sees itself, edit
+> `volumes/ai-brain-memory/brain/identity.md` (or `constitution.md`) on the box;
+> the agent rewrites `identity.md` itself over time, so expect your text to
+> evolve. The cycle instructions and the angles, by contrast, live in the image
+> and take effect on the next deploy.
+
 ## Approvals
 
 The brain never acts on the house directly. It calls `propose`, which writes
