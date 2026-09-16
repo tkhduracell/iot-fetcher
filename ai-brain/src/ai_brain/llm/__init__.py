@@ -80,6 +80,11 @@ class Message:
     tool_call_id: str = ""
     name: str = ""
     thought_signature: str = ""
+    # Which model produced an assistant turn. The chain can change model
+    # mid-conversation -- a LAN host goes away, a key runs out -- and a
+    # provider handed another model's turn cannot always echo it back
+    # verbatim. Empty means "not from a provider", e.g. a turn a test built.
+    model: str = ""
 
 
 @dataclass(frozen=True)
