@@ -303,6 +303,71 @@ async def test_ha_error_log_filters_case_insensitively(registry, ctx):
     assert "login failed" in out["log"]
 
 
+CONTEXT_LOG = "".join(f"line {n}\n" for n in range(10)).replace("line 4", "ERROR boom 4")
+
+
+@respx.mock
+async def test_ha_error_log_adds_context_around_a_match(registry, ctx):
+    respx.get("http://ha:8123/api/error_log").mock(
+        return_value=httpx.Response(200, text=CONTEXT_LOG)
+    )
+    out = await call(registry, ctx, "ha_error_log", contains="ERROR", context=2)
+
+    body = out["log"].removeprefix('<external source="home-assistant">').removesuffix("</external>")
+    assert body.splitlines() == ["line 2", "line 3", "ERROR boom 4", "line 5", "line 6"]
+    assert out["matched"] == 1
+    assert out["returned"] == 5
+
+
+@respx.mock
+async def test_ha_error_log_merges_overlapping_hunks_and_marks_gaps(registry, ctx):
+    log = "".join(f"line {n}\n" for n in range(20))
+    log = log.replace("line 3", "ERROR three").replace("line 4", "ERROR four")
+    log = log.replace("line 15", "ERROR fifteen")
+    respx.get("http://ha:8123/api/error_log").mock(return_value=httpx.Response(200, text=log))
+    out = await call(registry, ctx, "ha_error_log", contains="ERROR", context=1)
+
+    body = out["log"].removeprefix('<external source="home-assistant">').removesuffix("</external>")
+    assert body.splitlines() == [
+        # 3 and 4 are adjacent hits: one run, and no line repeated.
+        "line 2",
+        "ERROR three",
+        "ERROR four",
+        "line 5",
+        "--",
+        "line 14",
+        "ERROR fifteen",
+        "line 16",
+    ]
+    assert out["matched"] == 3
+
+
+@respx.mock
+async def test_ha_error_log_context_is_clamped_and_needs_a_filter(registry, ctx):
+    respx.get("http://ha:8123/api/error_log").mock(
+        return_value=httpx.Response(200, text=CONTEXT_LOG)
+    )
+    # No 'contains': context has nothing to sit around, so it is ignored.
+    assert (await call(registry, ctx, "ha_error_log", context=5))["returned"] == 10
+    # Past the ends of the file, and past the cap, are both fine.
+    wide = await call(registry, ctx, "ha_error_log", contains="ERROR", context=999)
+    assert wide["returned"] == 10
+
+
+@respx.mock
+async def test_ha_error_log_lines_counts_matches_not_output(registry, ctx):
+    log = "".join(f"line {n}\n" for n in range(30)).replace("line 1 ", "x")
+    for n in (5, 12, 25):
+        log = log.replace(f"line {n}\n", f"ERROR {n}\n")
+    respx.get("http://ha:8123/api/error_log").mock(return_value=httpx.Response(200, text=log))
+    out = await call(registry, ctx, "ha_error_log", contains="ERROR", context=1, lines=2)
+
+    assert out["matched"] == 3
+    body = out["log"]
+    # The two most recent matches, with context; the oldest one dropped.
+    assert "ERROR 25" in body and "ERROR 12" in body and "ERROR 5" not in body
+
+
 @respx.mock
 async def test_ha_error_log_clamps_the_line_count(registry, ctx):
     respx.get("http://ha:8123/api/error_log").mock(return_value=httpx.Response(200, text=LOG))
