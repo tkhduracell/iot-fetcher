@@ -211,12 +211,20 @@ A quiet day stays quiet.
 
 > **Changing the personality of a running deployment.** `seed/personas/brain.md`
 > and `seed/constitution.md` are copied to the volume on **first boot only** —
-> after that they are yours, and a new image will not overwrite them. To change
-> how a running brain sees itself, edit
-> `volumes/ai-brain-memory/brain/identity.md` (or `constitution.md`) on the box;
-> the agent rewrites `identity.md` itself over time, so expect your text to
-> evolve. The cycle instructions and the angles, by contrast, live in the image
-> and take effect on the next deploy.
+> after that they are yours, and a new image will not overwrite them. The cycle
+> instructions and the angles, by contrast, live in the image and take effect
+> on the next deploy.
+>
+> To put the image's seed back on a running brain, on the box:
+>
+> ```sh
+> sudo ./ai-brain/scripts/reseed-memory.sh          # identity + constitution
+> sudo ./ai-brain/scripts/reseed-memory.sh --goals  # ...and clear goals.md
+> ```
+>
+> It backs up every file it replaces, and the next cycle picks the new text up
+> without a restart. The agent rewrites `identity.md` and `goals.md` itself over
+> time, so what you overwrite may be its own words rather than yours.
 
 ## Approvals
 

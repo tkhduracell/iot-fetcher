@@ -519,3 +519,62 @@ async def test_run_survives_a_disabled_api_port(tmp_path, monkeypatch):
     # run() reached start_api with the disabled port and got no runner back --
     # so the loops came up with nothing to serve and nothing to stop.
     assert calls == [(0, None)]
+
+
+async def test_the_lan_sweep_finishes_before_any_loop_starts(tmp_path, monkeypatch):
+    """A cycle that begins mid-sweep sees no LAN host.
+
+    Every loop wakes on startup. For an expert that is the whole chain -- the
+    free tier is above its floor, the local host is not there yet -- so it
+    burns its first cycle on no_budget and sleeps two hours.
+    """
+    port = _free_port()
+    settings = load_settings(env(tmp_path, HTTP_PORT=str(port)))
+
+    order: list[str] = []
+
+    class SlowFinder:
+        model = "qwen3-coder:30b"
+        networks: list = []
+
+        async def scan(self):
+            await asyncio.sleep(0.01)
+            order.append("scan")
+            return None
+
+        def current(self):
+            return None
+
+    def _build(s):
+        system = build(s, chain_factory=fake_chain)
+        system.chain.lan_finder = SlowFinder()
+        return system
+
+    monkeypatch.setattr(supervisor, "build", _build)
+
+    stop = asyncio.Event()
+    monkeypatch.setattr(supervisor.asyncio, "Event", lambda: stop)
+
+    async def _never(_seconds, _work):
+        await asyncio.Event().wait()
+
+    def _supervise(name, _loop):
+        order.append(f"loop:{name}")
+
+        async def _wait():
+            await asyncio.Event().wait()
+
+        return _wait()
+
+    monkeypatch.setattr(supervisor, "_supervise", _supervise)
+    monkeypatch.setattr(supervisor, "_every", _never)
+
+    running = asyncio.create_task(supervisor.run(settings))
+    try:
+        await _wait_for_healthz(port)
+    finally:
+        stop.set()
+        await asyncio.wait_for(running, timeout=5)
+
+    assert order, "nothing ran"
+    assert order[0] == "scan", f"a loop started before the sweep: {order}"
