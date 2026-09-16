@@ -65,7 +65,7 @@ func (f *fakeStore) Query(_ context.Context, _ []float32, opts store.QueryOption
 func newTestService() (*Service, *fakeLooper, *fakeEmbedder, *fakeStore) {
 	l := &fakeLooper{status: syncpkg.Status{
 		LastSync:     time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC),
-		ExtractModel: "gemini-2.5-flash-lite",
+		ExtractModel: "gemini-3.5-flash-lite",
 		EmbedModel:   "gemini-embedding-001",
 		EmbedTPMCap:  200_000,
 		FlashDailyCap: 800,
@@ -283,7 +283,7 @@ func TestStatusJSONShape(t *testing.T) {
 			t.Errorf("status missing key %q (got %v)", k, raw)
 		}
 	}
-	if raw["extract_model"] != "gemini-2.5-flash-lite" {
+	if raw["extract_model"] != "gemini-3.5-flash-lite" {
 		t.Errorf("extract_model: got %v", raw["extract_model"])
 	}
 	if raw["last_sync"] != "2026-04-20T12:00:00Z" {
