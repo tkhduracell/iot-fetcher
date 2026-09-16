@@ -142,6 +142,7 @@ services:
   # Pull the model once after first start: `docker exec ollama ollama pull llama3.2:3b`.
   ollama:
     image: ollama/ollama:latest
+    container_name: ollama
     hostname: ollama
     restart: unless-stopped
     volumes:
