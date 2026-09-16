@@ -20,9 +20,15 @@ DEFAULT_LLM_CHAIN = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,ollama
 
 # Every expert the image ships a persona for. Brain-only was the rollout
 # default while the loops were unproven; with them proven the useful default is
-# the whole set, and ``EXPERTS=`` (blank) is still how you cut back to the
-# brain alone -- a blank value is respected, only an absent one seeds this.
+# the whole set, for a blank value as much as an absent one -- a deployment
+# that copied .env.example during the rollout has a literal ``EXPERTS=`` line,
+# and that line silently pinning it to brain-only is a default nobody chose.
 DEFAULT_EXPERTS = "energy,health,house-ops,researcher"
+
+# The explicit opt-out, since blank no longer is one. Case-insensitive, and
+# ``brain`` is accepted too: the brain is not an expert, so naming it is the
+# same statement as naming none.
+NO_EXPERTS = frozenset({"none", "brain"})
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,14 @@ def _dedupe(entries: list[str]) -> list[str]:
     return out
 
 
+def _experts(raw: str) -> list[str]:
+    """``EXPERTS`` as a loop list: unset or blank means every expert."""
+    names = _csv(raw) or _csv(DEFAULT_EXPERTS)
+    if len(names) == 1 and names[0].lower() in NO_EXPERTS:
+        return []
+    return names
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if env is None:
         import os
@@ -98,7 +112,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         llm_chain=_dedupe(_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN)),
         gemini_api_key=get("GEMINI_API_KEY"),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
-        experts=_csv(get("EXPERTS", DEFAULT_EXPERTS)),
+        experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
         vm_url=get("VM_URL", "http://database-auth:8427"),

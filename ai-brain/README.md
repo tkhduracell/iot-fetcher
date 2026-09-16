@@ -89,7 +89,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
 | `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite` | `provider:model` entries tried in order until one answers. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
-| `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Set a shorter list, or a blank value for brain only — see [Rollout](#rollout). |
+| `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Unset **or blank** means all four; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
@@ -145,8 +145,8 @@ Bring it up deliberately. The whole point of the design is that it accumulates
 state, so it is much easier to start narrow than to unpick a bad first day.
 
 1. **Deploy paused, brain only.** Create the volume directory and drop the
-   pause file *before* the first start. Set `EXPERTS=` (blank) in `.env` for
-   this stage, so the first boots are brain only:
+   pause file *before* the first start. Set `EXPERTS=none` in `.env` for this
+   stage, so the first boots are brain only:
 
    ```sh
    mkdir -p volumes/ai-brain-memory

@@ -27,10 +27,21 @@ def test_defaults_from_empty_env():
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
 
 
-def test_blank_experts_means_brain_only():
-    # Distinct from an absent EXPERTS, which seeds the full set: this is how a
-    # deployment cuts back to the brain alone.
-    assert load_settings({"EXPERTS": ""}).experts == []
+def test_blank_experts_is_the_default_set():
+    # A deployment that copied .env.example during the rollout has a literal
+    # blank EXPERTS line; it must not silently pin that box to brain-only.
+    assert load_settings({"EXPERTS": ""}).experts == ["energy", "health", "house-ops", "researcher"]
+    assert load_settings({"EXPERTS": "   "}).experts == load_settings({}).experts
+
+
+def test_experts_none_is_the_opt_out():
+    assert load_settings({"EXPERTS": "none"}).experts == []
+    assert load_settings({"EXPERTS": "NONE"}).experts == []
+    # The brain is not an expert, so naming it says the same thing.
+    assert load_settings({"EXPERTS": "brain"}).experts == []
+    # Only on its own -- alongside a real expert it is a name we do not know,
+    # and the supervisor is what refuses unknown names.
+    assert load_settings({"EXPERTS": "none,energy"}).experts == ["none", "energy"]
 
 
 def test_effort_knobs_are_overridable():
