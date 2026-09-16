@@ -18,9 +18,13 @@ One **brain** loop plus up to four **expert** loops:
 | `house-ops` | `seed/personas/house-ops.md` | `EXPERT_HEARTBEAT_MIN` |
 | `researcher` | `seed/personas/researcher.md` | `EXPERT_HEARTBEAT_MIN` |
 
-Experts observe and report. They can query VictoriaMetrics, Home Assistant,
+Experts observe and report. They can query VictoriaMetrics, Home Assistant
+(entity states with `ha_state`, and the tail of its log with `ha_error_log`,
+which is how a broken integration gets diagnosed rather than guessed at),
 gdrive-rag and the web, write facts into their own memory, and drop notes in
 the brain's inbox. They cannot act on the house and they cannot talk to Slack.
+Everything those reads return is fenced as external text — the log included,
+since it carries whatever an integration decided to print.
 
 The brain reads those notes, keeps a `goals.md` it is free to rewrite, and is
 the only loop that can call `propose` — which does not act either, it files a
