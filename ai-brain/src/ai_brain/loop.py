@@ -4,13 +4,17 @@ A cycle is deliberately bounded on every axis that could otherwise run away:
 ``max_rounds`` caps how many times the model may come back for more tools,
 ``call_timeout_s`` caps a single provider call *inside the chain*, and the wake
 the model asks for is clamped into a sane band. The loop keeps an outer bound
-too, but a generous multiple of the per-call one (``CHAIN_TIMEOUT_FACTOR``):
-it is the backstop for a chain that hangs somewhere other than a provider
-call, not a second budget that could starve the fallback provider of its own
-timeout. Whatever happens, the cycle ends the same way --
-a journal line, the inbox archived if the model actually read it, the
-per-cycle scratch state cleared -- so the next cycle starts from a clean,
-readable state.
+too (``chain_timeout_s``): the exact worst case of every provider in the chain
+being tried in turn, each burning its own timeout on every attempt it gets --
+computed once from the chain's actual providers rather than guessed as a flat
+multiple of one number, since a provider on real local hardware (``lan:``) can
+legitimately need minutes where a metered cloud call needs seconds, and a flat
+bound sized for the fast one would kill the slow one mid-answer. It is the
+backstop for a chain that hangs somewhere other than a provider call, not a
+second budget that could starve a provider of its own timeout. Whatever
+happens, the cycle ends the same way -- a journal line, the inbox archived if
+the model actually read it, the per-cycle scratch state cleared -- so the next
+cycle starts from a clean, readable state.
 
 Failure is expected rather than exceptional here. A drained quota is not a
 crash but a reason to sleep until the ledger says otherwise; a timeout, a bad
@@ -279,6 +283,16 @@ class AgentLoop:
         self.max_rounds = max_rounds
         self.max_tokens = max_tokens
         self.call_timeout_s = call_timeout_s
+        # The exact worst case for one round: every provider in the chain
+        # tried in turn, each burning its own timeout on every attempt it is
+        # allowed, before the round either answers or the chain gives up.
+        # CHAIN_TIMEOUT_FACTOR used to approximate this with one flat number,
+        # which under- or over-shot as soon as a provider's own timeout (e.g.
+        # the lan: provider's much longer one) diverged from the chain's.
+        self.chain_timeout_s = sum(
+            (provider.call_timeout_s or chain.call_timeout_s) * max(1, provider.max_attempts)
+            for provider in chain.providers
+        ) or (call_timeout_s * CHAIN_TIMEOUT_FACTOR)
 
         self.wake = asyncio.Event()
         self.last_cycle: CycleResult | None = None
@@ -333,7 +347,7 @@ class AgentLoop:
                         self.max_tokens,
                         self.priority,
                     ),
-                    timeout=self.call_timeout_s * CHAIN_TIMEOUT_FACTOR,
+                    timeout=self.chain_timeout_s,
                 )
                 rounds += 1
                 model = reply.model
@@ -385,7 +399,7 @@ class AgentLoop:
         except TimeoutError:
             status, summary = (
                 "timeout",
-                f"chain exceeded {self.call_timeout_s * CHAIN_TIMEOUT_FACTOR}s",
+                f"chain exceeded {self.chain_timeout_s:g}s",
             )
             log.warning("[%s] cycle timed out after %d round(s)", self.name, rounds)
         except ChainExhausted as exc:

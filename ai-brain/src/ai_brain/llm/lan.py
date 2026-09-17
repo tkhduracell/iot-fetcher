@@ -2,13 +2,17 @@
 
 It is an :class:`~ai_brain.llm.ollama.OllamaProvider` whose base URL is not
 known until a scan finds one, so the address is resolved per call rather than
-at construction. Two hooks in the chain make that work:
+at construction. Three hooks in the chain make that work:
 
 * ``available()`` is False while no host is known, so the chain steps straight
   past it instead of spending an attempt on a call that cannot be made.
 * ``max_attempts`` is 3 rather than the chain's usual 2: a local box that
   answers in seconds is worth a couple of extra tries before the chain moves
   on down to the metered cloud models.
+* ``call_timeout_s`` is far longer than a cloud API's -- a big local model on
+  real hardware can legitimately take minutes to finish one turn, nothing like
+  a metered provider's SLA -- while the *connect* itself stays tight: if the
+  machine is not answering on the port at all, there is nothing to wait for.
 
 A host that fails all three attempts is forgotten, so the next scan sweeps for
 another one instead of re-dialling a machine that has gone to sleep.
@@ -28,21 +32,31 @@ log = logging.getLogger(__name__)
 
 LAN_ATTEMPTS = 3
 
+# A local model can be genuinely slow -- 900s is generous on purpose, since
+# the alternative is falling back to a metered cloud key over a model that was
+# still thinking. The connect phase gets its own, far tighter bound: if the
+# host is not answering the port right now, no amount of patience helps.
+LAN_CONNECT_TIMEOUT_S = 3.0
+LAN_REQUEST_TIMEOUT_S = 900.0
+
 
 class LanOllamaProvider(Provider):
     max_attempts = LAN_ATTEMPTS
+    call_timeout_s = LAN_REQUEST_TIMEOUT_S
 
     def __init__(
         self,
         finder: OllamaFinder,
         client: httpx.AsyncClient | None = None,
-        timeout_s: float = 60,
+        timeout_s: httpx.Timeout | None = None,
     ) -> None:
         self.finder = finder
         self.model = finder.model
         self.key = f"lan:{finder.model}"
         self._client = client
-        self._timeout_s = timeout_s
+        self._timeout_s = timeout_s or httpx.Timeout(
+            LAN_REQUEST_TIMEOUT_S, connect=LAN_CONNECT_TIMEOUT_S
+        )
         self._attempts_left = LAN_ATTEMPTS
 
     def available(self) -> bool:
