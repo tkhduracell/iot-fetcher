@@ -34,6 +34,7 @@ from ai_brain.ledger import Ledger, Limits, Priority
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from ai_brain.config import Settings
+    from ai_brain.discovery import OllamaFinder
 
 log = logging.getLogger(__name__)
 
@@ -164,10 +165,13 @@ class ProviderChain:
         self.providers = list(providers)
         self.ledger = ledger
         self.call_timeout_s = call_timeout_s
-        # Set by ``from_settings`` when the chain has a ``lan:`` entry. The
-        # supervisor needs it to run the periodic sweep; nothing else in the
-        # chain touches it.
-        self.lan_finder = None
+        # Set by ``from_settings`` for each ``lan:`` entry in the chain -- one
+        # finder per LAN model, since a chain may try more than one local
+        # model before falling back to the metered cloud (e.g. a bigger model
+        # on the desktop first, a smaller one second). The supervisor sweeps
+        # all of them on its own schedule; nothing else in the chain touches
+        # this list.
+        self.lan_finders: list[OllamaFinder] = []
 
     @staticmethod
     def from_settings(
@@ -176,19 +180,22 @@ class ProviderChain:
         call_timeout_s: float | None = None,
     ) -> ProviderChain:
         providers: list[Provider] = []
-        lan_finder = None
+        lan_finders: list[OllamaFinder] = []
         for entry in settings.llm_chain:
             name, _, model = entry.partition(":")
             if name == "lan":
                 # A model on some machine in the house. Which machine is not
                 # known until a scan finds one, so the provider carries a
-                # finder rather than an address.
+                # finder rather than an address. Each lan: entry gets its own
+                # finder even when several share a model name, since two
+                # entries might resolve to different machines.
                 from ai_brain.discovery import OllamaFinder, subnets_for
                 from ai_brain.llm.lan import LanOllamaProvider
 
                 lan_finder = OllamaFinder(
                     model, subnets_for(settings.lan_subnets, settings.ha_url)
                 )
+                lan_finders.append(lan_finder)
                 providers.append(LanOllamaProvider(lan_finder))
             elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
@@ -216,7 +223,7 @@ class ProviderChain:
         if call_timeout_s is None:
             call_timeout_s = getattr(settings, "call_timeout_s", DEFAULT_CALL_TIMEOUT_S)
         chain = ProviderChain(providers, ledger, call_timeout_s=call_timeout_s)
-        chain.lan_finder = lan_finder
+        chain.lan_finders = lan_finders
         return chain
 
     async def complete(

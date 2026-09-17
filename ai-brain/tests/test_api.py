@@ -113,7 +113,7 @@ async def test_status_reports_the_lan_host_when_one_is_found(tmp_path):
     system = build(settings, chain_factory=fake_chain, clock=lambda: NOW)
     finder = OllamaFinder("qwen3-coder:30b", [ipaddress.ip_network("192.168.68.0/24")])
     finder._host = OllamaHost("http://192.168.68.9:11434", "qwen3-coder:30b", NOW)
-    system.chain.lan_finder = finder
+    system.chain.lan_finders = [finder]
 
     app = build_app(system, started_at=STARTED_AT, clock=lambda: NOW)
     async with TestClient(TestServer(app)) as test_client:
@@ -121,11 +121,38 @@ async def test_status_reports_the_lan_host_when_one_is_found(tmp_path):
 
     assert lan == {
         "enabled": True,
-        "model": "qwen3-coder:30b",
-        "host": "http://192.168.68.9:11434",
-        "found_at": NOW,
-        "subnets": ["192.168.68.0/24"],
+        "hosts": [
+            {
+                "model": "qwen3-coder:30b",
+                "host": "http://192.168.68.9:11434",
+                "found_at": NOW,
+                "subnets": ["192.168.68.0/24"],
+            }
+        ],
     }
+
+
+async def test_status_reports_every_lan_host_when_several_are_configured(tmp_path):
+    import ipaddress
+
+    from ai_brain.discovery import OllamaFinder, OllamaHost
+
+    settings = load_settings(env(tmp_path))
+    system = build(settings, chain_factory=fake_chain, clock=lambda: NOW)
+    net = [ipaddress.ip_network("192.168.68.0/24")]
+    found = OllamaFinder("qwen3.8:27b-mlx", net)
+    found._host = OllamaHost("http://192.168.68.9:11434", "qwen3.8:27b-mlx", NOW)
+    unmatched = OllamaFinder("qwen3-coder:30b", net)
+    system.chain.lan_finders = [found, unmatched]
+
+    app = build_app(system, started_at=STARTED_AT, clock=lambda: NOW)
+    async with TestClient(TestServer(app)) as test_client:
+        lan = (await get_json(test_client, "/api/status"))["lan_host"]
+
+    assert lan["enabled"] is True
+    assert [h["model"] for h in lan["hosts"]] == ["qwen3.8:27b-mlx", "qwen3-coder:30b"]
+    assert lan["hosts"][0]["host"] == "http://192.168.68.9:11434"
+    assert lan["hosts"][1]["host"] is None
 
 
 async def test_status_settings_are_an_allowlist_not_the_whole_dataclass(client):

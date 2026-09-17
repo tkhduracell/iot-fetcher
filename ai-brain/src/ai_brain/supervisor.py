@@ -310,20 +310,21 @@ async def run(settings: Settings) -> None:
     expire_proposals = expiry_watcher(system)
     watch_day_roll = day_roll_watcher(system)
 
-    finder = getattr(system.chain, "lan_finder", None)
-    if finder is not None:
+    finders = getattr(system.chain, "lan_finders", [])
+    if finders:
         # Before the loops, not after: every loop wakes on startup, and a cycle
         # that begins while the sweep is still running sees no LAN host. For an
         # expert that is the whole chain -- the free tier is above its floor and
         # the local host is not there yet -- so it burns its first cycle on
-        # no_budget and sleeps two hours.
-        await finder.scan()
+        # no_budget and sleeps two hours. Concurrent: one finder's sweep taking
+        # its full timeout must not delay another's.
+        await asyncio.gather(*(finder.scan() for finder in finders))
 
     tasks = [asyncio.create_task(_supervise(name, agent)) for name, agent in system.loops.items()]
     tasks.append(asyncio.create_task(_every(METRICS_EVERY_S, publish_metrics)))
     tasks.append(asyncio.create_task(_every(EXPIRE_EVERY_S, expire_proposals)))
     tasks.append(asyncio.create_task(_every(DAY_ROLL_EVERY_S, watch_day_roll)))
-    if finder is not None:
+    for finder in finders:
         tasks.append(asyncio.create_task(_every(settings.lan_scan_s, finder.scan)))
     if system.slack_out is not None:
         tasks.append(asyncio.create_task(_every(FLUSH_EVERY_S, system.slack_out.flush_queue)))

@@ -272,6 +272,12 @@ the house is awake and has it pulled** — the desktop in the next room can run
 something worth asking, but it is not a fixed address, so the provider goes and
 finds it.
 
+More than one `lan:` entry is fine — each gets its own sweep and its own host,
+so a bigger model tried first (say, `lan:qwen3.8:27b-mlx`) falls through to a
+second `lan:` entry if the machine running it is asleep, before reaching
+`ollama:`. An entry whose model nothing on the network has pulled simply never
+becomes available and costs the chain nothing but the sweep.
+
 Every `LAN_SCAN_MIN` minutes the process sweeps the network: a TCP connect to
 port 11434 across the subnet, then `GET /api/tags` on whatever answered. A host
 counts only if it has the chain's `lan:` model pulled — a machine running Ollama
@@ -292,9 +298,9 @@ one, and the cycle falls through to the rest of the chain. Until a host is
 found the provider reports itself unavailable, so the chain steps past it
 without spending anything.
 
-`GET /api/status` reports what it found (`lan_host.host`, `lan_host.model`,
-`lan_host.subnets`), which is where to look when you expect the desktop to be
-answering and Gemini is.
+`GET /api/status` reports what it found, one entry per `lan:` model in
+`lan_host.hosts[].host`/`.model`/`.subnets`, which is where to look when you
+expect the desktop to be answering and Gemini is.
 
 Drop the `lan:` entry from `LLM_CHAIN` to switch the sweep off entirely.
 

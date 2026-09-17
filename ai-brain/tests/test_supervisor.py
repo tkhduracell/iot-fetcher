@@ -547,7 +547,7 @@ async def test_the_lan_sweep_finishes_before_any_loop_starts(tmp_path, monkeypat
 
     def _build(s):
         system = build(s, chain_factory=fake_chain)
-        system.chain.lan_finder = SlowFinder()
+        system.chain.lan_finders = [SlowFinder()]
         return system
 
     monkeypatch.setattr(supervisor, "build", _build)

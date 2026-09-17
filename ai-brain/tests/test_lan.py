@@ -252,18 +252,31 @@ def test_the_lan_provider_keeps_its_place_in_the_chain(tmp_path):
     chain = ProviderChain.from_settings(settings, ledger)
 
     assert [p.key for p in chain.providers] == ["fake:x", f"lan:{MODEL}"]
-    # The supervisor drives the sweep through this handle.
-    assert chain.lan_finder is not None
-    assert chain.lan_finder.model == MODEL
+    # The supervisor drives the sweep through these handles.
+    assert [f.model for f in chain.lan_finders] == [MODEL]
 
 
-def test_a_chain_without_a_lan_entry_has_no_finder(tmp_path):
+def test_a_chain_without_a_lan_entry_has_no_finders(tmp_path):
     from ai_brain.ledger import Ledger
 
     settings = load_settings({"LLM_CHAIN": "fake:x"})
     ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
 
-    assert ProviderChain.from_settings(settings, ledger).lan_finder is None
+    assert ProviderChain.from_settings(settings, ledger).lan_finders == []
+
+
+def test_two_lan_entries_get_two_independent_finders(tmp_path):
+    from ai_brain.ledger import Ledger
+
+    settings = load_settings({"LLM_CHAIN": f"lan:qwen3.8:27b-mlx,lan:{MODEL}"})
+    ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
+    chain = ProviderChain.from_settings(settings, ledger)
+
+    assert [p.key for p in chain.providers] == ["lan:qwen3.8:27b-mlx", f"lan:{MODEL}"]
+    assert [f.model for f in chain.lan_finders] == ["qwen3.8:27b-mlx", MODEL]
+    # Each provider's own finder, not one shared instance the second entry
+    # would silently overwrite.
+    assert chain.providers[0].finder is not chain.providers[1].finder
 
 
 # --- hard timeouts --------------------------------------------------------

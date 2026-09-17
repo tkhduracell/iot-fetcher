@@ -152,13 +152,16 @@ def _ledger_json(system: System) -> dict:
 
 
 def _lan_json(system: System) -> dict:
-    """The discovered LAN host, so "why is it on Gemini" is answerable."""
-    finder = getattr(system.chain, "lan_finder", None)
-    if finder is None:
+    """The discovered LAN host(s), so "why is it on Gemini" is answerable."""
+    finders = getattr(system.chain, "lan_finders", [])
+    if not finders:
         return {"enabled": False}
+    return {"enabled": True, "hosts": [_lan_host_json(finder) for finder in finders]}
+
+
+def _lan_host_json(finder) -> dict:
     host = finder.current()
     return {
-        "enabled": True,
         "model": finder.model,
         "host": host.base_url if host else None,
         "found_at": host.found_at if host else None,
