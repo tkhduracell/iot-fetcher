@@ -4,5 +4,12 @@ scrape_configs:
   - job_name: 'wud'
     scrape_interval: 60s
     metrics_path: /metrics
+    # wud's newer image made login mandatory (WUD_AUTH_ADMIN_USER/PASSWORD in
+    # wud/.env), which also gates /metrics. password_file points at a bare
+    # (gitignored) copy of that same password mounted read-only -- the
+    # password itself never enters this checked-in file.
+    basic_auth:
+      username: admin
+      password_file: /etc/wud-metrics-password
     static_configs:
       - targets: ['wud:3000']
