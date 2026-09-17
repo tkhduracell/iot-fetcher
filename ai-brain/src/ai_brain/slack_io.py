@@ -11,13 +11,17 @@ Three properties shape the code more than the API does:
   next to the brain's memory holds ``{topic: {thread_ts, channel, status}}``,
   written atomically. A restart mid-conversation keeps replying in the same
   thread rather than opening a second one about the same thing.
-* **The assistant thread wins.** This is an agent app, so Filip talks inside a
-  thread Slack owns, tracked under the reserved ``chat`` topic. A new topic
-  raised while that thread is open replies *into it*, labelled ``*topic*``, and
-  aliases itself onto the same thread. Posting top-level and renaming a session
-  instead would put every reply in a thread he is not looking at -- the History
-  tab fills with ghosts while the conversation on screen stays silent. Only with
-  no assistant thread at all does a topic open one of its own.
+* **Every topic gets its own thread, always.** Filip's own side of the
+  conversation lives under the reserved ``chat`` topic -- the thread Slack's
+  agent UI opens when he starts talking -- but nothing else piggybacks on it.
+  An earlier version had a new topic alias itself onto whatever thread ``chat``
+  last pointed at, on the reasoning that posting top-level might put a reply in
+  a thread he was not looking at. In practice ``chat`` is rebound every time he
+  opens a fresh assistant conversation and never expires on its own, so days
+  later every unrelated topic the brain ever raised was still landing in
+  whichever thread happened to be first -- untitled, undated, and impossible to
+  find without Slack's global Threads view. A topic is worth a session of its
+  own: that is the whole reason ``rename_session`` and the status dot exist.
 * **The agent cannot spam.** A sliding hour window caps posts; over it,
   ``post`` raises :class:`SlackRateCapped` and the tool turns that into an
   error the model reads. Better to refuse loudly inside the cycle than to let
@@ -118,25 +122,26 @@ class SlackOut:
         return ts
 
     async def _send(self, topic: str, text: str) -> str:
-        """Post without touching the rate cap. Returns the ts, or ``"queued"``."""
+        """Post without touching the rate cap. Returns the ts, or ``"queued"``.
+
+        Every topic other than ``chat`` gets its own thread, always -- even
+        while an assistant conversation is open. Piggybacking a new topic onto
+        whatever thread ``chat`` last pointed at used to be the rule (to avoid
+        opening a thread Filip was not looking at), but ``chat`` is rebound
+        every time he opens a fresh assistant conversation and never expires
+        on its own: days later, every unrelated topic the brain raised was
+        still landing in that first stale thread, untitled and impossible to
+        find without digging into Slack's global Threads view. A topic is
+        worth a session of its own -- that is the whole reason ``rename_session``
+        exists.
+        """
         sessions = self._read_sessions()
         session = sessions.get(topic)
-        # No thread of its own yet, but Filip has an assistant thread open:
-        # speak there rather than opening a ghost thread he never sees.
-        chat = sessions.get(CHAT_TOPIC) if session is None else None
-        chat_thread_ts = chat.get("thread_ts") if isinstance(chat, dict) else None
-        if not chat_thread_ts:
-            chat, chat_thread_ts = None, None
-        if chat is not None and topic != CHAT_TOPIC:
-            text = f"*{topic}* {text}"
         try:
             # A session records the channel it lives in; the assistant thread
             # is not always in the DM we would open ourselves.
-            channel = str((chat or session or {}).get("channel") or "") or await self._open_dm()
-            if chat is not None:
-                thread_ts: str | None = str(chat_thread_ts)
-            else:
-                thread_ts = session["thread_ts"] if session else None
+            channel = str((session or {}).get("channel") or "") or await self._open_dm()
+            thread_ts = session["thread_ts"] if session else None
             response = await self._retry(
                 self.client.chat_postMessage,
                 channel=channel,
@@ -150,19 +155,6 @@ class SlackOut:
 
         ts = str(response["ts"])
         if session is not None:
-            return ts
-
-        if chat is not None:
-            # The reply went into the assistant thread Filip is looking at.
-            # Remember the topic as an alias onto that same thread so later
-            # posts about it land in the same conversation -- and leave the
-            # thread's own title and dot alone, since Slack owns those.
-            sessions[topic] = {
-                "thread_ts": str(chat_thread_ts),
-                "channel": channel,
-                "status": "active",
-            }
-            self._write_sessions(sessions)
             return ts
 
         # A brand new topic: name the session after it and light the dot, so

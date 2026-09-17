@@ -864,35 +864,38 @@ async def test_a_failing_setSuggestedPrompts_still_leaves_the_binding(slack_in, 
     assert out.sessions()["chat"]["thread_ts"] == "8.8"
 
 
-async def test_a_new_topic_replies_inside_the_open_assistant_thread(out, client, brain_dir):
+async def test_a_new_topic_gets_its_own_thread_even_with_chat_open(out, client, brain_dir):
+    # A topic is never an alias onto whatever thread `chat` happens to point
+    # at: `chat` is rebound every time Filip opens a fresh assistant
+    # conversation and never expires on its own, so piggybacking here used to
+    # mean every unrelated topic the brain ever raised silently landed in
+    # whichever thread was first, untitled, and impossible to find later.
     out.bind_chat(channel="D7", thread_ts="8.8")
 
     ts = await out.post("solar", "vi producerar 4 kW")
 
+    # A fresh DM (D1), not D7 -- solar has never had a session, so it never
+    # looks at what chat is bound to.
     assert client.methods("chat_postMessage") == [
-        {"channel": "D7", "text": "*solar* vi producerar 4 kW", "thread_ts": "8.8"}
+        {"channel": "D1", "text": "vi producerar 4 kW", "thread_ts": None}
     ]
-    # No ghost thread: the topic is an alias onto the thread Filip is reading,
-    # and Slack owns that thread's title, so we do not rename it.
-    assert out.sessions()["solar"] == {"thread_ts": "8.8", "channel": "D7", "status": "active"}
-    assert client.methods("agents.sessions.rename") == []
+    assert out.sessions()["solar"] == {"thread_ts": "1.1", "channel": "D1", "status": "processing"}
+    assert client.methods("agents.sessions.rename") == [
+        {"channel_id": "D1", "thread_ts": "1.1", "title": "solar"}
+    ]
     assert ts == "1.1"
 
 
-async def test_a_second_post_reuses_the_alias_without_reprefixing(out, client):
-    out.bind_chat(channel="D7", thread_ts="8.8")
+async def test_a_second_post_to_the_same_topic_reuses_its_own_thread(out, client):
     await out.post("solar", "first")
 
     await out.post("solar", "second")
 
-    assert [k["text"] for k in client.methods("chat_postMessage")] == [
-        "*solar* first",
-        "second",
-    ]
-    assert [k["thread_ts"] for k in client.methods("chat_postMessage")] == ["8.8", "8.8"]
+    assert [k["text"] for k in client.methods("chat_postMessage")] == ["first", "second"]
+    assert [k["thread_ts"] for k in client.methods("chat_postMessage")] == [None, "1.1"]
 
 
-async def test_posting_to_chat_itself_carries_no_label(out, client):
+async def test_posting_to_chat_itself_lands_in_the_bound_thread(out, client):
     out.bind_chat(channel="D7", thread_ts="8.8")
 
     await out.post("chat", "hej")
@@ -902,11 +905,11 @@ async def test_posting_to_chat_itself_carries_no_label(out, client):
     ]
 
 
-async def test_bind_chat_repoints_to_the_newest_thread(out, client):
+async def test_bind_chat_repoints_where_chat_itself_replies(out, client):
     out.bind_chat(channel="D7", thread_ts="8.8")
     out.bind_chat(channel="D7", thread_ts="9.9")
 
-    await out.post("solar", "hello")
+    await out.post("chat", "hello")
 
     assert client.methods("chat_postMessage")[0]["thread_ts"] == "9.9"
 
