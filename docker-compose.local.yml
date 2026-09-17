@@ -5,6 +5,7 @@ services:
     container_name: victoria-metrics
     volumes:
       - ./volumes/victoria-metrics:/victoria-metrics-data
+      - ./wud/metrics_password:/etc/wud-metrics-password:ro
 
   database-auth:
     container_name: victoria-metrics-auth
