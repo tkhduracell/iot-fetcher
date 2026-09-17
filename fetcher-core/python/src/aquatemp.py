@@ -116,16 +116,6 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
     _check_token_rejected(devices_body)
     devices_response = devices_body.get('objectResult') or []
     logger.info(f"[aquatemp] Found {len(devices_response)} devices")
-    if not devices_response:
-        # A 200 with an empty/null objectResult is not an error the code
-        # above catches, so it silently looks identical to "device list
-        # legitimately empty" and "cloud is telling us something we're not
-        # parsing" (e.g. an error code embedded in a 200 response, or an
-        # account-level flag). Log the raw body once so the next occurrence
-        # is diagnosable from this log alone, without re-deriving the whole
-        # request by hand.
-        logger.warning(
-            f"[aquatemp] Owned device list came back empty; raw response: {devices_body}")
 
     devices_response_share = requests.post(
         f"{cloudurl}/app/device/getMyAppectDeviceShareDataList?lang=en", headers=headers, json={
@@ -141,11 +131,20 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
     devices_response_share = share_body.get('objectResult') or []
     logger.info(
         f"[aquatemp] Found {len(devices_response_share)} shared devices")
-    if not devices_response_share:
-        logger.warning(
-            f"[aquatemp] Shared device list came back empty; raw response: {share_body}")
 
     out = devices_response + devices_response_share
+    if not out:
+        # A 200 with an empty/null objectResult on *both* endpoints is not an
+        # error the code above catches, so it silently looks identical to
+        # "genuinely no devices" and "cloud is telling us something we're not
+        # parsing" (an error code embedded in a 200, an account-level flag).
+        # This account only ever has shared devices, never owned ones -- an
+        # empty owned list alone is the normal case here, not worth a warning
+        # every single cycle, so only log when the combined result is empty.
+        logger.warning(
+            f"[aquatemp] No devices at all; owned response: {devices_body}, "
+            f"shared response: {share_body}")
+
     return out
 
 
