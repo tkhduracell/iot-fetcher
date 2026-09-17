@@ -1,5 +1,7 @@
 import * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
+import { PanelBuilder as TimeseriesBuilder } from '@grafana/grafana-foundation-sdk/timeseries';
+import { VM_DS } from './datasource.ts';
 
 export function thresholds(
   steps: Array<{ color: string; value: number | null }>,
@@ -73,6 +75,27 @@ export function tooltipMulti(): cog.Builder<{ mode: string; sort: string; hideZe
 
 /** Max gap (ms) before inserting a null to disconnect the line. 10 min covers 1-5 min ingest intervals with margin. */
 export const SPAN_NULLS_MS = 600_000;
+
+/**
+ * Factory for the common timeseries-panel chain repeated across most
+ * single-tooltip panels: VM datasource, classic palette colors, a bottom
+ * legend, a single-series tooltip, and gap-filling at SPAN_NULLS_MS.
+ *
+ * Only use this where a panel's chain is genuinely identical to this one —
+ * panels with `tooltipMulti()`, a hidden legend (`legendBottom(false)`), or a
+ * different `insertNulls` value (e.g. daily-bucketed panels) differ on
+ * purpose and should keep building their own chain instead of forcing it
+ * through here.
+ */
+export function timeseriesPanel(title: string): TimeseriesBuilder {
+  return new TimeseriesBuilder()
+    .title(title)
+    .datasource(VM_DS)
+    .colorScheme(paletteColor())
+    .legend(legendBottom())
+    .tooltip(tooltipSingle())
+    .insertNulls(SPAN_NULLS_MS);
+}
 
 export function overrideDisplayName(fieldName: string, displayName: string): {
   matcher: dashboard.MatcherConfig;
