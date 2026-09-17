@@ -247,6 +247,13 @@ Every terminal outcome, including rejection and expiry, drops a note into the
 brain's inbox, so the agent learns what became of its request on its next cycle
 rather than assuming it worked.
 
+Before calling `propose`, the model is expected to call `list_proposals`
+(pending ones, plus its most recent resolved ones) to check whether it is
+about to ask for something it already asked — the exact wording it used the
+first time is not tracked or matched against, so this is the model's own job,
+not a code-level dedup. A still-pending proposal getting asked again just
+means a second, redundant Slack message with nothing new for you to react to.
+
 Two guarantees are worth knowing when reading logs:
 
 - **Exactly once.** Slack redelivers, and a human can double-tap. The status
