@@ -123,17 +123,24 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
             'toUser': user_id
         }, timeout=30)
     if devices_response_share.status_code != 200:
+        # Don't discard the non-shared devices already fetched above just
+        # because the shared-device call failed -- log and carry on with what
+        # we have. This matters in practice: the AquaTemp pool pump is itself
+        # a shared device (see CLAUDE.md), but other non-shared devices on
+        # this account should still get reported.
         logger.error(
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
-        return []
-    share_body = devices_response_share.json()
-    _check_token_rejected(share_body)
-    devices_response_share = share_body.get('objectResult') or []
-    logger.info(
-        f"[aquatemp] Found {len(devices_response_share)} shared devices")
+        share_body = None
+        devices_response_share = []
+    else:
+        share_body = devices_response_share.json()
+        _check_token_rejected(share_body)
+        devices_response_share = share_body.get('objectResult') or []
+        logger.info(
+            f"[aquatemp] Found {len(devices_response_share)} shared devices")
 
     out = devices_response + devices_response_share
-    if not out:
+    if not out and share_body is not None:
         # A 200 with an empty/null objectResult on *both* endpoints is not an
         # error the code above catches, so it silently looks identical to
         # "genuinely no devices" and "cloud is telling us something we're not
@@ -141,6 +148,10 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
         # This account only ever has shared devices, never owned ones -- an
         # empty owned list alone is the normal case here, not worth a warning
         # every single cycle, so only log when the combined result is empty.
+        # share_body is None when the shared-device call itself failed (HTTP
+        # status), which already logged its own error above -- no need to
+        # also report "no devices" for the same root cause under a second
+        # message.
         logger.warning(
             f"[aquatemp] No devices at all; owned response: {devices_body}, "
             f"shared response: {share_body}")
