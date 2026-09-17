@@ -125,6 +125,11 @@ class Provider(ABC):
     # How many times the chain may call this provider before falling through.
     # Two is the default "one retry on a blip"; the lan provider raises its own.
     max_attempts: int = 2
+    # None means "use the chain's own call_timeout_s". A local model on real
+    # hardware can legitimately take minutes to answer a big prompt -- nothing
+    # like a cloud API's SLA -- so the lan: provider overrides this rather than
+    # making every provider in the chain wait as long as the slowest one.
+    call_timeout_s: float | None = None
 
     @abstractmethod
     async def complete(
@@ -272,6 +277,7 @@ class ProviderChain:
         """One provider's turn: up to ``max_attempts`` of them, then None."""
         key = provider.key
         attempts = max(1, provider.max_attempts)
+        timeout_s = provider.call_timeout_s or self.call_timeout_s
         for attempt in range(1, attempts + 1):
             if attempt > 1:
                 # The first attempt spent budget, and on a small free tier that
@@ -287,16 +293,14 @@ class ProviderChain:
             try:
                 reply = await asyncio.wait_for(
                     provider.complete(messages, tools, max_tokens),
-                    timeout=self.call_timeout_s,
+                    timeout=timeout_s,
                 )
             except TimeoutError:
                 # The request was sent and may already have been billed, so
                 # charge it before deciding what to do next -- an unrecorded
                 # spend makes the remaining-budget metric overstate the truth.
                 self.ledger.record(key, TIMEOUT_CHARGE_TOKENS, 0)
-                err = ProviderError(
-                    f"call exceeded {self.call_timeout_s}s", kind="timeout"
-                )
+                err = ProviderError(f"call exceeded {timeout_s}s", kind="timeout")
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
                 if attempt < attempts:
                     continue

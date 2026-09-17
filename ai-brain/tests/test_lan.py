@@ -327,3 +327,63 @@ async def test_a_host_that_never_finishes_answering_tags_is_not_a_host(monkeypat
     respx.get("http://192.168.68.1:11434/api/tags").mock(side_effect=_slow)
     async with httpx.AsyncClient() as client:
         assert await finder_for(client=client).scan() is None
+
+
+# --- timeouts ---------------------------------------------------------
+#
+# A local model can legitimately need minutes where a cloud API needs
+# seconds, so lan: gets its own, far longer, request timeout than the chain's
+# default -- while the connect phase stays tight, since a host not answering
+# the port at all is never worth 900s of patience.
+
+
+def test_lan_provider_declares_its_own_call_timeout():
+    from ai_brain.llm.lan import LAN_REQUEST_TIMEOUT_S
+
+    finder = OllamaFinder(MODEL, [])
+    provider = LanOllamaProvider(finder)
+
+    assert provider.call_timeout_s == LAN_REQUEST_TIMEOUT_S
+    assert provider.call_timeout_s > 60  # longer than the chain's own default
+
+
+def test_lan_providers_default_client_timeout_has_a_tight_connect():
+    from ai_brain.llm.lan import LAN_CONNECT_TIMEOUT_S, LAN_REQUEST_TIMEOUT_S
+
+    finder = OllamaFinder(MODEL, [])
+    provider = LanOllamaProvider(finder)
+
+    assert provider._timeout_s.connect == LAN_CONNECT_TIMEOUT_S
+    assert provider._timeout_s.read == LAN_REQUEST_TIMEOUT_S
+
+
+async def test_chain_uses_the_lan_providers_own_timeout_not_its_default(tmp_path, monkeypatch):
+    """A short chain-wide default must not cut off a slow-but-fine lan: call."""
+    import asyncio
+
+    from ai_brain.ledger import Ledger
+
+    finder = OllamaFinder(MODEL, [])
+    finder._host = OllamaHost("http://192.168.68.9:11434", MODEL, 1.0)
+    provider = LanOllamaProvider(finder)
+    # Real value (900s) would make the test slow for nothing; what matters is
+    # that it is used at all instead of the chain's much smaller default.
+    monkeypatch.setattr(provider, "call_timeout_s", 0.2)
+
+    async def _slow(*_args, **_kwargs):
+        await asyncio.sleep(0.05)  # longer than the chain's default, shorter than the provider's
+        return Reply(text="ok", tool_calls=(), usage=Usage(1, 1), model=MODEL)
+
+    monkeypatch.setattr(
+        "ai_brain.llm.ollama.OllamaProvider.complete",
+        lambda self, *a, **k: _slow(),
+    )
+    ledger = Ledger({f"lan:{MODEL}": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "l.json")
+    # The chain's own default (0.01s) is far shorter than the sleep above;
+    # only the provider's own call_timeout_s override keeps this from timing
+    # out and falling through to ChainExhausted.
+    chain = ProviderChain([provider], ledger, call_timeout_s=0.01)
+
+    out = await chain.complete(MSGS, [], 512, "brain")
+
+    assert out.text == "ok"

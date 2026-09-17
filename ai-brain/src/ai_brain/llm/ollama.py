@@ -42,7 +42,7 @@ class OllamaProvider(Provider):
         model: str,
         base_url: str,
         client: httpx.AsyncClient | None = None,
-        timeout_s: float = 60,
+        timeout_s: float | httpx.Timeout = 60,
     ):
         self.model = model
         self.key = f"ollama:{model}"

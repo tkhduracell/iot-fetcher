@@ -113,7 +113,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `RPD` | `200` | Requests per day, per model key. |
 | `LAN_SUBNETS` | *(empty)* | Subnets to sweep for the `lan:` model's host. Empty means the /24 `HA_URL` is on — see [Local models](#local-models). |
 | `LAN_SCAN_MIN` | `10` | Minutes between sweeps. |
-| `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. |
+| `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. Not read by `lan:` providers, which set their own (below) -- a local model can legitimately need minutes, nothing like a cloud API's SLA. |
 | `CYCLE_MAX_ROUNDS` | `16` | Tool rounds one cycle may take before the loop stops waiting for `end_cycle`. |
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
@@ -297,6 +297,15 @@ After the third failure the host is forgotten, the next sweep looks for another
 one, and the cycle falls through to the rest of the chain. Until a host is
 found the provider reports itself unavailable, so the chain steps past it
 without spending anything.
+
+Its own call timeout is far longer than the chain's default (900s, ignoring
+`CALL_TIMEOUT_S`): a big model on real hardware can take minutes to answer,
+and a bound sized for a cloud API would kill it mid-thought. The *connect*
+phase stays tight regardless (3s) — a host not answering the port at all is
+never worth 900s of patience. The loop's own outer bound per round is
+computed from every provider's actual timeout and attempt count, so a slow
+`lan:` entry does not get cut off by a ceiling sized for the fast ones ahead
+of it in the chain.
 
 `GET /api/status` reports what it found, one entry per `lan:` model in
 `lan_host.hosts[].host`/`.model`/`.subnets`, which is where to look when you

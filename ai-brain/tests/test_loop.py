@@ -109,7 +109,11 @@ def make_loop(brain_dir, expert_dir, registry, wall, tmp_path: Path):
             tmp_path / "ledger.json",
             clock=wall,
         )
-        chain = ProviderChain([provider], ledger)
+        # The chain's own call_timeout_s, not the loop's, is what actually
+        # bounds one provider call -- AgentLoop.chain_timeout_s is derived
+        # from the chain's providers, so a test overriding call_timeout_s to
+        # force a fast timeout has to set it on the chain too.
+        chain = ProviderChain([provider], ledger, call_timeout_s=kwargs.get("call_timeout_s", 60))
         if raises is not None:
 
             async def _boom(*_args, **_kwargs):
@@ -404,6 +408,57 @@ async def test_a_slow_provider_times_out(make_loop, brain_dir, monkeypatch):
     assert result.status == "timeout"
     assert result.next_wake_s == HEARTBEAT
     assert "[timeout]" in brain_dir.journal_text(1)
+
+
+def test_chain_timeout_s_is_the_exact_worst_case_of_every_provider(make_loop):
+    """Not a flat multiple: each provider's own timeout x its own attempts."""
+    loop, provider = make_loop([])
+    # The single fake provider from make_loop: default max_attempts (2), no
+    # call_timeout_s override, so it falls back to the chain's own (60s here,
+    # since the chain was built with call_timeout_s=60 by the fixture).
+    assert provider.max_attempts == 2
+    assert loop.chain_timeout_s == 60 * 2
+
+
+def test_chain_timeout_s_accounts_for_a_slower_providers_own_override(tmp_path, wall, registry):
+    """A lan:-style provider's longer timeout must not be invisible to the loop."""
+    from ai_brain.config import load_settings
+    from ai_brain.ledger import Ledger, Limits
+    from ai_brain.llm.fake import FakeProvider
+    from ai_brain.tools import ToolContext
+
+    class SlowProvider(FakeProvider):
+        max_attempts = 3
+        call_timeout_s = 900.0
+
+    fast = FakeProvider("fast:1", script=[])
+    slow = SlowProvider("slow:1", script=[])
+    ledger = Ledger(
+        {"fast:1": Limits(rpm=100, tpm=1_000_000, rpd=1000), "slow:1": Limits(rpm=100, tpm=1, rpd=1)},
+        tmp_path / "ledger.json",
+        clock=wall,
+    )
+    chain = ProviderChain([fast, slow], ledger, call_timeout_s=60)
+    ctx = ToolContext(
+        loop="brain", memory=None, memories={}, settings=load_settings({}), wake=lambda name: None
+    )
+    loop = AgentLoop(
+        name="brain",
+        memory=None,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="brain",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+
+    # fast: 60s x 2 attempts (the chain's default) + slow: 900s x 3 attempts
+    # (its own override) -- neither the chain's flat default nor a fixed
+    # multiplier of it would produce this.
+    assert loop.chain_timeout_s == 60 * 2 + 900 * 3
 
 
 async def test_pause_file_skips_the_provider_entirely(make_loop, brain_dir, tmp_path):
