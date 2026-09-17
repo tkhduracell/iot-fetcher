@@ -1,7 +1,10 @@
 import os
+import time
 import logging
 from typing import List
 
+from requests.exceptions import ChunkedEncodingError
+from urllib3.exceptions import ProtocolError
 from tplinkrouterc6u import TPLinkDecoClient, Connection
 from influx import write_influx, Point
 
@@ -11,15 +14,36 @@ logger = logging.getLogger(__name__)
 deco_ip = os.environ.get('DECO_IP', 'http://192.168.68.1')
 deco_password = os.environ.get('DECO_PASSWORD', '')
 
+# tplinkrouterc6u's own DecoRouter._retry_request only retries on
+# ConnectTimeout. A dropped connection mid-chunked-response -- observed
+# live on router.authorize(), ~1 in 4 cycles -- raises ChunkedEncodingError
+# or ProtocolError instead, which is not one of the errors the library's
+# own retry covers. One retry here, at the whole-call level, closes that
+# gap without needing to patch the third-party library.
+RETRY_ATTEMPTS = 2
+RETRY_DELAY_S = 2
+
 
 def deco():
     if not deco_password:
         logger.error("[deco] DECO_PASSWORD environment variable not set, ignoring...")
         return
-    try:
-        _deco()
-    except Exception as e:
-        logger.exception(f"[deco] Failed to execute deco module: {e}")
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            _deco()
+            return
+        except (ChunkedEncodingError, ProtocolError) as e:
+            if attempt >= RETRY_ATTEMPTS:
+                logger.exception(f"[deco] Failed to execute deco module: {e}")
+                return
+            logger.warning(
+                "[deco] Transient error on attempt %d/%d (%s), retrying in %ds",
+                attempt, RETRY_ATTEMPTS, e, RETRY_DELAY_S,
+            )
+            time.sleep(RETRY_DELAY_S)
+        except Exception as e:
+            logger.exception(f"[deco] Failed to execute deco module: {e}")
+            return
 
 
 def _deco():
@@ -30,7 +54,15 @@ def _deco():
         router.authorize()
         status = router.get_status()
     finally:
-        router.logout()
+        # logout() raises "Not authorised" itself if authorize() never
+        # completed (self._logged stays False) -- letting that propagate
+        # from a finally block replaces whatever exception is already in
+        # flight (e.g. the ProtocolError that made authorize() fail) with
+        # this unrelated one, hiding the real cause from the caller.
+        try:
+            router.logout()
+        except Exception:
+            logger.debug("[deco] logout() failed on an unauthorized session, ignoring")
 
     logger.info(
         "[deco] Router: %d wired, %d wifi, %d total clients",
