@@ -4,24 +4,18 @@ import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmExpr } from '../datasource.ts';
 import {
   greenThreshold, paletteColor,
-  legendBottom, tooltipSingle, tooltipMulti,
+  legendBottom, tooltipMulti,
   overrideDisplayAndColor,
-  SPAN_NULLS_MS,
+  SPAN_NULLS_MS, timeseriesPanel,
 } from '../helpers.ts';
 
 export function navimowPanels(): cog.Builder<dashboard.Panel>[] {
   // Navimow i206 AWD Battery (timeseries)
-  const batteryTs = new TimeseriesBuilder()
-    .title('Navimow 🟢')
-    .datasource(VM_DS)
+  const batteryTs = timeseriesPanel('Navimow 🟢')
     .unit('percent')
     .min(0)
     .max(100)
-    .colorScheme(paletteColor())
     .thresholds(greenThreshold())
-    .legend(legendBottom())
-    .tooltip(tooltipSingle())
-    .insertNulls(SPAN_NULLS_MS)
     .overrides([
       overrideDisplayAndColor('Navimow i206 AWD Battery', 'Navimow i206 AWD Battery', 'green'),
     ])
