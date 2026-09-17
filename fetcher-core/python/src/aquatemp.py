@@ -32,6 +32,18 @@ DERIVATION_CODES = ('T07', 'T14')
 PROTOCOL_CODES = list(CODES.keys()) + list(DERIVATION_CODES)
 
 
+class TokenRejected(Exception):
+    """The cloud says our token is no longer valid (error_code -100).
+
+    getToken() is memoized 24h by age, not validity, so a token AquaTemp has
+    revoked server-side keeps being reused until the window lapses -- every
+    call in between fails with error_code -100 / "请重新登录" ("please log in
+    again") until then. Raising this lets _aquatemp() clear the cached token
+    and log in again once, in the same run, instead of waiting out the rest
+    of the 24h.
+    """
+
+
 def aquatemp():
     try:
         _aquatemp()
@@ -78,6 +90,18 @@ def getToken() -> Optional[Tuple[str, str]]:
     return token, user_id
 
 
+def _check_token_rejected(body: dict) -> None:
+    """Raise TokenRejected if the cloud is telling us to log in again.
+
+    error_code -100 is a Tuya-family "your token is no longer valid" code,
+    distinct from a genuinely empty result (error_code '0', objectResult:
+    []). Checked on every endpoint that takes a token, since any of them can
+    be the one that first notices a revoked token.
+    """
+    if str(body.get('error_code')) == '-100':
+        raise TokenRejected(body.get('error_msg') or 'token rejected')
+
+
 def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
     headers = {"x-token": token}
     devices_response = requests.post(
@@ -89,6 +113,7 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
             f"[aquatemp] Failed to fetch device list: {devices_response.text}")
         return []
     devices_body = devices_response.json()
+    _check_token_rejected(devices_body)
     devices_response = devices_body.get('objectResult') or []
     logger.info(f"[aquatemp] Found {len(devices_response)} devices")
     if not devices_response:
@@ -112,6 +137,7 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
         return []
     share_body = devices_response_share.json()
+    _check_token_rejected(share_body)
     devices_response_share = share_body.get('objectResult') or []
     logger.info(
         f"[aquatemp] Found {len(devices_response_share)} shared devices")
@@ -136,12 +162,29 @@ def getDeviceData(token: str, deviceCode: str) -> Optional[list[Dict[str, str]]]
             f"[aquatemp] Failed to fetch device data: {deviceData_response.text}")
         return None
 
+    body = deviceData_response.json()
+    _check_token_rejected(body)
+
     # `objectResult` can be null (not just absent) — coerce so callers
     # always iterate a list.
-    return deviceData_response.json().get('objectResult') or []
+    return body.get('objectResult') or []
 
 
 def _aquatemp():
+    try:
+        _aquatemp_once()
+    except TokenRejected as exc:
+        # The memoized token is stale by validity, not just by age (24h
+        # cache, but AquaTemp revoked it sooner). Clear it and log in again
+        # once in this same run rather than crash-looping every 5 minutes
+        # until the cache naturally expires.
+        logger.warning(
+            "[aquatemp] token rejected (%s), clearing cache and logging in again", exc)
+        getToken.clear()
+        _aquatemp_once()
+
+
+def _aquatemp_once():
     token_data = getToken()
     if not token_data:
         logger.error(
