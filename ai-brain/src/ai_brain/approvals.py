@@ -46,6 +46,7 @@ from pathlib import Path
 
 from ai_brain.executors import Executors, QuietHours
 from ai_brain.memory import MemoryDir
+from ai_brain.slack_io import CHAT_TOPIC
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +125,14 @@ class Approvals:
         required = KINDS.get(kind)
         if required is None:
             raise ValueError(f"unknown kind: {kind} (known: {', '.join(sorted(KINDS))})")
+        if topic == CHAT_TOPIC:
+            # 'chat' is Filip's own conversation, repointed every time he opens
+            # a fresh assistant thread -- a proposal posted there piles up with
+            # whatever he happens to have open, not with the rest of its own
+            # subject. Caught here, before anything is stored, so the model
+            # gets a clear reason rather than the generic "slack unavailable"
+            # that SlackReservedTopic would otherwise surface as.
+            raise ValueError(f"topic {CHAT_TOPIC!r} is reserved; pick a topic naming this proposal")
         # A non-dict payload is a validation failure like any other, not a
         # TypeError: the caller is a language model filling in a JSON schema,
         # and every such mistake has to come back as one kind of error the

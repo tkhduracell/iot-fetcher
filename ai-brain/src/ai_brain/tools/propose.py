@@ -110,7 +110,12 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                         },
                         "topic": {
                             "type": "string",
-                            "description": "Slack channel or thread to ask in.",
+                            "description": (
+                                "Short subject naming this proposal, e.g. 'roborock' or "
+                                "'pool-pump'. Never 'chat' -- that thread is reserved for "
+                                "Filip's own open conversation with you and is repointed "
+                                "every time he starts a new one."
+                            ),
                         },
                     },
                     "required": ["kind", "payload", "reason", "topic"],
