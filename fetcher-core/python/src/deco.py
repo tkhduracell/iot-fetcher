@@ -3,7 +3,7 @@ import time
 import logging
 from typing import List
 
-from requests.exceptions import ChunkedEncodingError
+from requests.exceptions import ChunkedEncodingError, Timeout
 from urllib3.exceptions import ProtocolError
 from tplinkrouterc6u import TPLinkDecoClient, Connection
 from influx import write_influx, Point
@@ -18,8 +18,11 @@ deco_password = os.environ.get('DECO_PASSWORD', '')
 # ConnectTimeout. A dropped connection mid-chunked-response -- observed
 # live on router.authorize(), ~1 in 4 cycles -- raises ChunkedEncodingError
 # or ProtocolError instead, which is not one of the errors the library's
-# own retry covers. One retry here, at the whole-call level, closes that
-# gap without needing to patch the third-party library.
+# own retry covers. A plain read timeout (Timeout, not ConnectTimeout --
+# the connection opened fine but the flaky router never finished responding)
+# is the same underlying symptom under a third shape, seen live once in
+# three hours of otherwise-clean runs. One retry here, at the whole-call
+# level, closes that gap without needing to patch the third-party library.
 RETRY_ATTEMPTS = 2
 RETRY_DELAY_S = 2
 
@@ -32,7 +35,7 @@ def deco():
         try:
             _deco()
             return
-        except (ChunkedEncodingError, ProtocolError) as e:
+        except (ChunkedEncodingError, ProtocolError, Timeout) as e:
             if attempt >= RETRY_ATTEMPTS:
                 logger.exception(f"[deco] Failed to execute deco module: {e}")
                 return
