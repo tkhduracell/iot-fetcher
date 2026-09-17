@@ -88,8 +88,19 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
         logger.error(
             f"[aquatemp] Failed to fetch device list: {devices_response.text}")
         return []
-    devices_response = devices_response.json().get('objectResult') or []
+    devices_body = devices_response.json()
+    devices_response = devices_body.get('objectResult') or []
     logger.info(f"[aquatemp] Found {len(devices_response)} devices")
+    if not devices_response:
+        # A 200 with an empty/null objectResult is not an error the code
+        # above catches, so it silently looks identical to "device list
+        # legitimately empty" and "cloud is telling us something we're not
+        # parsing" (e.g. an error code embedded in a 200 response, or an
+        # account-level flag). Log the raw body once so the next occurrence
+        # is diagnosable from this log alone, without re-deriving the whole
+        # request by hand.
+        logger.warning(
+            f"[aquatemp] Owned device list came back empty; raw response: {devices_body}")
 
     devices_response_share = requests.post(
         f"{cloudurl}/app/device/getMyAppectDeviceShareDataList?lang=en", headers=headers, json={
@@ -100,9 +111,13 @@ def getDevices(token: str, user_id: str) -> List[Dict[str, str]]:
         logger.error(
             f"[aquatemp] Failed to fetch shared devices: {devices_response_share.text}")
         return []
-    devices_response_share = devices_response_share.json().get('objectResult') or []
+    share_body = devices_response_share.json()
+    devices_response_share = share_body.get('objectResult') or []
     logger.info(
         f"[aquatemp] Found {len(devices_response_share)} shared devices")
+    if not devices_response_share:
+        logger.warning(
+            f"[aquatemp] Shared device list came back empty; raw response: {share_body}")
 
     out = devices_response + devices_response_share
     return out
