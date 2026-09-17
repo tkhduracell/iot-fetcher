@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 
 from influx import write_influx, Point
+from _decorators import memoize_for_hours
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +117,23 @@ def _solve_captcha(captcha_img: str) -> Optional[str]:
     return answer
 
 
-def _login(session: requests.Session, api_base: str) -> tuple:
-    """Login and return (token, shared_key)."""
+# eufy() runs every 5 minutes, and every login attempt that hits Eufy's
+# CAPTCHA wall costs a Gemini call. Caching the token for an hour cuts that
+# ~12x (288 potential logins/day down to ~24) at the cost of up to an hour's
+# staleness on `token`/`shared_key` if Eufy revokes one server-side -- the
+# next call after the cache expires re-logs in as normal, so a revoked token
+# self-heals within the hour rather than crash-looping.
+@memoize_for_hours(1)
+def _login(api_base: str) -> tuple:
+    """Login and return (token, shared_key). Builds its own session: a
+    fresh requests.Session() carries no state a memoized call could reuse
+    anyway, and a hashable-args-only signature is what memoize_for_hours needs
+    to actually cache across calls -- a Session object passed in would make
+    every call a fresh, never-matching cache key."""
+    session = requests.Session()
+    session.headers.update(BASE_HEADERS)
+    session.headers["Country"] = eufy_country.upper()
+
     private_key = ec.generate_private_key(ec.SECP256R1())
     pub_numbers = private_key.public_key().public_numbers()
     client_pub_hex = "04" + format(pub_numbers.x, '064x') + format(pub_numbers.y, '064x')
@@ -251,8 +267,8 @@ def _eufy():
     session.headers.update(BASE_HEADERS)
     session.headers["Country"] = eufy_country.upper()
 
-    # Login
-    token, shared_key = _login(session, api_base)
+    # Login (memoized -- see _login's own docstring)
+    token, shared_key = _login(api_base)
 
     # Fetch devices
     devices = _get_devices(session, api_base, token, shared_key)
