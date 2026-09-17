@@ -197,6 +197,12 @@ async def test_propose_rejects_a_payload_missing_its_key(approvals):
         await approvals.propose("sonos_say", {"nope": "hi"}, "why", "#home")
 
 
+async def test_propose_rejects_the_reserved_chat_topic(approvals):
+    with pytest.raises(ValueError, match="reserved"):
+        await approvals.propose("sonos_say", {"text": "hi"}, "why", "chat")
+    assert approvals.pending() == []
+
+
 async def test_propose_never_executes(approvals, executors):
     await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
     assert executors.calls == []
@@ -545,6 +551,18 @@ async def test_propose_tool_reports_a_bad_kind_as_an_error(registry, make_ctx):
         topic="#home",
     )
     assert "unknown kind" in out["error"]
+
+
+async def test_propose_tool_reports_the_reserved_chat_topic_as_an_error(registry, make_ctx):
+    out = await call(
+        registry,
+        make_ctx(),
+        kind="sonos_say",
+        payload={"text": "hi"},
+        reason="why",
+        topic="chat",
+    )
+    assert "reserved" in out["error"]
 
 
 async def test_propose_tool_reports_a_bad_payload_as_an_error(registry, make_ctx):

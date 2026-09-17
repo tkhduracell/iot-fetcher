@@ -61,14 +61,8 @@ def _last_journal_line(memory) -> str:
 
 
 class FakeSlackOut:
-    def __init__(self) -> None:
-        self.statuses: list[tuple[str, str]] = []
-
     async def post(self, topic: str, text: str) -> str:
         return "1.0"
-
-    async def set_status(self, topic: str, status: str) -> None:
-        self.statuses.append((topic, status))
 
 
 @pytest.fixture
@@ -574,54 +568,6 @@ def test_slack_post_says_it_is_the_only_way_filip_hears_from_you(registry):
     assert "only way" in spec.description
 
 
-# -- slack topic status ------------------------------------------------
-
-
-async def test_cycle_topics_flip_to_active_and_clear(make_loop):
-    """Topics the brain spoke on this cycle stop showing as 'processing'."""
-    loop, _ = make_loop(
-        [
-            reply(
-                "speaking",
-                call("slack_post", "a", topic="pool", text="warm"),
-                call("slack_post", "b", topic="energy", text="cheap"),
-            ),
-            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
-        ]
-    )
-    slack = FakeSlackOut()
-    loop.ctx.extras["slack_out"] = slack
-
-    await loop.run_cycle()
-
-    assert slack.statuses == [("pool", "active"), ("energy", "active")]
-    assert loop.ctx.extras["cycle_topics"] == []
-
-
-async def test_cycle_topics_list_exists_before_tools_run(make_loop):
-    loop, _ = make_loop([reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))])
-
-    await loop.run_cycle()
-
-    assert loop.ctx.extras["cycle_topics"] == []
-    assert "end_cycle" not in loop.ctx.extras
-
-
-async def test_topics_are_cleared_even_without_a_slack_out(make_loop):
-    """slack_out may be absent (slack disabled); the cycle must still close."""
-    loop, _ = make_loop(
-        [
-            reply("trying", call("slack_post", "a", topic="pool", text="warm")),
-            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
-        ]
-    )
-
-    result = await loop.run_cycle()
-
-    assert result.status == "ok"
-    assert loop.ctx.extras["cycle_topics"] == []
-
-
 # -- run_forever -------------------------------------------------------
 
 
@@ -727,7 +673,7 @@ async def test_a_cancelled_cycle_still_closes_its_books(make_loop, brain_dir):
 
 
 async def test_cancellation_does_not_lose_the_journal_when_slack_is_wired(make_loop, brain_dir):
-    """_finish awaits set_status inside a cancelled task; books close regardless."""
+    """_finish runs inside a cancelled task with slack wired; books close regardless."""
     loop, provider = make_loop([reply("never arrives")])
     loop.ctx.extras["slack_out"] = FakeSlackOut()
 

@@ -335,7 +335,6 @@ class AgentLoop:
             # unread, to be shown again next cycle.
             notes = self.memory.unread_notes()
             messages = self._opening_messages(notes)
-            self.ctx.extras["cycle_topics"] = []
 
             while rounds < self.max_rounds:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
@@ -518,14 +517,6 @@ class AgentLoop:
             log.exception("[%s] could not write back memory", self.name)
 
         self.ctx.extras.pop("end_cycle", None)
-        slack_out = self.ctx.extras.get("slack_out")
-        if slack_out is not None:
-            for topic in self.ctx.extras.get("cycle_topics") or []:
-                try:
-                    await slack_out.set_status(topic, "active")
-                except Exception:
-                    log.exception("[%s] could not clear status for %s", self.name, topic)
-        self.ctx.extras["cycle_topics"] = []
 
         result = CycleResult(
             status=status, model=model, rounds=rounds, next_wake_s=int(next_wake_s)

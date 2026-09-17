@@ -1,16 +1,17 @@
 """The brain's one window onto a human, over Slack Socket Mode.
 
-Every topic the brain talks about becomes an *agent session*: one threaded
-conversation in Filip's DM, titled after the topic, carrying a status dot he
-can see from the sidebar. Outbound goes through :class:`SlackOut`, inbound
-through :class:`SlackIn`, and nothing else in the process touches Slack.
+Every topic the brain talks about becomes a plain Slack thread: a top-level
+message in Filip's DM, named after the topic only in its own text, with any
+follow-up posted as a reply underneath it. Outbound goes through
+:class:`SlackOut`, inbound through :class:`SlackIn`, and nothing else in the
+process touches Slack.
 
-Three properties shape the code more than the API does:
+Four properties shape the code more than the API does:
 
 * **A topic is a thread, and the mapping outlives the process.** ``sessions.json``
-  next to the brain's memory holds ``{topic: {thread_ts, channel, status}}``,
-  written atomically. A restart mid-conversation keeps replying in the same
-  thread rather than opening a second one about the same thing.
+  next to the brain's memory holds ``{topic: {thread_ts, channel}}``, written
+  atomically. A restart mid-conversation keeps replying in the same thread
+  rather than opening a second one about the same thing.
 * **Every topic gets its own thread, always.** Filip's own side of the
   conversation lives under the reserved ``chat`` topic -- the thread Slack's
   agent UI opens when he starts talking -- but nothing else piggybacks on it.
@@ -20,8 +21,20 @@ Three properties shape the code more than the API does:
   opens a fresh assistant conversation and never expires on its own, so days
   later every unrelated topic the brain ever raised was still landing in
   whichever thread happened to be first -- untitled, undated, and impossible to
-  find without Slack's global Threads view. A topic is worth a session of its
-  own: that is the whole reason ``rename_session`` and the status dot exist.
+  find without Slack's global Threads view. A topic is worth a thread of its
+  own.
+* **A topic's first message is an ordinary top-level post, not an Agents
+  session.** An earlier version also called ``agents.sessions.rename`` /
+  ``agents.sessions.setStatus`` to title the thread and show a status dot in
+  Slack's Agents sidebar. Those methods are not part of this workspace app's
+  scope (there is no scope that grants them -- they 404 in Slack's own public
+  docs) and always failed, silently falling back to the legacy
+  ``assistant.threads.*`` pair. Worse, once Slack's client treats a thread as
+  belonging to an Agents *session* rather than an ordinary DM thread, a push
+  notification for a reply in it stops deep-linking to the message and instead
+  drops Filip on the Agents History list -- so the fix was to stop trying to
+  make it an Agents session at all. A topic's thread is just a normal thread;
+  Slack always delivers and deep-links normal thread notifications correctly.
 * **The agent cannot spam.** A sliding hour window caps posts; over it,
   ``post`` raises :class:`SlackRateCapped` and the tool turns that into an
   error the model reads. Better to refuse loudly inside the cycle than to let
@@ -31,11 +44,6 @@ Three properties shape the code more than the API does:
   ``"queued"``; ``flush_queue`` drains it oldest-first on a later cycle, and
   stops at the first message Slack still will not take rather than reordering
   the ones behind it.
-
-Status transitions are deliberately best-effort: ``set_status`` logs and
-swallows, and falls back from ``agents.sessions.*`` to the older
-``assistant.threads.*`` calls, which is all this workspace's app is scoped for.
-A wrong dot in the sidebar must never take down a cycle that otherwise worked.
 """
 
 from __future__ import annotations
@@ -47,14 +55,12 @@ import os
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 log = logging.getLogger(__name__)
 
-Status = Literal["processing", "active", "closed"]
 # Bolt hands listeners an ack callable; the tests call the handlers without one.
 Ack = Callable[[], Awaitable[None]] | None
-STATUSES: frozenset[str] = frozenset({"processing", "active", "closed"})
 
 MAX_PER_HOUR = 20
 WINDOW_S = 3600.0
@@ -65,8 +71,6 @@ SUGGESTED_PROMPTS = [
     {"title": "Status", "message": "Vad jobbar du med just nu?"},
     {"title": "El", "message": "Hur mycket el producerar vi just nu?"},
 ]
-# The legacy assistant.threads.* surface only knows two dots: thinking, or none.
-_LEGACY_STATUS = {"processing": "is thinking\u2026", "active": "", "closed": ""}
 
 
 class SlackRateCapped(Exception):
@@ -74,7 +78,7 @@ class SlackRateCapped(Exception):
 
 
 class SlackOut:
-    """Posts into per-topic agent sessions, and keeps the topic->thread map."""
+    """Posts into per-topic threads, and keeps the topic->thread map."""
 
     def __init__(
         self,
@@ -132,8 +136,9 @@ class SlackOut:
         on its own: days later, every unrelated topic the brain raised was
         still landing in that first stale thread, untitled and impossible to
         find without digging into Slack's global Threads view. A topic is
-        worth a session of its own -- that is the whole reason ``rename_session``
-        exists.
+        worth a thread of its own -- an ordinary top-level post, not an Agents
+        session; see the module docstring for why the session chrome that used
+        to follow this post (naming and status-dotting it) is gone.
         """
         sessions = self._read_sessions()
         session = sessions.get(topic)
@@ -154,15 +159,12 @@ class SlackOut:
             return "queued"
 
         ts = str(response["ts"])
-        if session is not None:
-            return ts
-
-        # A brand new topic: name the session after it and light the dot, so
-        # the thread is recognisable in the sidebar before the reply lands.
-        sessions[topic] = {"thread_ts": ts, "channel": channel, "status": "processing"}
-        self._write_sessions(sessions)
-        await self.rename_session(channel, ts, topic)
-        await self.set_session_status(channel, ts, "processing")
+        if session is None:
+            # A brand new topic: this post is the thread's own top-level
+            # message, so the thread is recognisable (and its notification
+            # deep-links correctly) without any further Slack call.
+            sessions[topic] = {"thread_ts": ts, "channel": channel}
+            self._write_sessions(sessions)
         return ts
 
     async def flush_queue(self) -> int:
@@ -209,7 +211,7 @@ class SlackOut:
     # -- reading -------------------------------------------------------
 
     def sessions(self) -> dict[str, dict[str, str]]:
-        """The stored ``{topic: {thread_ts, channel, status}}`` map."""
+        """The stored ``{topic: {thread_ts, channel}}`` map."""
         return self._read_sessions()
 
     def queued_count(self) -> int:
@@ -222,31 +224,6 @@ class SlackOut:
         if not self.queue_dir.exists():
             return 0
         return len(list(self.queue_dir.glob("*.json")))
-
-    # -- status --------------------------------------------------------
-
-    async def set_status(self, topic: str, status: Status) -> None:
-        if status not in STATUSES:
-            log.warning("[slack] ignoring unknown status %r for %s", status, topic)
-            return
-        sessions = self._read_sessions()
-        session = sessions.get(topic)
-        if not isinstance(session, dict):
-            log.info("[slack] no session for topic %r, not setting status", topic)
-            return
-        # sessions.json is on a bind mount and has been hand-edited before; a
-        # half-written entry must not raise out of a best-effort status call.
-        channel = session.get("channel")
-        thread_ts = session.get("thread_ts")
-        if not channel or not thread_ts:
-            log.warning("[slack] session for topic %r is malformed: %r", topic, session)
-            return
-        await self.set_session_status(str(channel), str(thread_ts), status)
-        session["status"] = status
-        self._write_sessions(sessions)
-
-    async def close(self, topic: str) -> None:
-        await self.set_status(topic, "closed")
 
     # -- the assistant thread -------------------------------------------
 
@@ -262,35 +239,8 @@ class SlackOut:
         current = sessions.get(CHAT_TOPIC)
         if isinstance(current, dict) and current.get("thread_ts") == thread_ts:
             return
-        sessions[CHAT_TOPIC] = {
-            "thread_ts": str(thread_ts),
-            "channel": str(channel),
-            "status": "active",
-        }
+        sessions[CHAT_TOPIC] = {"thread_ts": str(thread_ts), "channel": str(channel)}
         self._write_sessions(sessions)
-
-    # -- session chrome ---------------------------------------------------
-
-    async def rename_session(self, channel: str, thread_ts: str, title: str) -> None:
-        """Title a thread, falling back to the pre-agents API."""
-        await self._chrome_call(
-            "agents.sessions.rename",
-            {"channel_id": channel, "thread_ts": thread_ts, "title": title},
-            "assistant.threads.setTitle",
-            {"channel_id": channel, "thread_ts": thread_ts, "title": title},
-        )
-
-    async def set_session_status(self, channel: str, thread_ts: str, status: Status) -> None:
-        await self._chrome_call(
-            "agents.sessions.setStatus",
-            {"channel_id": channel, "thread_ts": thread_ts, "status": status},
-            "assistant.threads.setStatus",
-            {
-                "channel_id": channel,
-                "thread_ts": thread_ts,
-                "status": _LEGACY_STATUS.get(status, ""),
-            },
-        )
 
     # -- internals -----------------------------------------------------
 
@@ -325,30 +275,6 @@ class SlackOut:
                 log.info("[slack] attempt %d failed (%s), retrying", attempt + 1, exc)
                 await self.sleep(backoff)
         raise last  # type: ignore[misc]
-
-    async def _chrome_call(
-        self,
-        method: str,
-        payload: dict[str, Any],
-        fallback: str,
-        fallback_payload: dict[str, Any],
-    ) -> None:
-        """Title/status calls are cosmetic; a failure must not break a post.
-
-        This workspace's app has no ``agents.sessions.*`` scope, so the modern
-        call fails on every post. The pre-agents ``assistant.threads.*`` pair
-        does the same job, and neither is worth a traceback: the Slack error
-        string is the whole diagnosis, and a stack per post buries the log.
-        """
-        try:
-            await self.client.api_call(method, json=payload)
-            return
-        except Exception as exc:  # noqa: BLE001 - cosmetic; any failure must leave the post alone
-            log.info("[slack] %s failed (%s), trying %s", method, _slack_error(exc), fallback)
-        try:
-            await self.client.api_call(fallback, json=fallback_payload)
-        except Exception as exc:  # noqa: BLE001 - cosmetic; any failure must leave the post alone
-            log.info("[slack] %s failed (%s)", fallback, _slack_error(exc))
 
     def _enqueue(self, topic: str, text: str) -> None:
         """Write one queued post under a name that cannot collide.
@@ -503,7 +429,6 @@ class SlackIn:
             log.info("[slack] session stopped for unknown thread %r", thread_ts)
             return
         self.brain.drop_note(NOTE_SENDER, f"Filip stopped {topic}")
-        await self.out.close(topic)
         self.wake("brain")
 
     async def on_thread_started(self, event: dict, ack: Ack = None) -> None:

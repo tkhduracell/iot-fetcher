@@ -81,7 +81,7 @@ async def _no_sleep(_seconds: float) -> None:
 # -- posting -----------------------------------------------------------
 
 
-async def test_first_post_opens_dm_creates_thread_and_renames_session(out, client, brain_dir):
+async def test_first_post_opens_dm_and_creates_a_top_level_thread(out, client, brain_dir):
     ts = await out.post("pool", "the pool is cold")
 
     assert ts == "1.1"
@@ -89,18 +89,16 @@ async def test_first_post_opens_dm_creates_thread_and_renames_session(out, clien
     assert client.methods("chat_postMessage") == [
         {"channel": "D1", "text": "the pool is cold", "thread_ts": None}
     ]
-    assert client.methods("agents.sessions.rename") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "title": "pool"}
-    ]
-    assert client.methods("agents.sessions.setStatus") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "status": "processing"}
-    ]
+    # No Agents-session chrome call is made: a topic's first post is an
+    # ordinary top-level message so Slack's own notification deep-links to it.
+    assert client.methods("agents.sessions.rename") == []
+    assert client.methods("agents.sessions.setStatus") == []
 
     sessions = json.loads((brain_dir.root / "sessions.json").read_text())
-    assert sessions == {"pool": {"thread_ts": "1.1", "channel": "D1", "status": "processing"}}
+    assert sessions == {"pool": {"thread_ts": "1.1", "channel": "D1"}}
 
 
-async def test_second_post_threads_under_the_same_session(out, client):
+async def test_second_post_threads_under_the_same_topic(out, client):
     await out.post("pool", "first")
     await out.post("pool", "second")
 
@@ -108,19 +106,14 @@ async def test_second_post_threads_under_the_same_session(out, client):
         {"channel": "D1", "text": "first", "thread_ts": None},
         {"channel": "D1", "text": "second", "thread_ts": "1.1"},
     ]
-    # The DM is opened once and the session named once; only the reply is new.
+    # The DM is opened once; only the reply threads under the first post.
     assert len(client.methods("conversations_open")) == 1
-    assert len(client.methods("agents.sessions.rename")) == 1
 
 
 async def test_a_second_topic_gets_its_own_thread(out, client, brain_dir):
     await out.post("pool", "first")
     await out.post("energy", "hello")
 
-    assert client.methods("agents.sessions.rename") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "title": "pool"},
-        {"channel_id": "D1", "thread_ts": "2.1", "title": "energy"},
-    ]
     sessions = json.loads((brain_dir.root / "sessions.json").read_text())
     assert sessions["pool"]["thread_ts"] == "1.1"
     assert sessions["energy"]["thread_ts"] == "2.1"
@@ -134,7 +127,6 @@ async def test_sessions_survive_a_restart(client, brain_dir, moving_clock):
     await second.post("pool", "after restart")
 
     assert client.methods("chat_postMessage")[-1]["thread_ts"] == "1.1"
-    assert len(client.methods("agents.sessions.rename")) == 1
 
 
 # -- rate cap ----------------------------------------------------------
@@ -264,45 +256,6 @@ async def test_flush_queue_discards_a_corrupt_file(out, brain_dir):
 
     assert await out.flush_queue() == 0
     assert not list(queue.glob("*.json"))
-
-
-# -- status ------------------------------------------------------------
-
-
-async def test_set_status_updates_the_session_and_the_file(out, client, brain_dir):
-    await out.post("pool", "hello")
-    await out.set_status("pool", "active")
-
-    assert client.methods("agents.sessions.setStatus")[-1] == {
-        "channel_id": "D1",
-        "thread_ts": "1.1",
-        "status": "active",
-    }
-    sessions = json.loads((brain_dir.root / "sessions.json").read_text())
-    assert sessions["pool"]["status"] == "active"
-
-
-async def test_close_marks_the_session_closed(out, client, brain_dir):
-    await out.post("pool", "hello")
-    await out.close("pool")
-
-    assert client.methods("agents.sessions.setStatus")[-1]["status"] == "closed"
-    sessions = json.loads((brain_dir.root / "sessions.json").read_text())
-    assert sessions["pool"]["status"] == "closed"
-
-
-async def test_set_status_on_an_unknown_topic_does_nothing(out, client):
-    await out.set_status("never-posted", "closed")
-    assert client.methods("agents.sessions.setStatus") == []
-
-
-async def test_set_status_swallows_api_errors(brain_dir, moving_clock):
-    client = FakeClient()
-    out = SlackOut(client, USER, brain_dir, moving_clock)
-    await out.post("pool", "hello")
-    client.fail_methods = frozenset({"agents.sessions.setStatus"})
-
-    await out.set_status("pool", "active")  # must not raise
 
 
 # -- inbound -----------------------------------------------------------
@@ -466,14 +419,11 @@ async def test_a_reaction_from_anyone_else_is_ignored(slack_in, app, approvals):
     assert approvals.reactions == []
 
 
-async def test_stopping_a_session_closes_it_and_tells_the_brain(
-    slack_in, app, out, client, brain_dir, woken
-):
+async def test_stopping_a_session_tells_the_brain(slack_in, app, out, brain_dir, woken):
     await out.post("pool", "the pool is cold")
 
     await app.handlers["agent_session_stopped"]({"thread_ts": "1.1"}, _ack)
 
-    assert client.methods("agents.sessions.setStatus")[-1]["status"] == "closed"
     assert brain_dir.unread_notes()[0].body == "Filip stopped pool"
     assert woken == ["brain"]
 
@@ -587,7 +537,7 @@ async def call(registry, ctx, tool, **args):
     return json.loads(await registry.dispatch(ctx, ToolCall(id="1", name=tool, args=args)))
 
 
-async def test_slack_post_tool_posts_and_records_the_topic(registry, make_ctx, out, client):
+async def test_slack_post_tool_posts_and_returns_the_ts(registry, make_ctx, out, client):
     ctx = make_ctx("brain", slack_out=out)
 
     result = await call(registry, ctx, "slack_post", topic="pool", text="hello")
@@ -595,7 +545,6 @@ async def test_slack_post_tool_posts_and_records_the_topic(registry, make_ctx, o
     assert result["ok"] is True
     assert result["ts"] == "1.1"
     assert client.methods("chat_postMessage")[0]["text"] == "hello"
-    assert ctx.extras["cycle_topics"] == ["pool"]
 
 
 async def test_slack_post_tool_reports_the_rate_cap_as_an_error(
@@ -609,14 +558,6 @@ async def test_slack_post_tool_reports_the_rate_cap_as_an_error(
 
     assert "error" in result
     assert "cap" in result["error"].lower()
-
-
-async def test_slack_close_tool_closes_the_session(registry, make_ctx, out, client):
-    ctx = make_ctx("brain", slack_out=out)
-    await call(registry, ctx, "slack_post", topic="pool", text="hello")
-
-    assert (await call(registry, ctx, "slack_close", topic="pool"))["ok"] is True
-    assert client.methods("agents.sessions.setStatus")[-1]["status"] == "closed"
 
 
 async def test_slack_tools_error_when_slack_is_not_configured(registry, make_ctx):
@@ -712,25 +653,6 @@ async def test_a_failed_flush_stops_before_the_next_message(brain_dir, moving_cl
     ]
 
 
-# -- malformed sessions.json --------------------------------------------
-
-
-async def test_set_status_skips_a_session_missing_its_channel(out, client, brain_dir):
-    (brain_dir.root / "sessions.json").write_text(json.dumps({"pool": {"thread_ts": "1.1"}}))
-
-    await out.set_status("pool", "active")
-
-    assert client.methods("agents.sessions.setStatus") == []
-
-
-async def test_set_status_skips_a_session_that_is_not_an_object(out, client, brain_dir):
-    (brain_dir.root / "sessions.json").write_text(json.dumps({"pool": "1.1"}))
-
-    await out.close("pool")
-
-    assert client.methods("agents.sessions.setStatus") == []
-
-
 # -- a resolved proposal wakes the brain ---------------------------------
 
 
@@ -761,7 +683,7 @@ async def test_a_reaction_matching_no_proposal_does_not_wake(slack_in, app, woke
 async def test_sessions_exposes_the_stored_topic_map(out):
     await out.post("pool", "the pool is cold")
 
-    assert out.sessions() == {"pool": {"thread_ts": "1.1", "channel": "D1", "status": "processing"}}
+    assert out.sessions() == {"pool": {"thread_ts": "1.1", "channel": "D1"}}
 
 
 def test_sessions_is_empty_before_anything_is_posted(out):
@@ -796,7 +718,7 @@ async def test_a_dm_in_the_assistant_thread_binds_chat_and_tags_the_note(
         _ack,
     )
 
-    assert out.sessions()["chat"] == {"thread_ts": "5.5", "channel": "D9", "status": "active"}
+    assert out.sessions()["chat"] == {"thread_ts": "5.5", "channel": "D9"}
     assert brain_dir.unread_notes()[0].body == "topic: chat\nhur mar poolen?"
 
 
@@ -836,7 +758,7 @@ async def test_assistant_thread_started_binds_chat_and_suggests_prompts(slack_in
         _ack,
     )
 
-    assert out.sessions()["chat"] == {"thread_ts": "8.8", "channel": "D7", "status": "active"}
+    assert out.sessions()["chat"] == {"thread_ts": "8.8", "channel": "D7"}
     prompts = client.methods("assistant.threads.setSuggestedPrompts")
     assert len(prompts) == 1
     assert prompts[0]["channel_id"] == "D7"
@@ -879,10 +801,7 @@ async def test_a_new_topic_gets_its_own_thread_even_with_chat_open(out, client, 
     assert client.methods("chat_postMessage") == [
         {"channel": "D1", "text": "vi producerar 4 kW", "thread_ts": None}
     ]
-    assert out.sessions()["solar"] == {"thread_ts": "1.1", "channel": "D1", "status": "processing"}
-    assert client.methods("agents.sessions.rename") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "title": "solar"}
-    ]
+    assert out.sessions()["solar"] == {"thread_ts": "1.1", "channel": "D1"}
     assert ts == "1.1"
 
 
@@ -914,72 +833,3 @@ async def test_bind_chat_repoints_where_chat_itself_replies(out, client):
     assert client.methods("chat_postMessage")[0]["thread_ts"] == "9.9"
 
 
-# -- session chrome falls back to the pre-agents API ---------------------
-
-
-class NoAgentsClient(FakeClient):
-    """This workspace's app: every ``agents.*`` call is refused."""
-
-    async def api_call(self, api_method: str, **kwargs):
-        if api_method.startswith("agents."):
-            self.calls.append((api_method, kwargs.get("json", {})))
-            raise SlackError(f"{api_method}: missing_scope")
-        return await super().api_call(api_method, **kwargs)
-
-
-async def test_rename_falls_back_to_assistant_threads_set_title(brain_dir, moving_clock):
-    client = NoAgentsClient()
-    out = SlackOut(client, USER, brain_dir, moving_clock)
-
-    await out.post("pool", "the pool is cold")
-
-    assert client.methods("agents.sessions.rename") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "title": "pool"}
-    ]
-    assert client.methods("assistant.threads.setTitle") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "title": "pool"}
-    ]
-    assert client.methods("assistant.threads.setStatus") == [
-        {"channel_id": "D1", "thread_ts": "1.1", "status": "is thinking…"}
-    ]
-
-
-async def test_set_status_falls_back_and_clears_the_dot_when_active(brain_dir, moving_clock):
-    client = NoAgentsClient()
-    out = SlackOut(client, USER, brain_dir, moving_clock)
-    await out.post("pool", "hello")
-
-    await out.close("pool")
-
-    assert client.methods("assistant.threads.setStatus")[-1] == {
-        "channel_id": "D1",
-        "thread_ts": "1.1",
-        "status": "",
-    }
-    assert json.loads((brain_dir.root / "sessions.json").read_text())["pool"]["status"] == "closed"
-
-
-async def test_a_refused_agents_call_is_logged_without_a_traceback(
-    brain_dir, moving_clock, caplog
-):
-    """A stack per post buries the log; the Slack error string is the diagnosis."""
-    client = NoAgentsClient()
-    out = SlackOut(client, USER, brain_dir, moving_clock)
-
-    with caplog.at_level(logging.INFO, logger="ai_brain.slack_io"):
-        await out.post("pool", "hello")
-
-    assert "missing_scope" in "\n".join(caplog.messages)
-    assert not any(record.exc_info for record in caplog.records)
-
-
-async def test_both_title_calls_failing_does_not_break_the_post(brain_dir, moving_clock):
-    class NothingWorks(NoAgentsClient):
-        async def api_call(self, api_method: str, **kwargs):
-            self.calls.append((api_method, kwargs.get("json", {})))
-            raise SlackError(f"{api_method}: nope")
-
-    client = NothingWorks()
-    out = SlackOut(client, USER, brain_dir, moving_clock)
-
-    assert await out.post("pool", "hello") == "1.1"
