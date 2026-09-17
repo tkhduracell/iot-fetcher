@@ -498,8 +498,14 @@ async def call(registry, ctx, **args):
     return json.loads(await registry.dispatch(ctx, ToolCall(id="1", name="propose", args=args)))
 
 
+async def call_list(registry, ctx):
+    return json.loads(
+        await registry.dispatch(ctx, ToolCall(id="1", name="list_proposals", args={}))
+    )
+
+
 def test_propose_is_brain_only(registry):
-    assert [s.name for s in registry.specs_for("brain")] == ["propose"]
+    assert {s.name for s in registry.specs_for("brain")} == {"propose", "list_proposals"}
     assert registry.specs_for("energy") == []
 
 
@@ -695,3 +701,69 @@ async def test_all_returns_every_proposal_whatever_its_status(approvals):
 
 def test_all_is_empty_before_anything_is_proposed(approvals):
     assert approvals.all() == []
+
+
+# --- the list_proposals tool -----------------------------------------------
+
+
+async def test_list_proposals_reports_pending_and_recent(registry, make_ctx, approvals):
+    ctx = make_ctx()
+    pending_out = await call(
+        registry, ctx, kind="sonos_say", payload={"text": "still open"}, reason="why", topic="#home"
+    )
+    done_out = await call(
+        registry, ctx, kind="sonos_say", payload={"text": "done"}, reason="why", topic="#home"
+    )
+    await approvals.on_reaction(
+        [p.slack_ts for p in approvals.all() if p.id == done_out["id"]][0], "x"
+    )
+
+    out = await call_list(registry, ctx)
+
+    assert out["ok"] is True
+    assert [p["id"] for p in out["pending"]] == [pending_out["id"]]
+    assert out["pending"][0]["kind"] == "sonos_say"
+    assert out["pending"][0]["payload"] == {"text": "still open"}
+    assert [p["id"] for p in out["recent"]] == [done_out["id"]]
+    assert out["recent"][0]["status"] == "rejected"
+
+
+async def test_list_proposals_is_empty_before_anything_is_proposed(registry, make_ctx):
+    out = await call_list(registry, make_ctx())
+
+    assert out == {"ok": True, "pending": [], "recent": []}
+
+
+async def test_list_proposals_caps_recent_terminal_entries(
+    registry, make_ctx, approvals, moving_clock
+):
+    from ai_brain.tools.propose import RECENT_TERMINAL_LIMIT
+
+    ctx = make_ctx()
+    for i in range(RECENT_TERMINAL_LIMIT + 5):
+        # Ids are timestamped to the second and all() sorts by id -- advance
+        # the clock so each proposal actually lands in a distinct, later
+        # second, the way real cycles minutes apart always do.
+        moving_clock.state["now"] = START + timedelta(seconds=i)
+        out = await call(
+            registry, ctx, kind="sonos_say", payload={"text": str(i)}, reason="why", topic="#home"
+        )
+        proposal = next(p for p in approvals.all() if p.id == out["id"])
+        await approvals.on_reaction(proposal.slack_ts, "x")
+
+    out = await call_list(registry, ctx)
+
+    assert len(out["recent"]) == RECENT_TERMINAL_LIMIT
+    # The oldest ones fell off, not the newest -- a reader wants what just
+    # happened, not the earliest history.
+    assert out["recent"][-1]["payload"] == {"text": str(RECENT_TERMINAL_LIMIT + 4)}
+
+
+async def test_list_proposals_is_refused_for_an_expert(registry, make_ctx):
+    out = json.loads(
+        await registry.dispatch(
+            make_ctx("energy"), ToolCall(id="1", name="list_proposals", args={})
+        )
+    )
+
+    assert "not allowed" in out["error"]
