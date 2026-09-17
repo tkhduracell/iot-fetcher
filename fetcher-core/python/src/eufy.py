@@ -102,8 +102,11 @@ def _solve_captcha(captcha_img: str) -> Optional[str]:
             {"inline_data": {"mime_type": mime_type, "data": b64data}},
         ]
 
+    # gemini-3-pro-preview was retired (404s once Google moves a preview
+    # model out from under a name); flash is good enough for reading a few
+    # CAPTCHA characters and is the same model ai-brain already leans on.
     resp = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={gemini_token}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_token}",
         json={"contents": [{"parts": parts}]},
         timeout=120,
     )
