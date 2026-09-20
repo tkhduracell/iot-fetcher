@@ -258,7 +258,12 @@ class ProviderChain:
 
             reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
             if reply is not None:
-                log.info("%s answered (%d tokens)", key, reply.usage.completion_tokens)
+                log.info(
+                    "%s answered (in=%d out=%d tokens)",
+                    key,
+                    reply.usage.prompt_tokens,
+                    reply.usage.completion_tokens,
+                )
                 return reply
 
         if earliest is None:
