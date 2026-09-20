@@ -1,5 +1,23 @@
 # syntax=docker/dockerfile:1.6
+
+# Build a Caddy binary with the MaxMind-format geolocation matcher compiled in,
+# so /etc/caddy/Caddyfile can gate {$HA_DOMAIN} by country.
+FROM caddy:2-builder-alpine AS builder
+RUN xcaddy build --with github.com/porech/caddy-maxmind-geolocation
+
+# DB-IP's Country Lite database is CC-BY 4.0 (no account/license key needed,
+# unlike MaxMind's own GeoLite2 downloads) and ships in the same .mmdb format
+# the module reads. Snapshots are published monthly; this pins to whatever
+# month the image is built, so a rebuild is how the data gets refreshed.
+FROM alpine:3.20 AS geoip
+RUN apk add --no-cache curl && \
+    curl -fSL -o /tmp/dbip.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).mmdb.gz" && \
+    gunzip /tmp/dbip.mmdb.gz && \
+    mv /tmp/dbip.mmdb /dbip-country-lite.mmdb
+
 FROM caddy:2-alpine
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+COPY --from=geoip /dbip-country-lite.mmdb /etc/caddy/dbip-country-lite.mmdb
 
 # Persist Caddy state (certs, etc.) in container writable layer
 ENV XDG_DATA_HOME=/data \
@@ -73,7 +91,16 @@ cat > /etc/caddy/Caddyfile <<'CADDYFILE'
 }
 
 {$HA_DOMAIN} {
-	@denied not remote_ip 192.168.68.0/24 10.8.0.0/24 185.176.29.48
+	# Local LAN and the VPN subnet are always trusted. Anything else must
+	# also geolocate to Sweden -- this is the fallback path for e.g. a phone
+	# on mobile data with the VPN off, not a replacement for the VPN.
+	@denied {
+		not remote_ip 192.168.68.0/24 10.8.0.0/24 185.176.29.48
+		not maxmind_geolocation {
+			db_path "/etc/caddy/dbip-country-lite.mmdb"
+			allow_countries SE
+		}
+	}
 	abort @denied
 
 	header {
