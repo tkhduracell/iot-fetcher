@@ -1,40 +1,55 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   type AgentSummary,
   type Loop,
   type Proposal,
   type Status,
+  activeLedgerKeys,
+  conditions,
   fetchAgents,
   fetchLoops,
   fetchProposals,
   fetchStatus,
   fetchTrace,
   formatIn,
+  heroSentence,
+  isExecuted,
+  isPending,
+  naggingLoops,
   quotaCounts,
   shortModel,
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import AiBrainWallBeliefs from './AiBrainWallBeliefs';
+import { ExecutedProposals, NaggingLoops, PendingProposals } from './AiBrainWallActions';
 import {
-  ExecutedProposals,
-  NaggingLoops,
-  PendingProposals,
-  isExecuted,
-  isPending,
-} from './AiBrainWallActions';
-import { MONO, SANS, SERIF, Section, WALL } from './AiBrainWallTheme';
+  ConditionStrip,
+  EmptyState,
+  MONO,
+  MachineLine,
+  MoreLink,
+  SERIF,
+  Section,
+  SlackMirrorButtons,
+  WALL,
+  WallShell,
+  useServerClock,
+} from './AiBrainWallTheme';
 
-/** The always-on wall tablet: what the house's brain currently understands.
+/** The always-on wall tablet at `/ai-brain`: what the house's brain currently
+ *  understands.
  *
  *  Read from across a room, so everything is big, Swedish and sentence-shaped,
  *  and all the machine telemetry is squeezed into one 12px line at the bottom.
  *
- *  Several of the sections here are fed by ai-brain endpoints that are still
- *  landing (`/api/loops`, `fact_stats`, `gaps`). The rule throughout: absent
- *  data hides its own section and nothing else. Nothing on this page may throw
- *  on a missing field — a wall tablet has nobody to press reload. */
+ *  The hard constraint is the tablet it runs on: 1024×768, glanced at, never
+ *  scrolled. `WallShell` is one viewport tall with its overflow hidden at that
+ *  width, and every list here is capped so the page cannot quietly grow a
+ *  second screenful — depth lives behind the "fler →" links instead. When a
+ *  number here disagrees with the count on a deeper screen, this one is the
+ *  summary and that one is the truth. */
 
 const HOUSE = 'Irisgatan';
 
@@ -42,50 +57,14 @@ const POLL_MS = 10_000;
 /** `/api/loops` aggregates the whole approval ledger; once a minute is plenty. */
 const LOOPS_POLL_MS = 60_000;
 
+/** One screenful. Raising any of these is a decision to push something below
+ *  the fold at 1024×768 — measure before you do. */
 const MAX_COLUMNS = 3;
-const MAX_PENDING = 4;
-const MAX_EXECUTED = 4;
-const MAX_LOOPS = 5;
-
-/** The hero sentence.
- *
- *  SEAM: what belongs here is a sentence the brain writes about its own current
- *  understanding — there is no endpoint that generates one today. The best
- *  honest source available is the brain's last cycle summary, which is the
- *  model's own words about what it just did; when that is empty we fall back to
- *  counting what is actually on disk. Neither is invented here: when a real
- *  "understanding" field lands, point `heroSentence` at it and delete the
- *  fallback. */
-export function heroSentence(
-  summary: string | undefined,
-  agents: AgentSummary[],
-  pending: number,
-): string {
-  const trimmed = (summary ?? '').trim();
-  if (trimmed) return trimmed;
-
-  const facts = agents.reduce((sum, a) => sum + (a.facts ?? 0), 0);
-  if (agents.length === 0) return 'Hjärnan har inte sagt något ännu.';
-
-  const parts = [
-    `Hjärnan håller ${facts} fakta om huset över ${agents.length} ${
-      agents.length === 1 ? 'loop' : 'loopar'
-    }`,
-  ];
-  if (pending > 0) {
-    // "förslag" is the same in singular and plural, so no branch is needed.
-    parts.push(`${pending} förslag väntar på ditt ✅`);
-  }
-  return `${parts.join(', ')}.`;
-}
+const MAX_PENDING = 3;
+const MAX_EXECUTED = 3;
+const MAX_LOOPS = 4;
 
 const AiBrainWall: React.FC = () => {
-  // Same server-clock discipline as /ai-brain: every timestamp comes from
-  // ai-brain, so the ticker runs on ai-brain's clock offset by whatever the
-  // last /api/status reported. A wall tablet's own clock drifts for weeks.
-  const [now, setNow] = useState(() => Date.now() / 1000);
-  const offsetRef = useRef(0);
-
   const statusFetcher = useCallback((signal: AbortSignal) => fetchStatus(signal), []);
   const agentsFetcher = useCallback((signal: AbortSignal) => fetchAgents(signal), []);
   const proposalsFetcher = useCallback((signal: AbortSignal) => fetchProposals(signal), []);
@@ -98,20 +77,11 @@ const AiBrainWall: React.FC = () => {
     [],
     POLL_MS,
   );
-  // Resolves to null (not an error) while /api/loops is still being built.
+  // Resolves to null (not an error) when /api/loops is unreachable.
   const loops = useAiBrain<{ loops: Loop[] } | null>(loopsFetcher, [], LOOPS_POLL_MS);
 
-  const serverNow = status.data?.now;
-  useEffect(() => {
-    if (typeof serverNow !== 'number' || !Number.isFinite(serverNow)) return;
-    offsetRef.current = serverNow - Date.now() / 1000;
-    setNow(Date.now() / 1000 + offsetRef.current);
-  }, [serverNow]);
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now() / 1000 + offsetRef.current), 1000);
-    return () => clearInterval(id);
-  }, []);
+  // ai-brain's clock, not the tablet's — see `useServerClock`.
+  const now = useServerClock(status.data?.now);
 
   // Every payload is cast, not validated — default each list so a partial
   // response degrades to an empty section instead of a crashed render.
@@ -125,9 +95,15 @@ const AiBrainWall: React.FC = () => {
   const trace = useAiBrain(traceFetcher, [brain?.name], POLL_MS, Boolean(brain?.name));
 
   const proposalList = proposals.data?.proposals ?? [];
-  const pending = proposalList.filter(isPending).slice(0, MAX_PENDING);
-  const executed = proposalList.filter(isExecuted).slice(0, MAX_EXECUTED);
-  const loopList = (loops.data?.loops ?? []).slice(0, MAX_LOOPS);
+  const pendingAll = proposalList.filter(isPending);
+  const executedAll = proposalList.filter(isExecuted);
+  const pending = pendingAll.slice(0, MAX_PENDING);
+  // Grouped inside ExecutedProposals, so the cap is applied to the raw list a
+  // little wide: three groups is the target, and repeats collapse into them.
+  const executed = executedAll.slice(0, MAX_EXECUTED * 4);
+  // laps >= 2 only: a topic proposed once is not something anybody is nagged
+  // about, and the deployed wall listing "1× roborock" claimed otherwise.
+  const nagging = useMemo(() => naggingLoops(loops.data?.loops, 2, MAX_LOOPS), [loops.data]);
 
   // Three columns, the agents with the most written down.
   const columns = useMemo(
@@ -139,10 +115,12 @@ const AiBrainWall: React.FC = () => {
     [agentList],
   );
 
+  // A cycle status is never the hero — see `isStatusSummary`. "tom budget" is a
+  // condition of the machine and renders as one, beside the machine line.
   const hero = heroSentence(
     trace.data?.trace?.summary,
     agentList,
-    proposals.data?.pending ?? pending.length,
+    proposals.data?.pending ?? pendingAll.length,
   );
 
   const settings = status.data?.settings;
@@ -154,6 +132,7 @@ const AiBrainWall: React.FC = () => {
 
   const anyData = Boolean(status.data || agents.data || proposals.data);
   const offline = Boolean((status.error || agents.error) && !anyData);
+  const stale = Boolean((status.error || agents.error) && anyData);
 
   const clock = new Date(now * 1000).toLocaleTimeString('sv-SE', {
     hour: '2-digit',
@@ -164,97 +143,134 @@ const AiBrainWall: React.FC = () => {
    *  across the room: it is for the person standing at the tablet. */
   const machineBits: string[] = [];
   if (ledger) {
-    const keys = (ledger.keys ?? [])
+    // Only keys that have actually been called today, plus a count of the
+    // silent ones. The deployed line printed two never-called keys at
+    // `0/1000000` each and wrapped to three lines because of them.
+    const { active, silent } = activeLedgerKeys(ledger.keys);
+    const keys = active
       .map((k) => `${shortModel(k.key)} ${quotaCounts(k.requests_day, k.requests_limit)}`)
       .join('  ');
-    machineBits.push(`ledger ${ledger.day}${keys ? ` · ${keys}` : ''}`);
+    const parts = [keys, silent > 0 ? `+${silent} tysta` : ''].filter(Boolean).join('  ');
+    machineBits.push(`ledger ${ledger.day}${parts ? ` · ${parts}` : ''}`);
   }
   if (settings?.llm_chain?.length) {
     machineBits.push(`kedja ${settings.llm_chain.map(shortModel).join(' → ')}`);
   }
   // No fact cap is exposed by /api/status today; the honest equivalent is the
-  // number actually held, plus whichever agent has asked to be compacted.
+  // number actually held.
   const factTotal = agentList.reduce((sum, a) => sum + (a.facts ?? 0), 0);
-  if (agentList.length) {
-    const compacting = agentList.filter((a) => a.needs_compaction).map((a) => a.name);
-    machineBits.push(
-      `fakta ${factTotal}${compacting.length ? ` · kompaktering: ${compacting.join(', ')}` : ''}`,
-    );
-  }
+  if (agentList.length) machineBits.push(`fakta ${factTotal}`);
   if (typeof nextWake === 'number') machineBits.push(`nästa vakning ${formatIn(nextWake, now)}`);
-  if (status.data?.paused) machineBits.push('PAUSAD');
-  if (status.error || agents.error) machineBits.push('senast kända värden');
+  if (stale) machineBits.push('senast kända värden');
+
+  const state = status.data?.paused
+    ? 'pausad'
+    : brain?.in_progress
+      ? 'tänker'
+      : offline
+        ? 'ingen kontakt'
+        : 'vaken';
 
   return (
-    <main
-      className="min-h-screen w-full px-10 py-8 flex flex-col gap-10"
-      style={{ background: WALL.ground, color: WALL.ink, fontFamily: SANS }}
-    >
-      {/* Header: house, time, one muted line of machine state. */}
-      <header className="flex items-baseline justify-between gap-6">
-        <h1
-          className="text-[22px] tracking-[0.28em] uppercase m-0"
-          style={{ fontFamily: SANS, color: WALL.inkDim, fontWeight: 500 }}
-        >
-          {HOUSE}
-        </h1>
-        <div className="flex items-baseline gap-5">
+    <WallShell
+      density="wall"
+      title={HOUSE}
+      current="/ai-brain"
+      headerRight={
+        <div className="flex items-baseline gap-4 shrink-0">
           <span className="text-[13px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
-            {status.data?.paused
-              ? 'pausad'
-              : brain?.in_progress
-                ? 'tänker'
-                : offline
-                  ? 'ingen kontakt'
-                  : 'vaken'}
+            {state}
             {brain?.last_cycle?.model ? ` · ${shortModel(brain.last_cycle.model)}` : ''}
           </span>
-          <span className="text-[30px] tabular-nums" style={{ fontFamily: MONO }}>
+          <span className="text-[26px] tabular-nums" style={{ fontFamily: MONO }}>
             {clock}
           </span>
         </div>
-      </header>
-
-      {/* Hero: one sentence, large serif. */}
+      }
+      footer={
+        <>
+          <ConditionStrip conditions={conditions(status.data, agentList, offline)} />
+          <MachineLine bits={machineBits} />
+        </>
+      }
+    >
+      {/* Hero: one sentence about understanding, clamped to two lines so a
+          long summary cannot push the columns off the screen. */}
       <p
-        className="text-[42px] leading-[1.18] max-w-[24ch] sm:max-w-[34ch] m-0"
-        style={{ fontFamily: SERIF, color: WALL.ink, fontWeight: 400 }}
+        className="text-[28px] lg:text-[32px] leading-[1.2] max-w-[42ch] m-0 shrink-0"
+        style={{
+          fontFamily: SERIF,
+          color: WALL.ink,
+          fontWeight: 400,
+          display: '-webkit-box',
+          WebkitBoxOrient: 'vertical',
+          WebkitLineClamp: 2,
+          overflow: 'hidden',
+        }}
       >
         {hero}
       </p>
 
-      <Section title="Vet om huset" show={columns.length > 0} className="grow">
+      {/* Band one: what it knows. Takes whatever height is left and clips
+          rather than scrolls — the cap is four facts a column. */}
+      <Section
+        title="Vet om huset"
+        show={columns.length > 0}
+        className="flex-1 min-h-0 flex flex-col"
+        action={<MoreLink href="/ai-brain/knowledge">fler fakta</MoreLink>}
+        empty={
+          <EmptyState why={offline ? 'ingen kontakt med ai-brain' : 'inga loopar körs'}>
+            Ingenting nedskrivet om huset ännu.
+          </EmptyState>
+        }
+      >
         <AiBrainWallBeliefs agents={columns} now={now} />
       </Section>
 
-      <Section title="Väntar på ✅" accent={WALL.amber} show={pending.length > 0}>
-        <PendingProposals proposals={pending} now={now} />
-      </Section>
-
-      <Section title="Verkställt" accent={WALL.sage} show={executed.length > 0}>
-        <ExecutedProposals proposals={executed} now={now} />
-      </Section>
-
-      {/* Dark until /api/loops lands — and after that, dark on a quiet week. */}
-      <Section title="Tjatar om" accent={WALL.rose} show={loopList.length > 0}>
-        <NaggingLoops loops={loopList} />
-      </Section>
-
-      {offline && (
-        <p className="text-[20px]" style={{ fontFamily: SERIF, color: WALL.inkDim }}>
-          Ingen kontakt med hjärnan just nu.
-        </p>
-      )}
-
-      <footer className="mt-auto pt-6" style={{ borderTop: `1px solid ${WALL.rule}` }}>
-        <p
-          className="text-[12px] leading-[1.6] m-0"
-          style={{ fontFamily: MONO, color: WALL.inkFaint }}
+      {/* Band two: what it wants, what it did, what it keeps repeating.
+          Fixed height by construction — three items each, one line apiece. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-4 shrink-0">
+        <Section
+          title="Väntar på ✅"
+          accent={WALL.amber}
+          show={pending.length > 0}
+          action={
+            <div className="flex items-center gap-3">
+              {pendingAll.length > pending.length && (
+                <MoreLink href="/ai-brain/loops">{`+${pendingAll.length - pending.length}`}</MoreLink>
+              )}
+              {/* One inert pair for the whole column — approval is a ✅ in
+                  Slack, and saying so once is as honest as saying it thrice. */}
+              <SlackMirrorButtons compact />
+            </div>
+          }
+          empty={<EmptyState why="godkännanden sker med ✅ i Slack">Inget väntar.</EmptyState>}
         >
-          {machineBits.join('  ·  ') || 'ai-brain: inga data'}
-        </p>
-      </footer>
-    </main>
+          <PendingProposals proposals={pending} now={now} buttons={false} />
+        </Section>
+
+        <Section
+          title="Verkställt"
+          accent={WALL.sage}
+          show={executed.length > 0}
+          action={<MoreLink href="/ai-brain/loops">historik</MoreLink>}
+          empty={<EmptyState why="inget förslag har körts än">Ingenting utfört.</EmptyState>}
+        >
+          <ExecutedProposals proposals={executed} now={now} limit={MAX_EXECUTED} />
+        </Section>
+
+        {/* Hidden entirely when nothing has two laps — the section only means
+            something when there is something to nag about. */}
+        <Section
+          title="Tjatar om"
+          accent={WALL.rose}
+          show={nagging.length > 0}
+          action={<MoreLink href="/ai-brain/loops">slingor</MoreLink>}
+        >
+          <NaggingLoops loops={nagging} />
+        </Section>
+      </div>
+    </WallShell>
   );
 };
 

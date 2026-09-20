@@ -1,14 +1,12 @@
-import type { Metadata } from 'next';
-import AiBrainWall from '../../components/AiBrainWall';
+import { permanentRedirect } from 'next/navigation';
 
-/** Always-on wall tablet view of the ai-brain. The page itself is a server
- *  component so the route can carry metadata; everything that polls lives in
- *  the client component below. */
+/** `/ai-brain/wall` → `/ai-brain` (308).
+ *
+ *  The wall lived here for one release and the tablet on the kitchen wall is
+ *  bookmarked to it, so the route stays as a permanent redirect rather than
+ *  becoming a 404 nobody is standing next to. Nothing renders — the redirect
+ *  throws. */
 
-export const metadata: Metadata = {
-  title: 'Hjärnan · vägg',
-};
-
-export default function AiBrainWallPage() {
-  return <AiBrainWall />;
+export default function AiBrainWallRedirect(): never {
+  permanentRedirect('/ai-brain');
 }

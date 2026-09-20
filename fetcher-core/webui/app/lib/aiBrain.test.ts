@@ -14,6 +14,25 @@ import {
   compactTokens,
   formatUptime,
   truncate,
+  factSentence,
+  cutAtBoundary,
+  isLabelLine,
+  humanizeFactName,
+  isStatusSummary,
+  heroSentence,
+  conditions,
+  groupProposals,
+  groupKey,
+  proposalSentence,
+  naggingLoops,
+  activeLedgerKeys,
+  usefulShare,
+  freshnessTone,
+  type AgentSummary,
+  type LedgerKey,
+  type Loop,
+  type Proposal,
+  type Status,
 } from './aiBrain';
 
 function stubFetch(resp: { ok?: boolean; status?: number; body?: unknown; text?: string }) {
@@ -295,5 +314,294 @@ describe('truncate', () => {
 
   it('defaults to 160 characters', () => {
     expect(truncate('z'.repeat(300)).text).toHaveLength(160);
+  });
+});
+
+// --------------------------------------------------------------- fact text
+
+describe('isLabelLine', () => {
+  it('is true only for a line that ends in a colon', () => {
+    expect(
+      isLabelLine(
+        'Health data from Garmin Forerunner 245 Music in VictoriaMetrics (Database_Name: irisgatan):',
+      ),
+    ).toBe(true);
+    expect(isLabelLine('Källor:  ')).toBe(true);
+    // A colon inside a line is part of a perfectly good sentence.
+    expect(isLabelLine('Pooltemp: 26 °C sedan i morse.')).toBe(false);
+  });
+});
+
+describe('cutAtBoundary', () => {
+  it('returns the text untouched when it fits', () => {
+    expect(cutAtBoundary('Poolen är 26 grader.', 120)).toBe('Poolen är 26 grader.');
+  });
+
+  it('cuts at a sentence end inside the budget, with no ellipsis', () => {
+    const text = 'Poolen är 26 grader. Pumpen går mellan 10 och 14 varje dag i sommar.';
+    expect(cutAtBoundary(text, 40)).toBe('Poolen är 26 grader.');
+  });
+
+  it('never splits a word', () => {
+    const text = 'Hälsodata från Garmin Forerunner tvenne hundra fyrtiofem lagras i VictoriaMetrics';
+    const cut = cutAtBoundary(text, 40);
+    expect(cut.endsWith('…')).toBe(true);
+    // Everything before the ellipsis is whole words.
+    expect(text.startsWith(cut.slice(0, -1))).toBe(true);
+    expect(cut.length).toBeLessThanOrEqual(41);
+    expect(cut).not.toMatch(/\s…$/);
+  });
+});
+
+describe('factSentence', () => {
+  it('skips the opening label line and uses the substance beneath it', () => {
+    // The shape write_fact actually produces, from the deployed wall.
+    const body = [
+      'Health data from Garmin Forerunner 245 Music in VictoriaMetrics (Database_Name: irisgatan):',
+      '',
+      'Vilopulsen ligger runt 52 slag per minut de senaste två veckorna.',
+      'Mer detaljer finns i journalen.',
+    ].join('\n');
+
+    expect(factSentence(body)).toBe(
+      'Vilopulsen ligger runt 52 slag per minut de senaste två veckorna.',
+    );
+  });
+
+  it('skips markdown headings, rules and table rows', () => {
+    const body = ['# Poolen', '---', '| a | b |', '', 'Pumpen går 10–14 varje dag.'].join('\n');
+    expect(factSentence(body)).toBe('Pumpen går 10–14 varje dag.');
+  });
+
+  it('prefers a plain statement over a bullet that comes first', () => {
+    const body = ['- roborock: dockad', '', 'Dammsugaren kör varje tisdag klockan nio.'].join('\n');
+    expect(factSentence(body)).toBe('Dammsugaren kör varje tisdag klockan nio.');
+  });
+
+  it('falls back to a bullet when there is no plain statement', () => {
+    expect(factSentence('* Dammsugaren kör varje tisdag.')).toBe('Dammsugaren kör varje tisdag.');
+  });
+
+  it('falls back to the label itself when the body is only a label', () => {
+    expect(factSentence('Garmin-data i VictoriaMetrics:')).toBe('Garmin-data i VictoriaMetrics');
+  });
+
+  it('keeps a belief to roughly two wall lines', () => {
+    const long = `Detta är en mycket lång brödtext ${'som bara fortsätter och fortsätter '.repeat(10)}slut.`;
+    const out = factSentence(long);
+    expect(out.length).toBeLessThanOrEqual(121);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('returns "" for an empty or structural body so the caller can fall back', () => {
+    expect(factSentence('')).toBe('');
+    expect(factSentence(undefined)).toBe('');
+    expect(factSentence('---\n\n```\n```')).toBe('');
+    expect(humanizeFactName('garmin_health.md')).toBe('Garmin health');
+  });
+});
+
+// --------------------------------------------------------------- the hero
+
+describe('isStatusSummary', () => {
+  it('rejects the failure string the deployed wall used as its headline', () => {
+    expect(isStatusSummary('no provider budget left')).toBe(true);
+  });
+
+  it('rejects other cycle status text', () => {
+    for (const s of ['error: timeout', 'rate limit hit', 'HTTP 429', 'status=ok rounds=3', '']) {
+      expect(isStatusSummary(s)).toBe(true);
+    }
+  });
+
+  it('accepts a real sentence the model wrote', () => {
+    expect(
+      isStatusSummary('Jag har lagt till en påminnelse om att byta borsten på dammsugaren.'),
+    ).toBe(false);
+  });
+});
+
+describe('heroSentence', () => {
+  const agents = [
+    { name: 'brain', facts: 7 } as unknown as AgentSummary,
+    { name: 'pool', facts: 3 } as unknown as AgentSummary,
+  ];
+
+  it('never puts a cycle failure in the hero — it counts instead', () => {
+    expect(heroSentence('no provider budget left', agents, 2)).toBe(
+      'Hjärnan håller 10 fakta om huset över 2 loopar, 2 förslag väntar på ditt ✅.',
+    );
+  });
+
+  it('uses a real summary when there is one', () => {
+    expect(heroSentence('Poolen är varm nog att bada i.', agents, 0)).toBe(
+      'Poolen är varm nog att bada i.',
+    );
+  });
+
+  it('says so when there are no agents at all', () => {
+    expect(heroSentence('', [], 0)).toBe('Hjärnan har inte sagt något ännu.');
+  });
+});
+
+describe('conditions', () => {
+  const key = (over: Partial<LedgerKey>): LedgerKey => ({
+    key: 'gemini:gemini-2.5-flash',
+    requests_day: 0,
+    tokens_day: 0,
+    requests_limit: 1000,
+    tokens_limit: 1_000_000,
+    requests_remaining: 1,
+    tokens_remaining: 1,
+    consecutive_429: 0,
+    blocked_until: null,
+    disabled_until: null,
+    recent_requests: 0,
+    ...over,
+  });
+
+  const status = (keys: LedgerKey[]): Status =>
+    ({ paused: false, ledger: { day: '2026-09-20', keys }, settings: {}, slack: {} }) as Status;
+
+  it('surfaces "tom budget" when no key has anything left', () => {
+    const out = conditions(status([key({ requests_remaining: 0 })]), []);
+    expect(out.map((c) => c.label)).toContain('tom budget');
+  });
+
+  it('is empty on a healthy brain', () => {
+    expect(conditions(status([key({})]), [])).toEqual([]);
+  });
+
+  it('reports no contact before anything else', () => {
+    expect(conditions(null, [], true)[0].label).toBe('ingen kontakt');
+  });
+});
+
+// --------------------------------------------------------------- proposals
+
+describe('groupProposals', () => {
+  const p = (id: string, text: string, kind = 'ha_todo_add'): Proposal =>
+    ({
+      id,
+      kind,
+      payload: { item: text },
+      reason: '',
+      topic: 'roborock',
+      created: '2026-09-20T10:00:00Z',
+      status: 'executed',
+      result: 'ok',
+    }) as Proposal;
+
+  it('collapses the same action proposed three times into one line with a count', () => {
+    const groups = groupProposals([
+      p('c', 'Replace Roborock S6 MaxV main brush'),
+      p('b', 'Replace Roborock S6 MaxV main brush.'),
+      p('a', 'replace roborock s6 maxv main  brush'),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].count).toBe(3);
+    // The newest member is the one that renders.
+    expect(groups[0].latest.id).toBe('c');
+    expect(groups[0].sentence).toBe('Replace Roborock S6 MaxV main brush');
+  });
+
+  it('keeps different actions, and different executors, apart', () => {
+    const groups = groupProposals([
+      p('a', 'Byt borste'),
+      p('b', 'Töm dammbehållaren'),
+      p('c', 'Byt borste', 'sonos_say'),
+    ]);
+    expect(groups).toHaveLength(3);
+  });
+
+  it('falls back to the topic when the payload has no text', () => {
+    const bare = { ...p('a', ''), payload: {} } as Proposal;
+    expect(proposalSentence(bare)).toBe('roborock');
+    expect(groupKey(bare)).toContain('roborock');
+  });
+});
+
+// --------------------------------------------------------------- loops
+
+describe('naggingLoops', () => {
+  const loop = (topic: string, laps: number): Loop =>
+    ({ topic, laps, pending: 0, approved: 0, rejected: 0, kinds: [], proposals: [] }) as unknown as Loop;
+
+  it('drops single-lap topics — one proposal is not a loop', () => {
+    const out = naggingLoops([
+      loop('maintenance', 2),
+      loop('roborock', 1),
+      loop('vacuum-maintenance', 1),
+    ]);
+    expect(out.map((l) => l.topic)).toEqual(['maintenance']);
+  });
+
+  it('is empty rather than null when nothing qualifies, so the section hides', () => {
+    expect(naggingLoops([loop('roborock', 1)])).toEqual([]);
+    expect(naggingLoops(null)).toEqual([]);
+  });
+
+  it('puts the loudest loop first and caps the list', () => {
+    const out = naggingLoops([loop('a', 2), loop('b', 9), loop('c', 4)], 2, 2);
+    expect(out.map((l) => l.topic)).toEqual(['b', 'c']);
+  });
+});
+
+describe('usefulShare', () => {
+  it('is null for a loop that has never run', () => {
+    expect(usefulShare({ total: 0, nothing: 0, note: 0, real: 0, repeat: 0 })).toBeNull();
+  });
+
+  it('counts notes and real work as useful', () => {
+    expect(usefulShare({ total: 4, nothing: 2, note: 1, real: 1, repeat: 0 })).toBe(0.5);
+  });
+});
+
+// --------------------------------------------------------------- ledger
+
+describe('activeLedgerKeys', () => {
+  const key = (over: Partial<LedgerKey>): LedgerKey => ({
+    key: 'k',
+    requests_day: 0,
+    tokens_day: 0,
+    requests_limit: 1_000_000,
+    tokens_limit: 1_000_000,
+    requests_remaining: 1,
+    tokens_remaining: 1,
+    consecutive_429: 0,
+    blocked_until: null,
+    disabled_until: null,
+    recent_requests: 0,
+    ...over,
+  });
+
+  it('drops the zero-traffic keys that wrapped the machine line', () => {
+    const { active, silent } = activeLedgerKeys([
+      key({ key: 'gemini:gemini-2.5-flash', requests_day: 12 }),
+      key({ key: 'qwen3.8:27b-mlx' }),
+      key({ key: 'qwen3-coder:30b' }),
+    ]);
+    expect(active.map((k) => k.key)).toEqual(['gemini:gemini-2.5-flash']);
+    expect(silent).toBe(2);
+  });
+
+  it('keeps a silent key that is blocked or has been 429ing', () => {
+    const { active } = activeLedgerKeys([
+      key({ key: 'blocked', blocked_until: 123 }),
+      key({ key: 'angry', consecutive_429: 3 }),
+      key({ key: 'quiet' }),
+    ]);
+    expect(active.map((k) => k.key)).toEqual(['blocked', 'angry']);
+  });
+});
+
+describe('freshnessTone', () => {
+  const now = 1_000_000;
+  it('greens a fact written today and reddens one older than a week', () => {
+    expect(freshnessTone(now - 60, now)).toBe('ok');
+    expect(freshnessTone(now - 3 * 86_400, now)).toBe('warn');
+    expect(freshnessTone(now - 30 * 86_400, now)).toBe('error');
+    expect(freshnessTone(null, now)).toBe('idle');
   });
 });
