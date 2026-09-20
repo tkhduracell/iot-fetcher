@@ -65,6 +65,26 @@ async def _end_cycle(ctx: ToolContext, args: dict) -> str:
     return ok({"next_wake_minutes": minutes})
 
 
+async def _note_gap(ctx: ToolContext, args: dict) -> str:
+    gap = ctx.memory.open_gap(str(args["question"]), str(args.get("why") or ""))
+    return ok({"gap": gap.id, "question": gap.question})
+
+
+async def _close_gap(ctx: ToolContext, args: dict) -> str:
+    gap_id = str(args["id"])
+    try:
+        closed = ctx.memory.close_gap(gap_id, str(args["answer"]))
+    except ValueError:
+        # An id that is not a name at all (a path, free text, the question
+        # itself) raises rather than returning False. Same shape of mistake as
+        # a missing gap from the model's side, so answer it the same way
+        # instead of letting the traceback surface as a tool crash.
+        return err(f"not a gap id: {gap_id} (ids are the slugs note_gap returned)")
+    if not closed:
+        return err(f"no such gap: {gap_id}")
+    return ok({"closed": gap_id})
+
+
 async def _rewrite_goals(ctx: ToolContext, args: dict) -> str:
     ctx.memory.rewrite_goals(str(args["body"]))
     return ok({"rewritten": "goals"})
@@ -137,6 +157,41 @@ def register_memory_tools(registry: ToolRegistry) -> None:
                 parameters=_NO_ARGS,
             ),
             _list_facts,
+            None,
+        ),
+        (
+            ToolSpec(
+                name="note_gap",
+                description=(
+                    "Record a known unknown: something you tried to determine, that "
+                    "matters for a goal, and could not. Say what would change if you "
+                    "knew it. Open gaps are read back to you every cycle, so use it for "
+                    "the question you keep needing an answer to -- not for every failed "
+                    "tool call. Asking the same question twice is the same gap, not two."
+                ),
+                parameters=_schema(
+                    {"question": {"type": "string"}, "why": {"type": "string"}},
+                    ["question", "why"],
+                ),
+            ),
+            _note_gap,
+            None,
+        ),
+        (
+            ToolSpec(
+                name="close_gap",
+                description=(
+                    "Answer a gap you noted earlier and stop it being read back to you. "
+                    "Pass the id note_gap returned and what you now know. Close it when "
+                    "you have the answer or the question stopped mattering; if the answer "
+                    "is durable, write_fact it too. Errors when no such gap exists."
+                ),
+                parameters=_schema(
+                    {"id": {"type": "string"}, "answer": {"type": "string"}},
+                    ["id", "answer"],
+                ),
+            ),
+            _close_gap,
             None,
         ),
         (

@@ -53,6 +53,8 @@ def test_expert_sees_fewer_tools_than_brain(registry):
         "list_facts",
         "send_note",
         "end_cycle",
+        "note_gap",
+        "close_gap",
     }
     assert shared <= expert
 
@@ -154,3 +156,50 @@ async def test_an_expert_may_delete_its_own_facts(registry, make_ctx, expert_dir
     await call(registry, ctx, "write_fact", name="usage", body="high")
     assert (await call(registry, ctx, "delete_fact", name="usage"))["deleted"] == "usage"
     assert expert_dir.list_facts() == []
+
+
+async def test_note_gap_is_idempotent_on_the_question(registry, make_ctx, brain_dir):
+    ctx = make_ctx("brain")
+    first = await call(
+        registry, ctx, "note_gap", question="Why is the pool cold?", why="blocks heating plan"
+    )
+    assert first["ok"] is True
+    again = await call(registry, ctx, "note_gap", question="Why is the pool cold?", why="")
+
+    assert again["gap"] == first["gap"]
+    gaps = brain_dir.gaps()
+    assert len(gaps) == 1
+    assert gaps[0].question == "Why is the pool cold?"
+    # The second call passed no reason; the first one's must survive it.
+    assert gaps[0].why == "blocks heating plan"
+
+
+async def test_an_expert_may_note_and_close_its_own_gaps(registry, make_ctx, expert_dir):
+    """Recording a known unknown is an observation, not a brain-only action."""
+    ctx = make_ctx("energy")
+    noted = await call(registry, ctx, "note_gap", question="Tariff after March?", why="pricing")
+    assert noted["ok"] is True
+    assert [g.question for g in expert_dir.gaps()] == ["Tariff after March?"]
+
+    closed = await call(registry, ctx, "close_gap", id=noted["gap"], answer="0.9 SEK/kWh")
+    assert closed["closed"] == noted["gap"]
+    assert expert_dir.gaps() == []
+    assert expert_dir.gaps(include_closed=True)[0].answer == "0.9 SEK/kWh"
+
+
+async def test_close_gap_errors_on_an_unknown_gap(registry, make_ctx):
+    out = await call(registry, make_ctx("brain"), "close_gap", id="never-noted", answer="x")
+    assert "no such gap" in out["error"]
+
+
+async def test_close_gap_on_an_unsafe_id_is_an_error_not_a_crash(registry, make_ctx):
+    out = await call(registry, make_ctx("brain"), "close_gap", id="../escape", answer="x")
+    assert "not a gap id" in out["error"]
+    assert "Error" not in out["error"]
+
+
+async def test_close_gap_given_the_question_instead_of_the_id_explains_itself(registry, make_ctx):
+    out = await call(
+        registry, make_ctx("brain"), "close_gap", id="Why is the pool cold?", answer="x"
+    )
+    assert "not a gap id" in out["error"]
