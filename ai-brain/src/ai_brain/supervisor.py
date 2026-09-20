@@ -51,6 +51,7 @@ DAY_ROLL_EVERY_S = 60
 NEW_DAY_NOTE = "new day, budget restored"
 LEDGER_SENDER = "ledger"
 FLUSH_EVERY_S = 300
+WATCHDOG_EVERY_S = 60
 RESTART_DELAY_S = 30
 
 
@@ -328,6 +329,7 @@ async def run(settings: Settings) -> None:
         tasks.append(asyncio.create_task(_every(settings.lan_scan_s, finder.scan)))
     if system.slack_out is not None:
         tasks.append(asyncio.create_task(_every(FLUSH_EVERY_S, system.slack_out.flush_queue)))
+        tasks.append(asyncio.create_task(_every(WATCHDOG_EVERY_S, system.slack_out.check_watchdog)))
 
     stop = asyncio.Event()
     event_loop = asyncio.get_running_loop()

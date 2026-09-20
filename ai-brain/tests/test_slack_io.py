@@ -48,6 +48,14 @@ class FakeClient:
         self.next_ts += 1
         return {"ok": True, "ts": f"{self.next_ts}.1"}
 
+    async def reactions_add(self, **kwargs):
+        self._record("reactions_add", kwargs)
+        return {"ok": True}
+
+    async def reactions_remove(self, **kwargs):
+        self._record("reactions_remove", kwargs)
+        return {"ok": True}
+
     async def api_call(self, api_method: str, **kwargs):
         self._record(api_method, kwargs.get("json", {}))
         return {"ok": True}
@@ -258,6 +266,95 @@ async def test_flush_queue_discards_a_corrupt_file(out, brain_dir):
     assert not list(queue.glob("*.json"))
 
 
+# -- the pending spinner -------------------------------------------------
+
+
+async def test_mark_pending_reacts_loading_on_the_message(out, client):
+    await out.mark_pending("pool", "D1", "100.1")
+
+    assert client.methods("reactions_add") == [
+        {"channel": "D1", "timestamp": "100.1", "name": "loading"}
+    ]
+
+
+async def test_a_reply_clears_the_topics_pending_spinner(out, client):
+    await out.mark_pending("pool", "D1", "100.1")
+    await out.post("pool", "it's warm again")
+
+    assert client.methods("reactions_remove") == [
+        {"channel": "D1", "timestamp": "100.1", "name": "loading"}
+    ]
+    assert client.methods("reactions_add") == [
+        {"channel": "D1", "timestamp": "100.1", "name": "loading"}
+    ]
+
+
+async def test_a_reply_to_an_unrelated_topic_leaves_the_spinner(out, client):
+    await out.mark_pending("pool", "D1", "100.1")
+    await out.post("energy", "hello")
+
+    assert client.methods("reactions_remove") == []
+
+
+async def test_watchdog_leaves_a_fresh_spinner_alone(out, client, moving_clock):
+    await out.mark_pending("pool", "D1", "100.1")
+    moving_clock.state["now"] = START + timedelta(minutes=1)
+
+    await out.check_watchdog()
+
+    assert client.methods("reactions_remove") == []
+
+
+async def test_watchdog_swaps_a_stale_spinner_for_a_red_circle(out, client, moving_clock):
+    await out.mark_pending("pool", "D1", "100.1")
+    moving_clock.state["now"] = START + timedelta(minutes=16)
+
+    await out.check_watchdog()
+
+    assert client.methods("reactions_remove") == [
+        {"channel": "D1", "timestamp": "100.1", "name": "loading"}
+    ]
+    assert client.methods("reactions_add")[-1] == {
+        "channel": "D1",
+        "timestamp": "100.1",
+        "name": "red_circle",
+    }
+
+
+async def test_watchdog_only_fires_once_per_topic(out, client, moving_clock):
+    await out.mark_pending("pool", "D1", "100.1")
+    moving_clock.state["now"] = START + timedelta(minutes=16)
+    await out.check_watchdog()
+    client.calls.clear()
+
+    await out.check_watchdog()
+
+    assert client.methods("reactions_remove") == []
+    assert client.methods("reactions_add") == []
+
+
+async def test_a_late_reply_after_the_watchdog_fired_posts_normally(out, client, moving_clock):
+    await out.mark_pending("pool", "D1", "100.1")
+    moving_clock.state["now"] = START + timedelta(minutes=16)
+    await out.check_watchdog()
+    client.calls.clear()
+
+    ts = await out.post("pool", "sorted now")
+
+    assert ts != "queued"
+    assert client.methods("reactions_remove") == []
+
+
+async def test_a_second_mark_pending_on_the_same_topic_replaces_the_first(out, client):
+    await out.mark_pending("pool", "D1", "100.1")
+    await out.mark_pending("pool", "D1", "101.1")
+    await out.post("pool", "reply")
+
+    assert client.methods("reactions_remove") == [
+        {"channel": "D1", "timestamp": "101.1", "name": "loading"}
+    ]
+
+
 # -- inbound -----------------------------------------------------------
 
 
@@ -335,6 +432,33 @@ async def test_dm_from_filip_becomes_an_inbox_note_and_wakes_the_brain(
     notes = brain_dir.unread_notes()
     assert [(n.sender, n.body) for n in notes] == [("filip", "is the spa on?")]
     assert woken == ["brain"]
+
+
+async def test_a_dm_with_a_ts_marks_the_topic_pending(slack_in, app, out, client, brain_dir):
+    await app.handlers["message"](
+        {
+            "channel_type": "im",
+            "user": USER,
+            "text": "is the spa on?",
+            "ts": "500.1",
+            "channel": "D1",
+            "thread_ts": "500.1",
+        },
+        _ack,
+    )
+
+    assert client.methods("reactions_add") == [
+        {"channel": "D1", "timestamp": "500.1", "name": "loading"}
+    ]
+
+
+async def test_a_dm_without_a_ts_is_not_marked_pending(slack_in, app, client, brain_dir):
+    """Existing tests build events without ts/channel; that must stay harmless."""
+    await app.handlers["message"](
+        {"channel_type": "im", "user": USER, "text": "is the spa on?"}, _ack
+    )
+
+    assert client.methods("reactions_add") == []
 
 
 async def test_a_dm_inside_a_topic_thread_is_tagged_with_the_topic(slack_in, app, out, brain_dir):
