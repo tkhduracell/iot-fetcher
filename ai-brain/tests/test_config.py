@@ -13,12 +13,13 @@ def test_defaults_from_empty_env():
         "lan:qwen3-coder:30b",
         "ollama:llama3.2:3b",
     ]
-    assert s.experts == ["energy", "health", "house-ops", "researcher"]
+    assert s.experts == ["energy", "health", "house-ops", "researcher", "infra"]
     assert s.brain_heartbeat_s == 30 * 60
     assert s.expert_heartbeat_s == 120 * 60
     assert s.vm_url == "http://database-auth:8427"
     assert s.ha_url == "http://192.168.68.87:8123"
     assert s.ha_todo_list == "todo.shopping_list"
+    assert s.docker_proxy_url == "http://docker-proxy:2375"
     assert s.gdrive_rag_url == "http://gdrive-rag:8090"
     assert s.sonos_url == "http://sonos-http-api:5005"
     assert s.sonos_room == "Kitchen"
@@ -31,7 +32,13 @@ def test_defaults_from_empty_env():
 def test_blank_experts_is_the_default_set():
     # A deployment that copied .env.example during the rollout has a literal
     # blank EXPERTS line; it must not silently pin that box to brain-only.
-    assert load_settings({"EXPERTS": ""}).experts == ["energy", "health", "house-ops", "researcher"]
+    assert load_settings({"EXPERTS": ""}).experts == [
+        "energy",
+        "health",
+        "house-ops",
+        "researcher",
+        "infra",
+    ]
     assert load_settings({"EXPERTS": "   "}).experts == load_settings({}).experts
 
 

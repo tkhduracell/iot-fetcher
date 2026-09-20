@@ -1,21 +1,56 @@
-"""Home Assistant state and log reads.
+"""Home Assistant state, via its own MCP server, and log reads over REST.
 
-HA has no server-side search over ``/api/states``, so this fetches the whole
-list and filters locally on entity id or friendly name. Friendly names are
-typed by a human into a UI, which makes them external text: they are wrapped
-before they reach the model.
+HA's MCP Server integration (``/mcp_server/sse``) exposes the same tool
+surface Assist itself gets: a single read tool, ``GetLiveContext``, plus two
+dozen action tools (turn on/off, set volume, start a vacuum, ...). Only the
+read tool is used here -- every action this system can take still goes
+through ``propose`` and a human's approval in Slack, same as before MCP;
+wiring the model straight into HA's own action tools would skip that gate
+entirely, and nothing about moving the *read* path to MCP changes the case
+for it.
+
+``GetLiveContext`` only covers whatever is exposed to the ``conversation``
+assistant in HA's UI (Settings > Voice assistants > Expose) -- narrower than
+the old ``/api/states`` sweep, but that narrowing is the point: an entity
+nobody chose to expose to an assistant does not become fair game for this one
+either. There is no MCP equivalent of the error log -- it was never part of
+Assist's own tool surface, on this transport or the last one -- so
+``ha_error_log`` stays a direct REST call.
+
+The result is one block of text HA formats itself, mixing our own domain/area
+vocabulary with things a human typed -- a media title, a device name -- so
+the whole block is fenced before the model reads it, the same call
+``ha_error_log`` makes for its own free-text log lines. ``GetLiveContext``
+itself has no size limit, so an unfiltered call is capped here at
+``MAX_CONTEXT_ENTITIES`` with a ``truncated`` flag, the same discipline
+``ha_error_log`` and ``vm_query`` already apply to their own results.
 """
 
 from __future__ import annotations
 
+import json
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
-from ai_brain.tools.http import decode_json, request, stream_tail
+from ai_brain.tools.http import stream_tail
 
 HA_LOOPS = frozenset({"brain", "house-ops"})
 
-MAX_ENTITIES = 50
 SOURCE = "home-assistant"
+CONTEXT_TOOL = "homeassistant__GetLiveContext"
+MCP_TIMEOUT_S = 20
+
+# GetLiveContext has no cap of its own -- an unfiltered call against a house
+# with a few hundred exposed entities is free to return all of them in one
+# blob, and unlike the old ha_state (MAX_ENTITIES + a truncated flag) nothing
+# told the model whether it was looking at everything or a fraction of it.
+# The context is one ``- names: ...`` block per entity, so that is the unit
+# this caps on, same reasoning as vm_query capping series rather than points.
+MAX_CONTEXT_ENTITIES = 50
+ENTITY_MARKER = "\n- names:"
 
 # ``/api/error_log`` is the whole log file, which on a box that has been up for
 # weeks is megabytes. Only the tail is worth reading, and this is how much of
@@ -29,62 +64,77 @@ MAX_LOG_CONTEXT = 10
 # reader must be able to tell "the next line" from "somewhere further down".
 CONTEXT_GAP = "--"
 
-# States that are HA's own vocabulary rather than something a human or an
-# integration wrote. Anything else that is not a number is free text -- an
-# input_text, a template sensor, a media title -- and free text from outside
-# this system is fenced before the model reads it.
-SAFE_STATES = frozenset({"on", "off", "unknown", "unavailable", "home", "not_home"})
+
+def _cap_entities(text: str, limit: int) -> tuple[str, bool]:
+    """Keep the first ``limit`` entity blocks of a GetLiveContext blob.
+
+    Splitting on the marker rather than counting bytes means a cut always
+    lands between two whole entities -- never mid-block, which would hand the
+    model a light with a domain but no state and no way to tell that was the
+    reason.
+    """
+    parts = text.split(ENTITY_MARKER)
+    if len(parts) - 1 <= limit:
+        return text, False
+    kept = parts[0] + ENTITY_MARKER + ENTITY_MARKER.join(parts[1 : limit + 1])
+    return kept, True
 
 
-def _wrap_state(state: object) -> object:
-    """Fence a state value unless it is a number or one of HA's own words."""
-    if not isinstance(state, str):
-        return state
+async def _ha_context(ctx: ToolContext, args: dict) -> str:
+    call_args = {}
+    if args.get("name"):
+        call_args["name"] = str(args["name"])
+    if args.get("domain"):
+        call_args["domain"] = args["domain"]
+    if args.get("area"):
+        call_args["area"] = str(args["area"])
+
+    url = f"{ctx.settings.ha_url.rstrip('/')}/mcp_server/sse"
+    headers = (
+        {"Authorization": f"Bearer {ctx.settings.ha_token}"}
+        if ctx.settings.ha_token
+        else {}
+    )
+
     try:
-        float(state)
+        async with sse_client(url, headers=headers, timeout=MCP_TIMEOUT_S) as (
+            read,
+            write,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(CONTEXT_TOOL, call_args)
+    except (
+        Exception
+    ) as exc:  # network, auth, or protocol failure -- all the same to the model
+        return err(f"ha_context: {type(exc).__name__}: {exc}")
+
+    if result.is_error:
+        text = "; ".join(c.text for c in result.content if hasattr(c, "text"))
+        return err(f"ha_context: {text or 'HA MCP tool returned an error'}")
+
+    text = "\n".join(_unwrap(c.text) for c in result.content if hasattr(c, "text"))
+    text, truncated = _cap_entities(text, MAX_CONTEXT_ENTITIES)
+    return ok({"context": wrap_external(SOURCE, text), "truncated": truncated})
+
+
+def _unwrap(text: str) -> str:
+    """HA's own tools wrap their text content as ``{"success": ..., "result": ...}``.
+
+    That is HA's envelope, not MCP's -- the protocol only promises a string,
+    and what HA puts in it is its own choice. Unwrapping here means the model
+    reads ``GetLiveContext``'s actual answer instead of a JSON string with the
+    answer buried inside a ``result`` key; anything that is not this exact
+    shape is passed through as-is, since a future HA version is free to change
+    it and a tool result the model can still read is better than a crash.
+    """
+    try:
+        parsed = json.loads(text)
     except ValueError:
-        pass
-    else:
-        return state
-    if state.lower() in SAFE_STATES:
-        return state
-    return wrap_external(SOURCE, state)
-
-
-async def _ha_state(ctx: ToolContext, args: dict) -> str:
-    needle = str(args["query"]).lower()
-    url = f"{ctx.settings.ha_url.rstrip('/')}/api/states"
-    headers = {"Authorization": f"Bearer {ctx.settings.ha_token}"} if ctx.settings.ha_token else {}
-
-    response, problem = await request(ctx, "GET", url, label="ha_state", headers=headers)
-    if problem is not None:
-        return err(problem)
-
-    body, problem = decode_json(response, "ha_state")
-    if problem is not None:
-        return err(problem)
-
-    matches = []
-    for state in body if isinstance(body, list) else []:
-        if not isinstance(state, dict):
-            continue
-        attributes = state.get("attributes")
-        attributes = attributes if isinstance(attributes, dict) else {}
-        friendly = attributes.get("friendly_name") or ""
-        entity_id = state.get("entity_id") or ""
-        if needle not in entity_id.lower() and needle not in str(friendly).lower():
-            continue
-        matches.append(
-            {
-                "entity_id": entity_id,
-                "state": _wrap_state(state.get("state")),
-                "friendly_name": wrap_external(SOURCE, str(friendly)) if friendly else None,
-                "last_changed": state.get("last_changed"),
-                "unit_of_measurement": attributes.get("unit_of_measurement"),
-            }
-        )
-
-    return ok({"entities": matches[:MAX_ENTITIES], "truncated": len(matches) > MAX_ENTITIES})
+        return text
+    if isinstance(parsed, dict) and isinstance(parsed.get("result"), str):
+        return parsed["result"]
+    return text
 
 
 def _int_arg(args: dict, key: str, default: int, low: int, high: int) -> int:
@@ -125,7 +175,11 @@ async def _ha_error_log(ctx: ToolContext, args: dict) -> str:
     context = _int_arg(args, "context", 0, 0, MAX_LOG_CONTEXT)
     needle = str(args.get("contains") or "").lower()
     url = f"{ctx.settings.ha_url.rstrip('/')}/api/error_log"
-    headers = {"Authorization": f"Bearer {ctx.settings.ha_token}"} if ctx.settings.ha_token else {}
+    headers = (
+        {"Authorization": f"Bearer {ctx.settings.ha_token}"}
+        if ctx.settings.ha_token
+        else {}
+    )
 
     _, body, truncated, problem = await stream_tail(
         ctx, "GET", url, label="ha_error_log", max_bytes=LOG_TAIL_BYTES, headers=headers
@@ -166,19 +220,32 @@ def register_ha_tools(registry: ToolRegistry) -> None:
     registry.register(
         Tool(
             spec=ToolSpec(
-                name="ha_state",
+                name="ha_context",
                 description=(
-                    "Look up Home Assistant entities whose entity id or friendly name contains "
-                    "the query (case-insensitive), with their current state. Capped at 50 "
-                    "matches, so search for something specific like 'pool' rather than 'sensor'."
+                    "Read the current state of Home Assistant devices, sensors and areas -- "
+                    "whatever is exposed to the Assist voice assistant, which is most of the "
+                    "house but not necessarily everything. Omit every filter for the whole "
+                    "house at once, or narrow with 'name' (matches entity or alias, "
+                    "case-insensitive), 'domain' (e.g. 'light', 'climate', 'sensor' -- a "
+                    "string or a list) and/or 'area'. Prefer filtering by domain when you want "
+                    "every device of one kind. Capped at 50 entities; if 'truncated' comes back "
+                    "true, narrow the query rather than trust it as the whole house."
                 ),
                 parameters={
                     "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "domain": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {"type": "array", "items": {"type": "string"}},
+                            ]
+                        },
+                        "area": {"type": "string"},
+                    },
                 },
             ),
-            fn=_ha_state,
+            fn=_ha_context,
             loops=HA_LOOPS,
         )
     )

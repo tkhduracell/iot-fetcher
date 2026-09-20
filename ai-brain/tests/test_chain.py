@@ -362,12 +362,13 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
 
 def test_env_example_ships_every_expert():
-    """The file must agree with the code default, which is all four loops."""
+    """The file must agree with the code default, which is all five loops."""
     assert load_settings(parse_env_file(ENV_EXAMPLE)).experts == [
         "energy",
         "health",
         "house-ops",
         "researcher",
+        "infra",
     ]
 
 

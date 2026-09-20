@@ -37,7 +37,7 @@ DEFAULT_LLM_CHAIN = (
 # the whole set, for a blank value as much as an absent one -- a deployment
 # that copied .env.example during the rollout has a literal ``EXPERTS=`` line,
 # and that line silently pinning it to brain-only is a default nobody chose.
-DEFAULT_EXPERTS = "energy,health,house-ops,researcher"
+DEFAULT_EXPERTS = "energy,health,house-ops,researcher,infra"
 
 # The explicit opt-out, since blank no longer is one. Case-insensitive, and
 # ``brain`` is accepted too: the brain is not an expert, so naming it is the
@@ -60,6 +60,7 @@ class Settings:
     ha_url: str
     ha_token: str
     ha_todo_list: str
+    docker_proxy_url: str
     gdrive_rag_url: str
     sonos_url: str
     sonos_room: str
@@ -136,6 +137,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         ha_url=get("HA_URL", "http://192.168.68.87:8123"),
         ha_token=get("HA_TOKEN"),
         ha_todo_list=get("HA_TODO_LIST", "todo.shopping_list"),
+        docker_proxy_url=get("DOCKER_PROXY_URL", "http://docker-proxy:2375"),
         gdrive_rag_url=get("GDRIVE_RAG_URL", "http://gdrive-rag:8090"),
         sonos_url=get("SONOS_URL", "http://sonos-http-api:5005"),
         sonos_room=get("SONOS_ROOM", "Kitchen"),

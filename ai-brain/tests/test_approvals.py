@@ -642,6 +642,7 @@ def test_kinds_matches_the_executor_surface():
         "sonos_say": ("text",),
         "ha_todo_add": ("item",),
         "ha_service": ("service", "entity_id"),
+        "docker_restart": ("container",),
     }
 
 

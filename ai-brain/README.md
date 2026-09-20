@@ -8,7 +8,7 @@ ask a human for permission to do something.
 
 ## What it is
 
-One **brain** loop plus up to four **expert** loops:
+One **brain** loop plus up to five **expert** loops:
 
 | Loop | Persona | Wakes every |
 | --- | --- | --- |
@@ -17,12 +17,16 @@ One **brain** loop plus up to four **expert** loops:
 | `health` | `seed/personas/health.md` | `EXPERT_HEARTBEAT_MIN` |
 | `house-ops` | `seed/personas/house-ops.md` | `EXPERT_HEARTBEAT_MIN` |
 | `researcher` | `seed/personas/researcher.md` | `EXPERT_HEARTBEAT_MIN` |
+| `infra` | `seed/personas/infra.md` | `EXPERT_HEARTBEAT_MIN` |
 
 Experts observe and report. They can query VictoriaMetrics, Home Assistant
-(entity states with `ha_state`, and the tail of its log with `ha_error_log`,
-which is how a broken integration gets diagnosed rather than guessed at),
-gdrive-rag and the web, write facts into their own memory, and drop notes in
-the brain's inbox. They cannot act on the house and they cannot talk to Slack.
+(entity states over its own MCP server with `ha_context`, and the tail of its
+log with `ha_error_log`, which is how a broken integration gets diagnosed
+rather than guessed at), gdrive-rag and the web, write facts into their own
+memory, and drop notes in the brain's inbox. `infra` and `brain` can also see
+the containers this system runs in (`docker_ps`, `docker_top`, `docker_logs`)
+-- everyone else's tool surface stops at the house. They cannot act on the
+house and they cannot talk to Slack.
 Everything those reads return is fenced as external text — the log included,
 since it carries whatever an integration decided to print.
 
@@ -92,7 +96,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
 | `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b,ollama:llama3.2:3b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
-| `EXPERTS` | `energy,health,house-ops,researcher` | Which expert loops to start. Unset **or blank** means all four; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
+| `EXPERTS` | `energy,health,house-ops,researcher,infra` | Which expert loops to start. Unset **or blank** means all five; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
@@ -179,7 +183,8 @@ state, so it is much easier to start narrow than to unpick a bad first day.
    Slack DM behaves. `DRY_RUN=1` is worth keeping on for this stage.
 
 4. **Enable experts one at a time.** Set `EXPERTS=energy` in `.env`, restart,
-   and give it a day. Then add `health`, then `house-ops`, then `researcher`.
+   and give it a day. Then add `health`, then `house-ops`, then `researcher`,
+   then `infra`.
    Each one has its own memory directory and its own quota appetite; adding
    them together makes it much harder to see which one is misbehaving.
 

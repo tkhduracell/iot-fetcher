@@ -58,6 +58,7 @@ KINDS: dict[str, tuple[str, ...]] = {
     "sonos_say": ("text",),
     "ha_todo_add": ("item",),
     "ha_service": ("service", "entity_id"),
+    "docker_restart": ("container",),
 }
 
 # The only status ``pending()`` reports and the only one a reaction may act on.

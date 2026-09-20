@@ -42,7 +42,7 @@ from ai_brain.tools.slack_tools import register_slack_tools
 
 log = logging.getLogger(__name__)
 
-KNOWN_EXPERTS = frozenset({"energy", "health", "house-ops", "researcher"})
+KNOWN_EXPERTS = frozenset({"energy", "health", "house-ops", "researcher", "infra"})
 
 HTTP_TIMEOUT_S = 20
 METRICS_EVERY_S = 60
