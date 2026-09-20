@@ -193,3 +193,198 @@ def test_journal_days_lists_the_dates_that_have_files(brain_dir):
 def test_journal_days_is_empty_without_a_journal_dir(tmp_path, clock):
     fresh = MemoryDir(tmp_path / "nothing", "brain", is_brain=True, clock=clock)
     assert fresh.journal_days() == []
+
+
+# --- fact freshness and write counts --------------------------------------
+
+
+def test_fact_stats_counts_writes_and_keeps_the_first_time(brain_dir, clock):
+    brain_dir.write_fact("pool", "28C")
+    first = clock.state["now"].timestamp()
+    clock.state["now"] += timedelta(hours=3)
+    brain_dir.write_fact("pool", "29C")
+    brain_dir.write_fact("spa", "38C")
+
+    stats = brain_dir.fact_stats()
+    assert [s.name for s in stats] == ["pool", "spa"]
+    pool = stats[0]
+    assert pool.writes == 2
+    assert pool.first_written_at == first
+    assert pool.written_at >= pool.first_written_at
+
+
+def test_fact_stats_sidecar_never_leaks_into_the_fact_list(brain_dir):
+    brain_dir.write_fact("pool", "28C")
+    assert (brain_dir.facts_dir / "_meta.json").exists()
+    assert brain_dir.list_facts() == ["pool"]
+    assert [s.name for s in brain_dir.fact_stats()] == ["pool"]
+
+
+def test_delete_fact_drops_the_sidecar_entry(brain_dir):
+    brain_dir.write_fact("pool", "28C")
+    brain_dir.write_fact("pool", "29C")
+    assert brain_dir.delete_fact("pool") is True
+
+    brain_dir.write_fact("pool", "30C")
+    assert brain_dir.fact_stats()[0].writes == 1
+
+
+def test_fact_stats_degrades_when_the_sidecar_is_corrupt(brain_dir):
+    """The facts are the truth; a broken sidecar must not hide them."""
+    brain_dir.write_fact("pool", "28C")
+    (brain_dir.facts_dir / "_meta.json").write_text("{not json", encoding="utf-8")
+
+    stats = brain_dir.fact_stats()
+    assert len(stats) == 1
+    assert stats[0].writes == 1
+    assert stats[0].first_written_at == stats[0].written_at
+
+
+def test_fact_stats_without_a_facts_dir(tmp_path, clock):
+    fresh = MemoryDir(tmp_path / "nothing", "brain", is_brain=True, clock=clock)
+    assert fresh.fact_stats() == []
+
+
+# --- identity / goals revision history ------------------------------------
+
+
+def test_goals_history_keeps_the_previous_body(brain_dir, clock):
+    brain_dir.rewrite_goals("- a")
+    clock.state["now"] += timedelta(minutes=1)
+    brain_dir.rewrite_goals("- b")
+    clock.state["now"] += timedelta(minutes=1)
+    brain_dir.rewrite_goals("- c")
+
+    history = brain_dir.goals_history()
+    assert [r.body for r in history] == ["- b", "- a"]
+    assert history[0].at > history[1].at
+    assert brain_dir.goals_text() == "- c"
+
+
+def test_identity_history_ignores_an_unchanged_rewrite(brain_dir):
+    brain_dir.rewrite_identity("I am curious")
+    brain_dir.rewrite_identity("I am curious")
+    assert brain_dir.identity_history() == []
+
+    brain_dir.rewrite_identity("I am patient")
+    assert [r.body for r in brain_dir.identity_history()] == ["I am curious"]
+
+
+def test_history_is_capped_and_limited(brain_dir):
+    for i in range(25):
+        brain_dir.rewrite_goals(f"- {i}")
+
+    assert len(list((brain_dir.history_dir / "goals").glob("*.md"))) == 20
+    assert len(brain_dir.goals_history()) == 10
+    assert len(brain_dir.goals_history(limit=50)) == 20
+    # Oldest revisions are the ones pruned.
+    assert brain_dir.goals_history(limit=50)[-1].body == "- 4"
+
+
+def test_history_is_empty_without_a_history_dir(brain_dir):
+    assert brain_dir.identity_history() == []
+    assert brain_dir.goals_history() == []
+
+
+def test_history_skips_a_file_that_is_not_a_revision(brain_dir):
+    brain_dir.rewrite_goals("- a")
+    brain_dir.rewrite_goals("- b")
+    (brain_dir.history_dir / "goals" / "notes.md").write_text("junk", encoding="utf-8")
+
+    assert [r.body for r in brain_dir.goals_history()] == ["- a"]
+
+
+# --- gaps: known unknowns --------------------------------------------------
+
+
+def test_open_gap_is_idempotent_on_the_slug(brain_dir, clock):
+    first = brain_dir.open_gap("Why does the pool cool at night?", "blocks heating advice")
+    assert first.id == "why-does-the-pool-cool-at-night"
+    assert first.closed_at is None and first.answer == ""
+
+    clock.state["now"] += timedelta(hours=2)
+    again = brain_dir.open_gap("Why does the pool cool at night?", "something else")
+    assert again == first
+    assert len(brain_dir.gaps()) == 1
+
+
+def test_close_gap_and_reopen(brain_dir, clock):
+    gap = brain_dir.open_gap("Is the spa heater on?", "blocks the energy note")
+    assert brain_dir.close_gap(gap.id, "yes, since 06:00") is True
+    assert brain_dir.gaps() == []
+
+    closed = brain_dir.gaps(include_closed=True)[0]
+    assert closed.answer == "yes, since 06:00" and closed.closed_at is not None
+
+    reopened = brain_dir.open_gap("Is the spa heater on?")
+    assert reopened.closed_at is None and reopened.answer == ""
+    assert reopened.opened_at == gap.opened_at
+    assert reopened.why == "blocks the energy note"
+
+
+def test_close_gap_reports_an_unknown_gap(brain_dir):
+    assert brain_dir.close_gap("never-opened", "x") is False
+
+
+def test_close_gap_validates_the_name(brain_dir):
+    with pytest.raises(ValueError):
+        brain_dir.close_gap("../etc/passwd", "x")
+
+
+def test_gaps_are_newest_opened_first(brain_dir, clock):
+    brain_dir.open_gap("first question")
+    clock.state["now"] += timedelta(hours=1)
+    brain_dir.open_gap("second question")
+
+    assert [g.question for g in brain_dir.gaps()] == ["second question", "first question"]
+
+
+def test_gaps_skips_a_corrupt_file(brain_dir):
+    brain_dir.open_gap("a real question")
+    (brain_dir.gaps_dir / "broken.json").write_text("{not json", encoding="utf-8")
+
+    assert [g.question for g in brain_dir.gaps()] == ["a real question"]
+
+
+def test_gaps_without_a_gaps_dir(tmp_path, clock):
+    fresh = MemoryDir(tmp_path / "nothing", "brain", is_brain=True, clock=clock)
+    assert fresh.gaps() == []
+
+
+def test_open_gap_slug_survives_punctuation_and_length(brain_dir):
+    gap = brain_dir.open_gap("Vad hände med poolpumpen?!")
+    assert gap.id == "vad-h-nde-med-poolpumpen"
+    long_gap = brain_dir.open_gap("x " * 100)
+    assert safe_name(long_gap.id) == long_gap.id
+
+
+# --- gaps reach the model --------------------------------------------------
+
+
+def test_read_context_lists_open_gaps(brain_dir):
+    brain_dir.open_gap("Why is the spa cold?", "blocks the heating advice")
+    brain_dir.open_gap("Who left the door open?")
+    closed = brain_dir.open_gap("Already answered?")
+    brain_dir.close_gap(closed.id, "yes")
+
+    ctx = brain_dir.read_context("Be kind.")
+    assert "## Öppna luckor" in ctx
+    assert "Why is the spa cold? (blocks the heating advice)" in ctx
+    assert "Who left the door open?" in ctx
+    assert "Already answered?" not in ctx
+
+
+def test_read_context_omits_the_gap_section_when_there_are_none(brain_dir):
+    assert "Öppna luckor" not in brain_dir.read_context("Be kind.")
+
+
+def test_read_context_caps_the_gap_section(brain_dir, clock):
+    for i in range(15):
+        clock.state["now"] += timedelta(minutes=1)
+        brain_dir.open_gap(f"question number {i}")
+
+    ctx = brain_dir.read_context("Be kind.")
+    section = ctx.split("## Öppna luckor\n")[1]
+    assert len(section.strip().splitlines()) == 10
+    assert "question number 14" in section
+    assert "question number 4" not in section
