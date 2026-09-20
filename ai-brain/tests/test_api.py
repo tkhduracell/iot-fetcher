@@ -5,6 +5,7 @@ Everything here drives a real aiohttp application through
 are the ones production serves -- no handler is called directly.
 """
 
+import asyncio
 import json
 import socket
 
@@ -537,6 +538,64 @@ async def test_trace_renders_the_live_cycle(client, system):
     assert trace["rounds"][0]["tool_results"] == [
         {"name": "list_facts", "result_preview": "[]"}
     ]
+
+
+# -- feed ----------------------------------------------------------------
+
+
+async def _read_sse_events(response, count: int, timeout: float = 2.0) -> list[dict]:
+    """Read ``count`` ``data:`` lines off an SSE response, decoded from JSON.
+
+    A real ``EventSource`` never stops reading, so the test has to be the one
+    that stops -- ``asyncio.wait_for`` around the whole read, not per line, so
+    a keepalive comment in between two events does not itself count as a
+    timeout.
+    """
+
+    async def _read() -> list[dict]:
+        events = []
+        while len(events) < count:
+            line = await response.content.readline()
+            text = line.decode().strip()
+            if text.startswith("data: "):
+                events.append(json.loads(text.removeprefix("data: ")))
+        return events
+
+    return await asyncio.wait_for(_read(), timeout=timeout)
+
+
+async def test_feed_streams_a_round_started_event(client, system):
+    async with client.get("/api/feed") as response:
+        assert response.status == 200
+        assert response.headers["Content-Type"] == "text/event-stream"
+        # Give the handler a moment to reach `subscribe()` before publishing,
+        # since the connection and the subscription are not the same instant.
+        await asyncio.sleep(0.05)
+        system.events.publish({"type": "round_started", "loop": "brain", "at": NOW})
+        [event] = await _read_sse_events(response, 1)
+        assert event == {"type": "round_started", "loop": "brain", "at": NOW}
+
+
+async def test_feed_streams_multiple_events_in_order(client, system):
+    async with client.get("/api/feed") as response:
+        await asyncio.sleep(0.05)
+        system.events.publish({"type": "round_started", "loop": "energy", "at": NOW})
+        system.events.publish({"type": "round_started", "loop": "health", "at": NOW})
+        events = await _read_sse_events(response, 2)
+        assert [e["loop"] for e in events] == ["energy", "health"]
+
+
+async def test_feed_disconnect_unsubscribes(client, system):
+    assert system.events.subscriber_count() == 0
+    async with client.get("/api/feed") as response:
+        await asyncio.sleep(0.05)
+        assert response.status == 200
+        assert system.events.subscriber_count() == 1
+    # The client context manager above closes the connection on exit; the
+    # server side only notices on its next write, so give it one to react to.
+    system.events.publish({"type": "round_started", "loop": "brain", "at": NOW})
+    await asyncio.sleep(0.05)
+    assert system.events.subscriber_count() == 0
 
 
 # -- facts -------------------------------------------------------------

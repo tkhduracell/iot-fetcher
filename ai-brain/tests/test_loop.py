@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from ai_brain.config import load_settings
+from ai_brain.events import EventBus
 from ai_brain.ledger import Ledger, Limits
 from ai_brain.llm import (
     ChainExhausted,
@@ -165,6 +166,92 @@ async def test_two_tool_rounds_then_end_cycle(make_loop, brain_dir):
     assert "checked the pool" in journal
     assert loop.last_cycle is result
     assert loop.cycle_counts["ok"] == 1
+
+
+# -- events -------------------------------------------------------------
+
+
+async def test_a_round_with_no_tool_calls_publishes_started_then_complete(make_loop):
+    bus = EventBus()
+    loop, _ = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))],
+        events=bus,
+    )
+    with bus.subscribe() as queue:
+        await loop.run_cycle()
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    kinds = [e["type"] for e in events]
+    # end_cycle has no tool calls of its own, so this one round is complete
+    # the instant the reply lands -- no separate tool-dispatch event follows.
+    assert kinds == ["round_started", "round_complete", "cycle_ended"]
+    assert events[0]["loop"] == "brain"
+    assert events[1]["round"]["text"] == "done"
+    assert events[2]["status"] == "ok"
+
+
+async def test_a_round_with_tool_calls_publishes_complete_after_dispatch(make_loop):
+    bus = EventBus()
+    loop, _ = make_loop(
+        [
+            reply("looking", call("list_facts", "a")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ],
+        events=bus,
+    )
+    with bus.subscribe() as queue:
+        await loop.run_cycle()
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    kinds = [e["type"] for e in events]
+    assert kinds == [
+        "round_started",
+        "round_complete",
+        "round_started",
+        "round_complete",
+        "cycle_ended",
+    ]
+    first_complete = events[1]
+    assert first_complete["round"]["tool_calls"] == [{"name": "list_facts", "args": {}}]
+    assert first_complete["round"]["tool_results"] == [
+        {"name": "list_facts", "result_preview": '{"ok": true, "result": []}'}
+    ]
+
+
+async def test_a_loop_with_no_bus_runs_normally(make_loop):
+    """``events=None`` is the default every existing test already relies on;
+    this just says the cycle behaves identically either way."""
+    loop, _ = make_loop([reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))])
+    assert loop.events is None
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+
+
+async def test_a_cycle_that_raises_still_publishes_cycle_ended(make_loop):
+    """A round_started with nothing after it must resolve somehow -- this is
+    what a live feed's pending "thinking" entry for the loop clears on."""
+    bus = EventBus()
+    loop, _ = make_loop([], raises=ChainExhausted(retry_at=None), events=bus)
+    with bus.subscribe() as queue:
+        result = await loop.run_cycle()
+
+    assert result.status == "no_budget"
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    # The call was attempted (round_started) but never answered, so no
+    # round_complete follows it -- cycle_ended is what tells a live feed to
+    # stop waiting on that round.
+    assert [e["type"] for e in events] == ["round_started", "cycle_ended"]
+    assert events[-1] == {"type": "cycle_ended", "loop": "brain", "status": "no_budget"}
 
 
 async def test_the_chain_call_is_logged_against_this_loops_name(make_loop, brain_dir, caplog):

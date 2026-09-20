@@ -28,6 +28,7 @@ import httpx
 from ai_brain.api import start_api, stop_api
 from ai_brain.approvals import Approvals
 from ai_brain.config import Settings, load_settings
+from ai_brain.events import EventBus
 from ai_brain.executors import Executors
 from ai_brain.ledger import Ledger
 from ai_brain.llm import PROVIDER_PREFIXES, ProviderChain, limits_from_settings
@@ -67,6 +68,7 @@ class System:
     executors: Executors
     settings: Settings
     wake: Callable[[str], None]
+    events: EventBus
     chain: ProviderChain | None = None
     slack_out: object | None = None
 
@@ -149,6 +151,7 @@ def build(
         memory.ensure()
         memory.seed_from(settings.seed_root)
 
+    events = EventBus()
     ledger = Ledger(limits_from_settings(settings), settings.memory_root / "_ledger.json", clock)
     factory = chain_factory or ProviderChain.from_settings
     chain = factory(settings, ledger)
@@ -199,6 +202,7 @@ def build(
             max_rounds=settings.max_rounds,
             max_tokens=settings.max_tokens,
             call_timeout_s=settings.call_timeout_s,
+            events=events,
         )
 
     return System(
@@ -212,6 +216,7 @@ def build(
         executors=executors,
         settings=settings,
         wake=wake,
+        events=events,
         chain=chain,
     )
 

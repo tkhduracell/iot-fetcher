@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
 from ai_brain.llm import ChainExhausted, Message, ProviderChain
 from ai_brain.memory import MemoryDir, Note
@@ -258,6 +259,25 @@ def _safe_args(args: Any) -> dict:
     }
 
 
+def _round_event(loop_name: str, round_: RoundTrace) -> dict:
+    """A ``round_complete`` event, in the same shape ``_trace_json`` serves.
+
+    One shape for a round whether it arrives by polling ``/trace`` or by the
+    live feed means the frontend's ``RoundTrace`` type and renderers need no
+    second parsing path -- only the envelope (``type``, ``loop``) is new.
+    """
+    return {
+        "type": "round_complete",
+        "loop": loop_name,
+        "round": {
+            "at": round_.at,
+            "text": round_.text,
+            "tool_calls": round_.tool_calls,
+            "tool_results": round_.tool_results,
+        },
+    }
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -274,6 +294,7 @@ class AgentLoop:
         max_rounds: int = 16,
         max_tokens: int = MAX_TOKENS,
         call_timeout_s: int = 60,
+        events: EventBus | None = None,
     ) -> None:
         self.name = name
         self.memory = memory
@@ -288,6 +309,7 @@ class AgentLoop:
         self.max_rounds = max_rounds
         self.max_tokens = max_tokens
         self.call_timeout_s = call_timeout_s
+        self.events = events
         # The exact worst case for one round: every provider in the chain
         # tried in turn, each burning its own timeout on every attempt it is
         # allowed, before the round either answers or the chain gives up.
@@ -344,6 +366,15 @@ class AgentLoop:
                     status, summary = "paused", "paused mid-cycle"
                     log.info("[%s] PAUSE appeared mid-cycle, stopping", self.name)
                     break
+                if self.events is not None:
+                    # Fired before the call, not after: a slow provider can
+                    # take longer than the gap between two other loops'
+                    # entire cycles, and a live feed that only speaks once a
+                    # round lands would sit silent through exactly the part
+                    # someone watching it wants to see.
+                    self.events.publish(
+                        {"type": "round_started", "loop": self.name, "at": self.clock()}
+                    )
                 reply = await asyncio.wait_for(
                     self.chain.complete(
                         messages,
@@ -365,6 +396,11 @@ class AgentLoop:
                         ],
                     )
                 )
+                if self.events is not None and not trace.rounds[-1].tool_calls:
+                    # A round with no tool calls is already complete the
+                    # instant it is appended -- there is no later point to
+                    # publish from, so this is that round's only event.
+                    self.events.publish(_round_event(self.name, trace.rounds[-1]))
                 messages.append(
                     Message(
                         "assistant",
@@ -386,6 +422,8 @@ class AgentLoop:
                         }
                     )
                     messages.append(Message("tool", result, tool_call_id=call.id, name=call.name))
+                if self.events is not None:
+                    self.events.publish(_round_event(self.name, trace.rounds[-1]))
                 if self.ctx.extras.get("end_cycle"):
                     break
 
@@ -532,6 +570,15 @@ class AgentLoop:
             # Last, because ``finished_at`` is what tells a reader the rest of
             # the trace has stopped moving.
             self.trace.finished_at = self.last_cycle_at
+        if self.events is not None:
+            # Every cycle passes through here exactly once, on every path --
+            # success, timeout, no budget, a raised exception, a mid-cycle
+            # pause. A "round_started" published with nothing following it
+            # (the call raised or timed out before a round could be appended)
+            # would otherwise leave a live feed's "tänker…" entry for this
+            # loop pending forever; this event is what tells it the cycle is
+            # over and any such entry should resolve, one way or another.
+            self.events.publish({"type": "cycle_ended", "loop": self.name, "status": status})
         return result
 
 

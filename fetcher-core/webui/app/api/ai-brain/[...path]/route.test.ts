@@ -127,4 +127,65 @@ describe('GET /api/ai-brain/[...path]', () => {
     expect(route).not.toHaveProperty('PUT');
     expect(route).not.toHaveProperty('DELETE');
   });
+
+  describe('api/feed (SSE)', () => {
+    /** Unlike `stubAiBrain`, this stub answers with a real `ReadableStream`
+     *  body -- the one thing the JSON stub above has no reason to carry, and
+     *  the one thing this branch actually forwards untouched. */
+    function stubAiBrainStream(chunks: string[]) {
+      const stream = new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+          controller.close();
+        },
+      });
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+        status: 200,
+        body: stream,
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    it('streams the upstream body through untouched, as text/event-stream', async () => {
+      stubAiBrainStream(['data: {"type":"round_started"}\n\n']);
+
+      const resp = await call('api/feed');
+
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get('content-type')).toBe('text/event-stream');
+      expect(resp.headers.get('cache-control')).toBe('no-store');
+      const reader = resp.body!.getReader();
+      const { value } = await reader.read();
+      expect(new TextDecoder().decode(value)).toBe('data: {"type":"round_started"}\n\n');
+    });
+
+    it('does not set the 10s JSON-route timeout on the upstream fetch', async () => {
+      const fetchMock = stubAiBrainStream([]);
+
+      await call('api/feed');
+
+      const [, init] = fetchMock.mock.calls[0];
+      expect(init?.signal).toBeUndefined();
+    });
+
+    it('reports 502 without a body if the upstream stream has none', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ status: 200, body: null })));
+
+      const resp = await call('api/feed');
+
+      expect(resp.status).toBe(502);
+      expect(await resp.json()).toEqual({ error: 'ai-brain returned no stream body' });
+    });
+
+    it('reports 502 when ai-brain is unreachable', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const resp = await call('api/feed');
+
+      expect(resp.status).toBe(502);
+      expect(await resp.json()).toEqual({ error: 'ai-brain unavailable' });
+    });
+  });
 });
