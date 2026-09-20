@@ -3,7 +3,7 @@
 # Build a Caddy binary with the MaxMind-format geolocation matcher compiled in,
 # so /etc/caddy/Caddyfile can gate {$HA_DOMAIN} by country.
 FROM caddy:2-builder-alpine AS builder
-RUN xcaddy build --with github.com/porech/caddy-maxmind-geolocation
+RUN xcaddy build --with github.com/porech/caddy-maxmind-geolocation@v1.0.3
 
 # DB-IP's Country Lite database is CC-BY 4.0 (no account/license key needed,
 # unlike MaxMind's own GeoLite2 downloads) and ships in the same .mmdb format
