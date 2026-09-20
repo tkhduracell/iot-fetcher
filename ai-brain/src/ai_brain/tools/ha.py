@@ -20,7 +20,10 @@ Assist's own tool surface, on this transport or the last one -- so
 The result is one block of text HA formats itself, mixing our own domain/area
 vocabulary with things a human typed -- a media title, a device name -- so
 the whole block is fenced before the model reads it, the same call
-``ha_error_log`` makes for its own free-text log lines.
+``ha_error_log`` makes for its own free-text log lines. ``GetLiveContext``
+itself has no size limit, so an unfiltered call is capped here at
+``MAX_CONTEXT_ENTITIES`` with a ``truncated`` flag, the same discipline
+``ha_error_log`` and ``vm_query`` already apply to their own results.
 """
 
 from __future__ import annotations
@@ -40,6 +43,15 @@ SOURCE = "home-assistant"
 CONTEXT_TOOL = "homeassistant__GetLiveContext"
 MCP_TIMEOUT_S = 20
 
+# GetLiveContext has no cap of its own -- an unfiltered call against a house
+# with a few hundred exposed entities is free to return all of them in one
+# blob, and unlike the old ha_state (MAX_ENTITIES + a truncated flag) nothing
+# told the model whether it was looking at everything or a fraction of it.
+# The context is one ``- names: ...`` block per entity, so that is the unit
+# this caps on, same reasoning as vm_query capping series rather than points.
+MAX_CONTEXT_ENTITIES = 50
+ENTITY_MARKER = "\n- names:"
+
 # ``/api/error_log`` is the whole log file, which on a box that has been up for
 # weeks is megabytes. Only the tail is worth reading, and this is how much of
 # it the process will hold to find it.
@@ -51,6 +63,21 @@ MAX_LOG_CONTEXT = 10
 # What grep prints between two non-adjacent hunks, and for the same reason: a
 # reader must be able to tell "the next line" from "somewhere further down".
 CONTEXT_GAP = "--"
+
+
+def _cap_entities(text: str, limit: int) -> tuple[str, bool]:
+    """Keep the first ``limit`` entity blocks of a GetLiveContext blob.
+
+    Splitting on the marker rather than counting bytes means a cut always
+    lands between two whole entities -- never mid-block, which would hand the
+    model a light with a domain but no state and no way to tell that was the
+    reason.
+    """
+    parts = text.split(ENTITY_MARKER)
+    if len(parts) - 1 <= limit:
+        return text, False
+    kept = parts[0] + ENTITY_MARKER + ENTITY_MARKER.join(parts[1 : limit + 1])
+    return kept, True
 
 
 async def _ha_context(ctx: ToolContext, args: dict) -> str:
@@ -87,7 +114,8 @@ async def _ha_context(ctx: ToolContext, args: dict) -> str:
         return err(f"ha_context: {text or 'HA MCP tool returned an error'}")
 
     text = "\n".join(_unwrap(c.text) for c in result.content if hasattr(c, "text"))
-    return ok({"context": wrap_external(SOURCE, text)})
+    text, truncated = _cap_entities(text, MAX_CONTEXT_ENTITIES)
+    return ok({"context": wrap_external(SOURCE, text), "truncated": truncated})
 
 
 def _unwrap(text: str) -> str:
@@ -200,7 +228,8 @@ def register_ha_tools(registry: ToolRegistry) -> None:
                     "house at once, or narrow with 'name' (matches entity or alias, "
                     "case-insensitive), 'domain' (e.g. 'light', 'climate', 'sensor' -- a "
                     "string or a list) and/or 'area'. Prefer filtering by domain when you want "
-                    "every device of one kind."
+                    "every device of one kind. Capped at 50 entities; if 'truncated' comes back "
+                    "true, narrow the query rather than trust it as the whole house."
                 ),
                 parameters={
                     "type": "object",

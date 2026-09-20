@@ -554,6 +554,34 @@ async def test_ha_context_returns_the_fenced_snapshot(registry, ctx, monkeypatch
         '<external source="home-assistant">Live Context: ...\n'
         "- names: Kitchen Ceiling\n  domain: light\n  state: 'on'\n</external>"
     )
+    assert out["truncated"] is False
+
+
+def _entities(n):
+    return "".join(
+        f"- names: e{i}\n  domain: sensor\n  state: '{i}'\n" for i in range(n)
+    )
+
+
+async def test_ha_context_caps_at_50_entities(registry, ctx, monkeypatch):
+    mock_ha_mcp(monkeypatch, context_text=f"Live Context: ...\n{_entities(60)}")
+    out = await call(registry, ctx, "ha_context")
+
+    assert out["context"].count("- names:") == 50
+    assert out["truncated"] is True
+    # The cut lands on an entity boundary -- the 50th entity is whole, not a
+    # domain with no state.
+    assert out["context"].endswith(
+        "- names: e49\n  domain: sensor\n  state: '49'</external>"
+    )
+
+
+async def test_ha_context_under_the_cap_is_not_truncated(registry, ctx, monkeypatch):
+    mock_ha_mcp(monkeypatch, context_text=f"Live Context: ...\n{_entities(50)}")
+    out = await call(registry, ctx, "ha_context")
+
+    assert out["context"].count("- names:") == 50
+    assert out["truncated"] is False
 
 
 async def test_ha_context_passes_filters_through(registry, ctx, monkeypatch):
