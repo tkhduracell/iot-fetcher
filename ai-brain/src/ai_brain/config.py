@@ -60,6 +60,7 @@ class Settings:
     ha_url: str
     ha_token: str
     ha_todo_list: str
+    docker_proxy_url: str
     gdrive_rag_url: str
     sonos_url: str
     sonos_room: str
@@ -136,6 +137,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         ha_url=get("HA_URL", "http://192.168.68.87:8123"),
         ha_token=get("HA_TOKEN"),
         ha_todo_list=get("HA_TODO_LIST", "todo.shopping_list"),
+        docker_proxy_url=get("DOCKER_PROXY_URL", "http://docker-proxy:2375"),
         gdrive_rag_url=get("GDRIVE_RAG_URL", "http://gdrive-rag:8090"),
         sonos_url=get("SONOS_URL", "http://sonos-http-api:5005"),
         sonos_room=get("SONOS_ROOM", "Kitchen"),

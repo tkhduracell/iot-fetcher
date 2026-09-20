@@ -12,7 +12,10 @@ argue its way past:
   the only honest way to prove a speaker was never dialled.
 * **Allowlists.** ``ha_service`` is the one executor whose target is named by
   the model rather than by configuration, so both the service and the data
-  keys it may carry are checked against a fixed set first.
+  keys it may carry are checked against a fixed set first. ``docker_restart``
+  is not allowlisted the same way: its whole target space is "a container
+  name", plainly visible in the Slack message a human approves, unlike
+  ``ha_service``'s combination of service + entity + arbitrary data.
 
 Executors are deliberately dumb: no retries, no queueing, no state. A failure
 raises, and ``Approvals`` is what decides that a raised exception means a
@@ -147,6 +150,16 @@ class Executors:
         _raise_for_status(response, "ha_service")
         return f"called {service} on {entity_id}"
 
+    async def docker_restart(self, container: str) -> str:
+        if self.settings.dry_run:
+            log.info("[dry-run] docker_restart %s", container)
+            return "dry-run"
+        base = self.settings.docker_proxy_url.rstrip("/")
+        url = f"{base}/containers/{container}/restart"
+        response = await self.http.post(url, timeout=TIMEOUT_S)
+        _raise_for_status(response, "docker_restart")
+        return f"restarted {container}"
+
     async def run(self, kind: str, payload: dict) -> str:
         if kind == "sonos_say":
             return await self.sonos_say(_require(payload, "text", kind))
@@ -161,6 +174,8 @@ class Executors:
                 _require(payload, "entity_id", kind),
                 data,
             )
+        if kind == "docker_restart":
+            return await self.docker_restart(_require(payload, "container", kind))
         raise ValueError(f"unknown kind: {kind}")
 
 

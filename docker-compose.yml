@@ -133,6 +133,33 @@ services:
       - gdrive-rag
       - sonos-http-api
       - ollama
+      - docker-proxy
+    labels:
+      - "wud.watch=true"
+      - "wud.watch.digest=true"
+
+  # Read-only-ish view of the Docker API for ai-brain's docker_ps/docker_top/
+  # docker_logs tools, so ai-brain itself never mounts docker.sock. Only
+  # CONTAINERS/LOGS/TOP/RESTARTS are granted -- ARCHIVE and EXPORT stay off,
+  # since those two let a caller pull a container's whole filesystem rather
+  # than just its state, and nothing here needs that. RESTARTS works even
+  # though POST=0, and is only ever reached through a human-approved
+  # docker_restart proposal (see ai_brain.approvals), never called directly.
+  docker-proxy:
+    image: lscr.io/linuxserver/socket-proxy:latest
+    hostname: docker-proxy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /run
+    environment:
+      - CONTAINERS=1
+      - ALLOW_LOGS=1
+      - ALLOW_TOP=1
+      - ALLOW_RESTARTS=1
+      - POST=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"

@@ -14,6 +14,7 @@ ENV = {
     "HA_URL": "http://ha:8123",
     "HA_TOKEN": "ha-token",
     "HA_TODO_LIST": "todo.shopping_list",
+    "DOCKER_PROXY_URL": "http://docker-proxy:2375",
 }
 
 # 10:00 Stockholm (CEST, UTC+2) -- well outside quiet hours.
@@ -65,7 +66,10 @@ def test_quiet_hours_converts_to_the_local_zone():
 
 def test_quiet_hours_honours_an_explicit_zone():
     # The same instant is 21:00 in London, which is not quiet.
-    assert in_quiet_hours(datetime(2026, 9, 6, 21, 0, tzinfo=timezone.utc), tz="UTC") is False
+    assert (
+        in_quiet_hours(datetime(2026, 9, 6, 21, 0, tzinfo=timezone.utc), tz="UTC")
+        is False
+    )
 
 
 # --- sonos_say ------------------------------------------------------------
@@ -92,7 +96,9 @@ async def test_sonos_say_quotes_the_room_and_text(settings, http):
 
 @respx.mock
 async def test_sonos_say_raises_on_a_non_2xx(settings, http):
-    respx.get(url__startswith="http://sonos:5005/").mock(return_value=httpx.Response(503))
+    respx.get(url__startswith="http://sonos:5005/").mock(
+        return_value=httpx.Response(503)
+    )
     with pytest.raises(RuntimeError, match="503"):
         await make_executors(settings, http).sonos_say("hi")
 
@@ -198,7 +204,9 @@ async def test_ha_service_calls_the_domain_endpoint(settings, http):
     route = respx.post("http://ha:8123/api/services/light/turn_off").mock(
         return_value=httpx.Response(200, json=[])
     )
-    result = await make_executors(settings, http).ha_service("light.turn_off", "light.kitchen")
+    result = await make_executors(settings, http).ha_service(
+        "light.turn_off", "light.kitchen"
+    )
 
     assert route.called
     assert json.loads(route.calls[0].request.content) == {"entity_id": "light.kitchen"}
@@ -240,9 +248,9 @@ async def test_ha_service_refuses_unknown_data_keys(settings, http):
 @respx.mock
 async def test_ha_service_is_silent_in_dry_run(http):
     settings = load_settings({**ENV, "DRY_RUN": "1"})
-    assert await make_executors(settings, http).ha_service("light.turn_off", "light.kitchen") == (
-        "dry-run"
-    )
+    assert await make_executors(settings, http).ha_service(
+        "light.turn_off", "light.kitchen"
+    ) == ("dry-run")
     assert not respx.calls
 
 
@@ -261,5 +269,55 @@ async def test_run_rejects_non_object_ha_service_data(settings, http):
     with pytest.raises(ValueError, match="must be an object"):
         await make_executors(settings, http).run(
             "ha_service",
-            {"service": "light.turn_on", "entity_id": "light.kitchen", "data": "bright"},
+            {
+                "service": "light.turn_on",
+                "entity_id": "light.kitchen",
+                "data": "bright",
+            },
         )
+
+
+# -- docker_restart ----------------------------------------------------------
+
+
+@respx.mock
+async def test_docker_restart_posts_to_the_proxy(settings, http):
+    route = respx.post("http://docker-proxy:2375/containers/iot-fetcher/restart").mock(
+        return_value=httpx.Response(204)
+    )
+    result = await make_executors(settings, http).docker_restart("iot-fetcher")
+
+    assert route.called
+    assert result == "restarted iot-fetcher"
+
+
+@respx.mock
+async def test_docker_restart_raises_on_a_non_2xx(settings, http):
+    respx.post("http://docker-proxy:2375/containers/missing/restart").mock(
+        return_value=httpx.Response(404)
+    )
+    with pytest.raises(RuntimeError, match="404"):
+        await make_executors(settings, http).docker_restart("missing")
+
+
+@respx.mock
+async def test_docker_restart_is_silent_in_dry_run(http, caplog):
+    settings = load_settings({**ENV, "DRY_RUN": "1"})
+    with caplog.at_level("INFO"):
+        result = await make_executors(settings, http).docker_restart("iot-fetcher")
+    assert result == "dry-run"
+    assert not respx.calls
+    assert "[dry-run] docker_restart" in caplog.text
+
+
+@respx.mock
+async def test_run_dispatches_docker_restart(settings, http):
+    route = respx.post("http://docker-proxy:2375/containers/ollama/restart").mock(
+        return_value=httpx.Response(204)
+    )
+    result = await make_executors(settings, http).run(
+        "docker_restart", {"container": "ollama"}
+    )
+
+    assert route.called
+    assert result == "restarted ollama"

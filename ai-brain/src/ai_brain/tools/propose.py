@@ -93,11 +93,13 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                     "waiting on a human, and asking again just duplicates the Slack message; a "
                     "recently rejected one probably should not be re-asked either. "
                     "Kinds: sonos_say (payload {\"text\": ...}, speaks aloud, refused between "
-                    "22:00 and 07:00), ha_todo_add (payload {\"item\": ...}) and ha_service "
+                    "22:00 and 07:00), ha_todo_add (payload {\"item\": ...}), ha_service "
                     "(payload {\"service\": \"light.turn_off\", \"entity_id\": \"light.kitchen\", "
                     "optional \"data\": {\"brightness_pct\": 40}}) for lights, switches, scenes, "
                     "scripts, covers, fans, climate and media players -- look the entity up with "
-                    "ha_state first, and expect anything outside that allowlist to be refused."
+                    "ha_context first, and expect anything outside that allowlist to be refused -- "
+                    "and docker_restart (payload {\"container\": \"iot-fetcher\"}) for a container "
+                    "that is crash-looping or stuck, found with docker_ps first."
                 ),
                 parameters={
                     "type": "object",
