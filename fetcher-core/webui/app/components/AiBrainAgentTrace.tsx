@@ -69,7 +69,7 @@ const ArgLine: React.FC<{ name: string; value: string }> = ({ name, value }) => 
   );
 };
 
-const CallView: React.FC<{ call: ToolCall }> = ({ call }) => (
+export const CallView: React.FC<{ call: ToolCall }> = ({ call }) => (
   <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.amber}` }}>
     <div className="text-[12px] break-words" style={{ fontFamily: MONO, color: WALL.amber }}>
       → {call.name}
@@ -80,7 +80,7 @@ const CallView: React.FC<{ call: ToolCall }> = ({ call }) => (
   </div>
 );
 
-const ResultView: React.FC<{ result: ToolResult }> = ({ result }) => (
+export const ResultView: React.FC<{ result: ToolResult }> = ({ result }) => (
   <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.sage}` }}>
     <div className="text-[12px] break-words" style={{ fontFamily: MONO, color: WALL.sage }}>
       ← {result.name}
