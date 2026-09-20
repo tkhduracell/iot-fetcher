@@ -88,6 +88,11 @@ REJECT_EMOJI = "x"
 EXPIRE_AFTER = timedelta(hours=24)
 NOTE_SENDER = "approvals"
 
+# Action ids read back off a button click; the proposal id rides in the
+# value, not the action id, so one pair of ids covers every proposal.
+APPROVE_ACTION = "approval_approve"
+REJECT_ACTION = "approval_reject"
+
 
 @dataclass
 class Proposal:
@@ -108,7 +113,7 @@ class Approvals:
         brain: MemoryDir,
         executors: Executors,
         clock: Callable[[], datetime],
-        on_message: Callable[[str, str], Awaitable[str]] | None = None,
+        on_message: Callable[[str, str, list[dict] | None], Awaitable[str]] | None = None,
     ) -> None:
         self.brain = brain
         self.executors = executors
@@ -165,7 +170,8 @@ class Approvals:
                 topic,
                 f"Proposal {proposal.id} ({kind}): {reason}\n\n"
                 f"```{json.dumps(payload)}```\n"
-                "React ✅ to approve, ❌ to reject.",
+                "React ✅ to approve, ❌ to reject, or use the buttons below.",
+                _approval_blocks(proposal.id),
             )
         except Exception as exc:
             # Anything the poster raises -- the hourly cap, a transport error,
@@ -188,6 +194,19 @@ class Approvals:
         return proposal
 
     # -- reacting ------------------------------------------------------
+
+    async def on_button(self, slack_ts: str, action: str) -> Proposal | None:
+        """A button click, translated into the same path a reaction takes.
+
+        Buttons and reactions both resolve to one of two outcomes, so this is
+        a thin adapter onto ``on_reaction`` rather than a second copy of its
+        locking and expiry logic -- there is exactly one place that decides
+        whether a proposal runs.
+        """
+        emoji = {APPROVE_ACTION: APPROVE_EMOJI, REJECT_ACTION: REJECT_EMOJI}.get(action)
+        if emoji is None:
+            return None
+        return await self.on_reaction(slack_ts, emoji)
 
     async def on_reaction(self, slack_ts: str, emoji: str) -> Proposal | None:
         if emoji not in (APPROVE_EMOJI, REJECT_EMOJI):
@@ -315,6 +334,37 @@ class Approvals:
         self._locks.pop(proposal.id, None)
         self.brain.drop_note(NOTE_SENDER, f"proposal {proposal.id} {status}: {result}")
         return proposal
+
+
+def _approval_blocks(proposal_id: str) -> list[dict]:
+    """Block Kit actions block for a proposal's message.
+
+    ``value`` carries the proposal id rather than the action id, because the
+    id is per-message but the two actions (``APPROVE_ACTION``/
+    ``REJECT_ACTION``) are shared across every proposal ever posted -- Slack
+    echoes both the clicked action's id and its value back on ``block_actions``.
+    """
+    return [
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✅ Approve"},
+                    "style": "primary",
+                    "action_id": APPROVE_ACTION,
+                    "value": proposal_id,
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "❌ Reject"},
+                    "style": "danger",
+                    "action_id": REJECT_ACTION,
+                    "value": proposal_id,
+                },
+            ],
+        }
+    ]
 
 
 def _iso(dt: datetime) -> str:
