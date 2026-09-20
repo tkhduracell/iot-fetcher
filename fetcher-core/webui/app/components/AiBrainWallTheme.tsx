@@ -76,12 +76,21 @@ export function toneColor(tone: Tone): string {
  *
  *  Returns seconds since the epoch, as ai-brain would report them. */
 export function useServerClock(serverNow: number | null | undefined): number {
-  const [now, setNow] = useState(() => Date.now() / 1000);
+  // 0 until mounted, deliberately. Seeding from Date.now() renders a clock and
+  // a page full of ages into the server HTML, and the client re-renders them a
+  // moment later with different text -- a hydration mismatch (React #418) on
+  // every screen. Callers treat 0 as "no clock yet" and render a placeholder.
+  const [now, setNow] = useState(0);
   // A ref so a new offset does not restart the interval below.
   const offsetRef = useRef(0);
 
   useEffect(() => {
-    if (typeof serverNow !== 'number' || !Number.isFinite(serverNow)) return;
+    if (typeof serverNow !== 'number' || !Number.isFinite(serverNow)) {
+      // Still start the clock: an age is better than nothing while the first
+      // poll is in flight, and the offset corrects it as soon as it lands.
+      setNow((current) => current || Date.now() / 1000);
+      return;
+    }
     offsetRef.current = serverNow - Date.now() / 1000;
     setNow(Date.now() / 1000 + offsetRef.current);
   }, [serverNow]);
@@ -116,7 +125,9 @@ export const Age: React.FC<{
   suffix?: React.ReactNode;
   className?: string;
 }> = ({ at, now, suffix, className = '' }) => {
-  if (at === null || at === undefined || !Number.isFinite(at)) {
+  // now === 0 is the pre-mount clock (see useServerClock): an age computed
+  // against it would read as decades, so the timestamp waits one tick.
+  if (at === null || at === undefined || !Number.isFinite(at) || !now) {
     if (!suffix) return null;
     return (
       <span className={`text-[12px] ${className}`} style={{ fontFamily: MONO, color: WALL.inkFaint }}>
