@@ -167,6 +167,15 @@ async def test_two_tool_rounds_then_end_cycle(make_loop, brain_dir):
     assert loop.cycle_counts["ok"] == 1
 
 
+async def test_the_chain_call_is_logged_against_this_loops_name(make_loop, brain_dir, caplog):
+    loop, _ = make_loop([reply("all quiet", call("end_cycle", next_wake_minutes=30))])
+
+    with caplog.at_level("INFO", logger="ai_brain.llm"):
+        await loop.run_cycle()
+
+    assert "brain: fake:1 answered (in=10 out=5 tokens)" in caplog.text
+
+
 async def test_system_and_user_messages_frame_the_cycle(make_loop, brain_dir):
     brain_dir.write_fact("pool", "the pool is a hole with water in it")
     loop, provider = make_loop(
