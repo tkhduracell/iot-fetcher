@@ -32,10 +32,12 @@ class FakeExecutors:
 class FakeSlack:
     def __init__(self) -> None:
         self.posts: list[tuple[str, str]] = []
+        self.blocks: list[list[dict] | None] = []
         self.next_ts = 0
 
-    async def __call__(self, topic: str, text: str) -> str:
+    async def __call__(self, topic: str, text: str, blocks: list[dict] | None = None) -> str:
         self.posts.append((topic, text))
+        self.blocks.append(blocks)
         self.next_ts += 1
         return f"ts-{self.next_ts}"
 
@@ -142,6 +144,17 @@ async def test_propose_posts_to_slack_and_keeps_the_ts(approvals, slack):
     assert "React" in text
 
 
+async def test_propose_posts_approve_and_reject_buttons(approvals, slack):
+    from ai_brain.approvals import APPROVE_ACTION, REJECT_ACTION
+
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "user asked", "#home")
+
+    [actions_block] = slack.blocks[0]
+    assert actions_block["type"] == "actions"
+    buttons = {b["action_id"]: b["value"] for b in actions_block["elements"]}
+    assert buttons == {APPROVE_ACTION: p.id, REJECT_ACTION: p.id}
+
+
 async def test_propose_without_slack_is_failed_not_pending(brain_dir, executors, moving_clock):
     """No Slack means no ✅ to press, so nothing may be left waiting for one."""
     approvals = Approvals(brain_dir, executors, moving_clock)
@@ -161,7 +174,7 @@ async def test_propose_without_slack_is_failed_not_pending(brain_dir, executors,
 async def test_propose_reports_a_raising_poster_as_failed(brain_dir, executors, moving_clock):
     """The hourly cap raises out of post(); that is a failed proposal, not a pending one."""
 
-    async def capped(topic: str, text: str) -> str:
+    async def capped(topic: str, text: str, blocks: list[dict] | None = None) -> str:
         raise RuntimeError("slack post cap reached (20/h); try again next cycle")
 
     approvals = Approvals(brain_dir, executors, moving_clock, on_message=capped)
@@ -178,7 +191,7 @@ async def test_propose_reports_a_raising_poster_as_failed(brain_dir, executors, 
 async def test_a_capped_post_makes_the_propose_tool_return_an_error(
     brain_dir, executors, moving_clock
 ):
-    async def capped(topic: str, text: str) -> str:
+    async def capped(topic: str, text: str, blocks: list[dict] | None = None) -> str:
         raise RuntimeError("slack post cap reached (20/h)")
 
     approvals = Approvals(brain_dir, executors, moving_clock, on_message=capped)
@@ -227,6 +240,33 @@ async def test_pending_reads_from_disk(brain_dir, executors, moving_clock, slack
     await writer.propose("ha_todo_add", {"item": "milk"}, "why", "#home")
     reader = Approvals(brain_dir, executors, moving_clock)
     assert [p.kind for p in reader.pending()] == ["ha_todo_add"]
+
+
+# --- buttons ----------------------------------------------------------
+
+
+async def test_approve_button_executes_same_as_check_mark(approvals, executors, brain_dir):
+    from ai_brain.approvals import APPROVE_ACTION
+
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    done = await approvals.on_button(p.slack_ts, APPROVE_ACTION)
+    assert (done.status, done.result) == ("executed", "queued")
+    assert executors.calls == [("sonos_say", {"text": "hi"})]
+
+
+async def test_reject_button_rejects_without_executing(approvals, executors):
+    from ai_brain.approvals import REJECT_ACTION
+
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    done = await approvals.on_button(p.slack_ts, REJECT_ACTION)
+    assert done.status == "rejected"
+    assert executors.calls == []
+
+
+async def test_an_unknown_action_id_is_ignored(approvals):
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    assert await approvals.on_button(p.slack_ts, "some_other_action") is None
+    assert approvals.pending() != []
 
 
 # --- approve --------------------------------------------------------------
@@ -300,7 +340,7 @@ async def test_a_post_that_returns_nothing_is_not_left_pending(
 ):
     """A client that posted nothing leaves no message to react to."""
 
-    async def posts_nothing(topic: str, text: str) -> str | None:
+    async def posts_nothing(topic: str, text: str, blocks: list[dict] | None = None) -> str | None:
         return None
 
     approvals = Approvals(brain_dir, executors, moving_clock, on_message=posts_nothing)
@@ -322,7 +362,7 @@ async def test_a_queued_post_is_recorded_failed_not_pending(
     matches nothing and the proposal silently expires after 24h.
     """
 
-    async def queues(topic: str, text: str) -> str:
+    async def queues(topic: str, text: str, blocks: list[dict] | None = None) -> str:
         return "queued"
 
     approvals = Approvals(brain_dir, executors, moving_clock, on_message=queues)
@@ -346,7 +386,7 @@ async def test_a_queued_post_makes_the_propose_tool_return_an_error(
 ):
     """The model must see err(...) so it can simply propose again later."""
 
-    async def queues(topic: str, text: str) -> str:
+    async def queues(topic: str, text: str, blocks: list[dict] | None = None) -> str:
         return "queued"
 
     approvals = Approvals(brain_dir, executors, moving_clock, on_message=queues)

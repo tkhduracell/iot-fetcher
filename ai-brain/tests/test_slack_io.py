@@ -264,10 +264,15 @@ async def test_flush_queue_discards_a_corrupt_file(out, brain_dir):
 class FakeApprovals:
     def __init__(self, resolves: object = None) -> None:
         self.reactions: list[tuple[str, str]] = []
+        self.buttons: list[tuple[str, str]] = []
         self.resolves = resolves
 
     async def on_reaction(self, slack_ts: str, emoji: str):
         self.reactions.append((slack_ts, emoji))
+        return self.resolves
+
+    async def on_button(self, slack_ts: str, action: str):
+        self.buttons.append((slack_ts, action))
         return self.resolves
 
 
@@ -276,11 +281,19 @@ class FakeApp:
 
     def __init__(self) -> None:
         self.handlers: dict[str, object] = {}
+        self.actions: dict[str, object] = {}
         self.client = FakeClient()
 
     def event(self, name: str):
         def _decorate(fn):
             self.handlers[name] = fn
+            return fn
+
+        return _decorate
+
+    def action(self, action_id: str):
+        def _decorate(fn):
+            self.actions[action_id] = fn
             return fn
 
         return _decorate
@@ -419,6 +432,63 @@ async def test_a_reaction_from_anyone_else_is_ignored(slack_in, app, approvals):
     assert approvals.reactions == []
 
 
+async def test_an_approve_button_click_is_routed_to_approvals(slack_in, app, approvals):
+    from ai_brain.approvals import APPROVE_ACTION
+
+    assert APPROVE_ACTION in app.actions
+
+    await app.actions[APPROVE_ACTION](
+        {
+            "user": {"id": USER},
+            "actions": [{"action_id": APPROVE_ACTION, "value": "some-proposal-id"}],
+            "message": {"ts": "7.7"},
+        },
+        _ack,
+    )
+
+    assert approvals.buttons == [("7.7", APPROVE_ACTION)]
+
+
+async def test_a_reject_button_click_is_routed_to_approvals(slack_in, app, approvals):
+    from ai_brain.approvals import REJECT_ACTION
+
+    await app.actions[REJECT_ACTION](
+        {
+            "user": {"id": USER},
+            "actions": [{"action_id": REJECT_ACTION, "value": "some-proposal-id"}],
+            "message": {"ts": "7.7"},
+        },
+        _ack,
+    )
+
+    assert approvals.buttons == [("7.7", REJECT_ACTION)]
+
+
+async def test_a_button_click_from_anyone_else_is_ignored(slack_in, app, approvals):
+    from ai_brain.approvals import APPROVE_ACTION
+
+    await app.actions[APPROVE_ACTION](
+        {
+            "user": {"id": "U-stranger"},
+            "actions": [{"action_id": APPROVE_ACTION, "value": "some-proposal-id"}],
+            "message": {"ts": "7.7"},
+        },
+        _ack,
+    )
+
+    assert approvals.buttons == []
+
+
+async def test_a_button_payload_with_no_actions_is_ignored(slack_in, app, approvals):
+    from ai_brain.approvals import APPROVE_ACTION
+
+    await app.actions[APPROVE_ACTION](
+        {"user": {"id": USER}, "actions": [], "message": {"ts": "7.7"}}, _ack
+    )
+
+    assert approvals.buttons == []
+
+
 async def test_stopping_a_session_tells_the_brain(slack_in, app, out, brain_dir, woken):
     await out.post("pool", "the pool is cold")
 
@@ -504,6 +574,10 @@ async def test_start_slack_wires_posting_into_approvals(
         "assistant_thread_started",
         "assistant_thread_context_changed",
     }
+    # Approve/reject buttons are registered as actions, not events.
+    from ai_brain.approvals import APPROVE_ACTION, REJECT_ACTION
+
+    assert set(built["handler"][0].actions) == {APPROVE_ACTION, REJECT_ACTION}
 
 
 # -- tools -------------------------------------------------------------

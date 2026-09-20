@@ -110,7 +110,7 @@ class SlackOut:
 
     # -- posting -------------------------------------------------------
 
-    async def post(self, topic: str, text: str) -> str:
+    async def post(self, topic: str, text: str, blocks: list[dict] | None = None) -> str:
         """Post ``text`` under ``topic``. Returns the ts, or ``"queued"``.
 
         The cap is *checked* before the send and *charged* after it succeeds.
@@ -118,14 +118,18 @@ class SlackOut:
         posts that only reached the retry queue, and the flush that finally
         delivers them is then refused for being over cap -- the outage would
         silence the brain for an hour after Slack came back.
+
+        ``blocks`` is Block Kit content (e.g. approval buttons); ``text`` is
+        still sent as the fallback string Slack shows in notifications and to
+        clients that do not render blocks.
         """
         self._check_cap()
-        ts = await self._send(topic, text)
+        ts = await self._send(topic, text, blocks)
         if ts != "queued":
             self._charge_rate()
         return ts
 
-    async def _send(self, topic: str, text: str) -> str:
+    async def _send(self, topic: str, text: str, blocks: list[dict] | None = None) -> str:
         """Post without touching the rate cap. Returns the ts, or ``"queued"``.
 
         Every topic other than ``chat`` gets its own thread, always -- even
@@ -147,15 +151,13 @@ class SlackOut:
             # is not always in the DM we would open ourselves.
             channel = str((session or {}).get("channel") or "") or await self._open_dm()
             thread_ts = session["thread_ts"] if session else None
-            response = await self._retry(
-                self.client.chat_postMessage,
-                channel=channel,
-                text=text,
-                thread_ts=thread_ts,
-            )
+            kwargs = {"channel": channel, "text": text, "thread_ts": thread_ts}
+            if blocks is not None:
+                kwargs["blocks"] = blocks
+            response = await self._retry(self.client.chat_postMessage, **kwargs)
         except Exception:
             log.warning("[slack] post to %s failed, queueing", topic, exc_info=True)
-            self._enqueue(topic, text)
+            self._enqueue(topic, text, blocks)
             return "queued"
 
         ts = str(response["ts"])
@@ -184,6 +186,7 @@ class SlackOut:
             try:
                 item = json.loads(path.read_text(encoding="utf-8"))
                 topic, text = str(item["topic"]), str(item["text"])
+                blocks = item.get("blocks")
             except (ValueError, KeyError, TypeError):
                 log.warning("[slack] discarding unreadable queued post %s", path.name)
                 path.unlink()
@@ -197,7 +200,7 @@ class SlackOut:
                 log.info("[slack] rate cap reached while flushing, %s left queued", path.name)
                 break
 
-            if await self._send(topic, text) == "queued":
+            if await self._send(topic, text, blocks) == "queued":
                 # ``_send`` wrote a fresh copy on its way out; drop that and
                 # keep the original, which still holds this message's place.
                 self._drop_newest_queued()
@@ -276,7 +279,7 @@ class SlackOut:
                 await self.sleep(backoff)
         raise last  # type: ignore[misc]
 
-    def _enqueue(self, topic: str, text: str) -> None:
+    def _enqueue(self, topic: str, text: str, blocks: list[dict] | None = None) -> None:
         """Write one queued post under a name that cannot collide.
 
         The clock alone is not unique: it can be frozen or coarse, and two posts
@@ -292,7 +295,10 @@ class SlackOut:
             if not path.exists():
                 break
             counter += 1
-        _atomic_write(path, json.dumps({"topic": topic, "text": text}))
+        item: dict = {"topic": topic, "text": text}
+        if blocks is not None:
+            item["blocks"] = blocks
+        _atomic_write(path, json.dumps(item))
 
     def _drop_newest_queued(self) -> None:
         """Remove the copy ``_send`` just enqueued, keeping the original."""
@@ -345,8 +351,14 @@ class SlackIn:
         self.user_id = user_id
 
     def register(self) -> None:
+        # Deferred: ``approvals`` imports ``CHAT_TOPIC`` from this module, so a
+        # top-level import back here would be circular.
+        from ai_brain.approvals import APPROVE_ACTION, REJECT_ACTION
+
         self.app.event("message")(self.on_message)
         self.app.event("reaction_added")(self.on_reaction)
+        self.app.action(APPROVE_ACTION)(self.on_button)
+        self.app.action(REJECT_ACTION)(self.on_button)
         self.app.event("agent_session_stopped")(self.on_session_stopped)
         # Subscribed to because Slack sends them; handled only so Bolt stops
         # logging "unhandled request" for events we deliberately ignore.
@@ -418,6 +430,29 @@ class SlackIn:
         # A reaction resolves a proposal and drops a note about it. Without a
         # wake the brain reads that note whenever its heartbeat next comes
         # round -- up to half an hour after Filip approved something.
+        if proposal is not None:
+            self.wake("brain")
+
+    async def on_button(self, body: dict, ack: Ack = None) -> None:
+        """An Approve/Reject button click.
+
+        Bolt hands ``action`` handlers the whole interaction payload, not an
+        ``event`` -- the clicked button (and its ``value``, the proposal id)
+        is under ``actions[0]``, the user under ``user``, and the message it
+        lives in under ``message`` (``ts`` there is the same id a reaction on
+        this message would report). ``approvals.on_button`` is keyed on that
+        message ts exactly like ``on_reaction`` is; the button's ``value`` is
+        not used for lookup, only Slack's own record of who clicked and where.
+        """
+        await _ack(ack)
+        if body.get("user", {}).get("id") != self.user_id:
+            return
+        actions = body.get("actions") or []
+        if not actions:
+            return
+        action_id = str(actions[0].get("action_id", ""))
+        message_ts = str(body.get("message", {}).get("ts", ""))
+        proposal = await self.approvals.on_button(message_ts, action_id)
         if proposal is not None:
             self.wake("brain")
 
