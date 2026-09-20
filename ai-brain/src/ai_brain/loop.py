@@ -350,6 +350,7 @@ class AgentLoop:
                         self.registry.specs_for(self.name),
                         self.max_tokens,
                         self.priority,
+                        agent=self.name,
                     ),
                     timeout=self.chain_timeout_s,
                 )

@@ -396,6 +396,7 @@ export const SlackMirrorButtons: React.FC<{ compact?: boolean }> = ({ compact = 
  *  itself current without re-declaring the map. */
 export const WALL_NAV: { href: string; label: string }[] = [
   { href: '/ai-brain', label: 'Väggen' },
+  { href: '/ai-brain/feed', label: 'Flöde' },
   { href: '/ai-brain/knowledge', label: 'Kunskap' },
   { href: '/ai-brain/loops', label: 'Slingor' },
   { href: '/ai-brain/charter', label: 'Charter' },

@@ -58,6 +58,29 @@ async def test_first_provider_answers_and_is_recorded(tmp_path):
     assert ledger.snapshot()["buckets"]["a"]["requests_day"] == 1
 
 
+async def test_the_answered_log_line_names_the_calling_agent(tmp_path, caplog):
+    ledger, _ = make_ledger(tmp_path, ["a"])
+    a = FakeProvider("a", [reply("from-a", prompt=100, completion=20)])
+    chain = ProviderChain([a], ledger)
+
+    with caplog.at_level("INFO", logger="ai_brain.llm"):
+        await chain.complete(MSGS, [], 512, "brain", agent="energy")
+
+    assert "energy: a answered (in=100 out=20 tokens)" in caplog.text
+
+
+async def test_the_answered_log_line_has_no_agent_prefix_when_unset(tmp_path, caplog):
+    ledger, _ = make_ledger(tmp_path, ["a"])
+    a = FakeProvider("a", [reply("from-a", prompt=100, completion=20)])
+    chain = ProviderChain([a], ledger)
+
+    with caplog.at_level("INFO", logger="ai_brain.llm"):
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert "a answered (in=100 out=20 tokens)" in caplog.text
+    assert ": a answered" not in caplog.text
+
+
 async def test_not_found_disables_key_and_falls_through(tmp_path):
     ledger, _ = make_ledger(tmp_path, ["a", "b"])
     a = FakeProvider("a", [ProviderError("gone", kind="not_found")])

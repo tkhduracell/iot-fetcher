@@ -44,6 +44,16 @@ Four properties shape the code more than the API does:
   ``"queued"``; ``flush_queue`` drains it oldest-first on a later cycle, and
   stops at the first message Slack still will not take rather than reordering
   the ones behind it.
+* **A pending message gets a :loading: reaction, cleared by the reply.**
+  ``mark_pending`` reacts on Filip's own message the moment it becomes an
+  inbox note; the topic's next successful ``post`` clears it. There is no
+  cycle-status plumbing from :mod:`ai_brain.loop` for this -- a cycle can
+  answer several topics' notes at once and ``loop.py`` has no notion of Slack
+  at all, so "did this topic get a reply" is answered here, from the posts
+  this module actually sent, not from the loop's own idea of how it went. A
+  cycle that errors before ever posting would otherwise leave the spinner
+  forever, so ``check_watchdog`` sweeps for anything still pending past
+  ``LOADING_TIMEOUT_S`` and swaps it for :red_circle:, once.
 """
 
 from __future__ import annotations
@@ -67,6 +77,14 @@ WINDOW_S = 3600.0
 BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
 NOTE_SENDER = "filip"
 CHAT_TOPIC = "chat"
+LOADING_REACTION = "loading"
+ERROR_REACTION = "red_circle"
+# How long a topic may sit with an unanswered :loading: before check_watchdog
+# gives up on it and marks it failed. Generous on purpose: a cycle on the lan:
+# provider can legitimately run several tool-calling rounds against a local
+# model (see ai_brain.llm.ollama's own CALL_TIMEOUT_S), and a false red_circle
+# on a cycle that was simply slow is worse than a spinner that lingers.
+LOADING_TIMEOUT_S = 900.0
 SUGGESTED_PROMPTS = [
     {"title": "Status", "message": "Vad jobbar du med just nu?"},
     {"title": "El", "message": "Hur mycket el producerar vi just nu?"},
@@ -97,6 +115,11 @@ class SlackOut:
         self.sleep = sleep
         self._channel: str | None = None
         self._recent: list[float] = []
+        # topic -> (channel, message_ts, marked_at). One entry per topic: a
+        # second inbound message on the same topic before the first got a
+        # reply simply re-marks the same spinner rather than stacking one per
+        # message, since a reply answers the topic, not a specific message.
+        self._pending: dict[str, tuple[str, str, float]] = {}
 
     # -- paths ---------------------------------------------------------
 
@@ -107,6 +130,63 @@ class SlackOut:
     @property
     def queue_dir(self) -> Path:
         return self.brain.outbox_dir / "slack"
+
+    # -- the pending spinner ---------------------------------------------
+
+    async def mark_pending(self, topic: str, channel: str, ts: str) -> None:
+        """React :loading: on Filip's message while its topic is worked on.
+
+        Called from ``SlackIn.on_message`` the moment a DM becomes an inbox
+        note -- before the cycle that will answer it has even been woken.
+        Reacting is best-effort: a failure here must not stop the note from
+        being dropped and the brain woken, so it is only logged.
+        """
+        self._pending[topic] = (channel, ts, self.clock().timestamp())
+        try:
+            await self.client.reactions_add(channel=channel, timestamp=ts, name=LOADING_REACTION)
+        except Exception as exc:  # noqa: BLE001 - the reaction is decoration
+            log.info("[slack] reactions_add failed (%s)", _slack_error(exc))
+
+    async def check_watchdog(self) -> None:
+        """Swap a spinner stuck past ``LOADING_TIMEOUT_S`` for a red circle.
+
+        Covers the case ``_send`` cannot: a cycle that errors, times out, or
+        hangs before ever calling ``post`` for the topic leaves nothing here
+        to clear the reaction. Each stale entry is dropped from ``_pending``
+        the moment it is handled, so a topic is only ever marked failed once
+        -- a later reply still lands as a normal post, it just no longer
+        clears anything, since there is nothing left pending to clear.
+        """
+        now = self.clock().timestamp()
+        stale = [
+            topic
+            for topic, (_, _, marked_at) in self._pending.items()
+            if now - marked_at >= LOADING_TIMEOUT_S
+        ]
+        for topic in stale:
+            channel, ts, _ = self._pending.pop(topic)
+            await self._swap_reaction(channel, ts, LOADING_REACTION, ERROR_REACTION)
+
+    async def _clear_pending(self, topic: str) -> None:
+        """Remove the topic's :loading: reaction, if one is still pending."""
+        pending = self._pending.pop(topic, None)
+        if pending is None:
+            return
+        channel, ts, _ = pending
+        try:
+            await self.client.reactions_remove(channel=channel, timestamp=ts, name=LOADING_REACTION)
+        except Exception as exc:  # noqa: BLE001 - the reaction is decoration
+            log.info("[slack] reactions_remove failed (%s)", _slack_error(exc))
+
+    async def _swap_reaction(self, channel: str, ts: str, old: str, new: str) -> None:
+        try:
+            await self.client.reactions_remove(channel=channel, timestamp=ts, name=old)
+        except Exception as exc:  # noqa: BLE001 - the reaction is decoration
+            log.info("[slack] reactions_remove failed (%s)", _slack_error(exc))
+        try:
+            await self.client.reactions_add(channel=channel, timestamp=ts, name=new)
+        except Exception as exc:  # noqa: BLE001 - the reaction is decoration
+            log.info("[slack] reactions_add failed (%s)", _slack_error(exc))
 
     # -- posting -------------------------------------------------------
 
@@ -167,6 +247,9 @@ class SlackOut:
             # deep-links correctly) without any further Slack call.
             sessions[topic] = {"thread_ts": ts, "channel": channel}
             self._write_sessions(sessions)
+        # A real reply landed for this topic: whatever spinner was left on
+        # Filip's message is answered now, watchdog or not.
+        await self._clear_pending(topic)
         return ts
 
     async def flush_queue(self) -> int:
@@ -416,6 +499,13 @@ class SlackIn:
         log.info("[slack] note from filip (%d chars, topic=%s)", len(body), topic)
         if topic is not None:
             body = f"topic: {topic}\n{body}"
+        message_ts = str(event.get("ts") or "")
+        channel = str(event.get("channel") or "")
+        if message_ts and channel:
+            # A bare top-level DM outside any tracked thread has no topic yet
+            # (topic is None) -- the reply that answers it binds ``chat``
+            # itself, so mark the spinner against that same topic name.
+            await self.out.mark_pending(topic or CHAT_TOPIC, channel, message_ts)
         self.brain.drop_note(NOTE_SENDER, body)
         self.wake("brain")
 

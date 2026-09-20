@@ -237,8 +237,15 @@ class ProviderChain:
         tools: list[ToolSpec],
         max_tokens: int,
         priority: Priority,
+        agent: str = "",
     ) -> Reply:
         earliest: float | None = None
+        # Purely for the log line below: one chain is shared across every
+        # AgentLoop (brain and each expert), so nothing here otherwise says
+        # whose cycle this call belongs to. Optional and unused elsewhere --
+        # a caller that has no loop to name (a test, a script) just gets an
+        # unlabelled line, exactly like before this parameter existed.
+        who = f"{agent}: " if agent else ""
 
         def remember(retry_at: float | None) -> None:
             nonlocal earliest
@@ -259,7 +266,8 @@ class ProviderChain:
             reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
             if reply is not None:
                 log.info(
-                    "%s answered (in=%d out=%d tokens)",
+                    "%s%s answered (in=%d out=%d tokens)",
+                    who,
                     key,
                     reply.usage.prompt_tokens,
                     reply.usage.completion_tokens,
