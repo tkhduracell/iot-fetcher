@@ -28,6 +28,13 @@ def text_response(text="hello", prompt=11, completion=3) -> dict:
     }
 
 
+def test_ollama_provider_declares_its_own_call_timeout():
+    from ai_brain.llm.ollama import CALL_TIMEOUT_S
+
+    assert provider().call_timeout_s == CALL_TIMEOUT_S
+    assert provider().call_timeout_s > 60  # longer than the chain's own default
+
+
 @respx.mock
 async def test_text_reply():
     respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
@@ -68,7 +75,9 @@ async def test_function_call_reply_with_two_calls():
         "eval_count": 7,
     }
     respx.post(URL).mock(return_value=httpx.Response(200, json=body))
-    reply = await provider().complete([Message(role="user", content="weather?")], [WEATHER], 256)
+    reply = await provider().complete(
+        [Message(role="user", content="weather?")], [WEATHER], 256
+    )
 
     assert reply.text == "checking"
     assert reply.tool_calls == (
@@ -79,7 +88,9 @@ async def test_function_call_reply_with_two_calls():
 
 @respx.mock
 async def test_function_call_without_args_defaults_to_empty_dict():
-    body = {"message": {"role": "assistant", "tool_calls": [{"function": {"name": "ping"}}]}}
+    body = {
+        "message": {"role": "assistant", "tool_calls": [{"function": {"name": "ping"}}]}
+    }
     respx.post(URL).mock(return_value=httpx.Response(200, json=body))
     reply = await provider().complete([Message(role="user", content="hi")], [], 256)
     assert reply.tool_calls == (ToolCall(id="call_1", name="ping", args={}),)
@@ -94,9 +105,13 @@ async def test_request_body_mapping():
         Message(
             role="assistant",
             content="checking",
-            tool_calls=(ToolCall(id="call_1", name="get_weather", args={"city": "Malmo"}),),
+            tool_calls=(
+                ToolCall(id="call_1", name="get_weather", args={"city": "Malmo"}),
+            ),
         ),
-        Message(role="tool", name="get_weather", tool_call_id="call_1", content='{"c": 17}'),
+        Message(
+            role="tool", name="get_weather", tool_call_id="call_1", content='{"c": 17}'
+        ),
     ]
     await provider().complete(messages, [WEATHER], 512)
 
@@ -110,7 +125,12 @@ async def test_request_body_mapping():
                 "role": "assistant",
                 "content": "checking",
                 "tool_calls": [
-                    {"function": {"name": "get_weather", "arguments": {"city": "Malmo"}}}
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "Malmo"},
+                        }
+                    }
                 ],
             },
             {"role": "tool", "content": '{"c": 17}'},
@@ -153,7 +173,7 @@ async def test_missing_message_degrades_to_empty_text():
 @respx.mock
 async def test_model_not_found_is_a_not_found_error():
     respx.post(URL).mock(
-        return_value=httpx.Response(404, json={"error": "model \"nope\" not found"})
+        return_value=httpx.Response(404, json={"error": 'model "nope" not found'})
     )
     with pytest.raises(ProviderError) as excinfo:
         await provider().complete([Message(role="user", content="hi")], [], 64)
@@ -175,7 +195,9 @@ async def test_timeout_is_classified():
     transport = httpx.MockTransport(raise_timeout)
     client = httpx.AsyncClient(transport=transport)
     with pytest.raises(ProviderError) as excinfo:
-        await provider(client=client).complete([Message(role="user", content="hi")], [], 64)
+        await provider(client=client).complete(
+            [Message(role="user", content="hi")], [], 64
+        )
     assert excinfo.value.kind == "timeout"
 
 
