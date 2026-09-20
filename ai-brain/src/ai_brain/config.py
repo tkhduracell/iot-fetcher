@@ -37,7 +37,7 @@ DEFAULT_LLM_CHAIN = (
 # the whole set, for a blank value as much as an absent one -- a deployment
 # that copied .env.example during the rollout has a literal ``EXPERTS=`` line,
 # and that line silently pinning it to brain-only is a default nobody chose.
-DEFAULT_EXPERTS = "energy,health,house-ops,researcher"
+DEFAULT_EXPERTS = "energy,health,house-ops,researcher,infra"
 
 # The explicit opt-out, since blank no longer is one. Case-insensitive, and
 # ``brain`` is accepted too: the brain is not an expert, so naming it is the

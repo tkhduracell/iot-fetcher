@@ -133,6 +133,7 @@ def test_build_starts_every_expert_by_default(tmp_path):
         "energy",
         "health",
         "house-ops",
+        "infra",
         "researcher",
     ]
 
