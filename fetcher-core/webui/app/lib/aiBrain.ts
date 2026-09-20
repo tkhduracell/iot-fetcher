@@ -23,6 +23,8 @@ export type CycleTrace = {
   finished_at: number | null;
   /** null while the cycle is still running; a status string once it ends. */
   status: string | null;
+  /** True while the cycle is still running. Served by `_trace_json`. */
+  in_progress: boolean;
   /** "" before a model has been picked — never null. */
   model: string;
   rounds: RoundTrace[];
@@ -108,6 +110,17 @@ export type BrainSettings = {
   memory_root: string;
 };
 
+export type LanHost = {
+  model: string;
+  /** null when the finder has not located the host. */
+  host: string | null;
+  found_at: number | null;
+  subnets: string[];
+};
+
+/** `lan_host` on `/api/status`: `{enabled:false}` when no LAN model is set up. */
+export type LanState = { enabled: boolean; hosts?: LanHost[] };
+
 export type Status = {
   uptime_s: number;
   now: number;
@@ -117,6 +130,8 @@ export type Status = {
   ledger: { day: string; keys: LedgerKey[] };
   proposals: { pending: number; total: number };
   settings: BrainSettings;
+  /** Which LAN model host the chain found, if LAN models are configured. */
+  lan_host?: LanState;
 };
 
 export type Proposal = {
@@ -127,7 +142,9 @@ export type Proposal = {
   topic: string;
   created: string;
   status: string;
-  slack_ts: string;
+  /** Not served by `/api/proposals` today — optional so nothing renders
+   *  `undefined` when it is absent. */
+  slack_ts?: string;
   result: string;
 };
 
@@ -378,7 +395,12 @@ export type Gap = {
 };
 
 /** One superseded identity/goals body (ai-brain A2). */
-export type Revision = { at: number; body: string };
+export type Revision = {
+  at: number;
+  body: string;
+  /** True when `body` was cut to the API's 2000-char cap. */
+  truncated?: boolean;
+};
 
 /** Agent detail once the backend carries the memory-introspection fields.
  *  Every added field is optional: today's API omits them all. */
@@ -498,18 +520,407 @@ export function humanizeFactName(name: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** True for a line that is a label rather than a statement.
+ *
+ *  Fact bodies written by the model open with a caption — "Health data from
+ *  Garmin Forerunner 245 Music in VictoriaMetrics (Database_Name: irisgatan):"
+ *  — and the substance follows underneath. A trailing colon is that caption's
+ *  one reliable marker, so it is the only thing tested for; a colon *inside* a
+ *  line ("Pooltemp: 26 °C") is part of a perfectly good sentence. */
+export function isLabelLine(line: string): boolean {
+  return /:\s*$/.test(line);
+}
+
+/** Strips the markdown a fact body is written in, leaving the words. */
+function stripMarkup(raw: string): string {
+  return raw
+    // list markers, blockquote carets, heading hashes, leading numbering
+    .replace(/^\s*(?:[-*+•]\s+|>\s*|#{1,6}\s+|\d+[.)]\s+)/, '')
+    // bold/italic/code fences around the whole line
+    .replace(/^\s*[`*_]+|[`*_]+\s*$/g, '')
+    .trim();
+}
+
+/** Lines that carry no statement whatever they look like. */
+function isStructural(line: string): boolean {
+  if (!line) return true;
+  if (/^[-=_*\s|]+$/.test(line)) return true; // rules, table separators
+  if (/^```/.test(line)) return true; // code fence
+  if (/^\|/.test(line)) return true; // table row
+  return false;
+}
+
+/** Cut `text` to at most `max` characters at a boundary a reader recognises.
+ *
+ *  Prefers the end of a sentence inside the budget (the result then needs no
+ *  ellipsis — it *is* the whole statement), else falls back to the last word
+ *  boundary and marks the cut. Never splits a word, which is what the wall was
+ *  doing: "…in VictoriaMet…". */
+export function cutAtBoundary(text: string, max: number): string {
+  const s = text.trim();
+  if (s.length <= max) return s;
+
+  const head = s.slice(0, max + 1);
+
+  // The last sentence end inside the budget — but only if it leaves enough
+  // behind to be worth showing, else a body opening with "Ja. ..." would
+  // render as the word "Ja.".
+  let lastSentence = -1;
+  for (let i = 0; i < head.length; i += 1) {
+    if ('.!?'.includes(head[i]) && (i + 1 >= head.length || /\s/.test(head[i + 1]))) {
+      lastSentence = i;
+    }
+  }
+  if (lastSentence >= Math.floor(max * 0.4)) return s.slice(0, lastSentence + 1);
+
+  const space = head.lastIndexOf(' ');
+  const cut = space > Math.floor(max * 0.4) ? space : max;
+  return `${s.slice(0, cut).replace(/[\s,;:–-]+$/, '')}…`;
+}
+
 /** The one sentence a fact body says.
  *
- *  Facts are markdown notes; the wall has room for a line, so take the first
- *  line that is prose — skipping headings, bullets markers and blank lines —
- *  and cut it at `max`. Returns "" when the body carries nothing usable, which
- *  is the caller's cue to fall back to the humanized name. */
-export function factSentence(body: string | undefined, max: number = 180): string {
+ *  Facts are markdown notes and the wall has room for about two lines, so this
+ *  looks for the first line that reads as a *statement*: label lines (ending in
+ *  `:`), headings, table rows and rules are skipped, and a bullet is only used
+ *  when nothing better is on offer. The result is cut at a sentence or word
+ *  boundary — never mid-word — so a belief stays a belief rather than becoming
+ *  a truncated paste. Returns "" when the body carries nothing usable, which is
+ *  the caller's cue to fall back to the humanized fact name. */
+export function factSentence(body: string | undefined, max: number = 120): string {
   if (!body) return '';
-  for (const raw of String(body).split('\n')) {
-    const line = raw.replace(/^[#>\s*-]+/, '').trim();
-    if (!line) continue;
-    return line.length > max ? `${line.slice(0, max).trimEnd()}…` : line;
+
+  const lines = String(body).split('\n');
+  let bullet = '';
+  let label = '';
+
+  for (const raw of lines) {
+    const isBullet = /^\s*(?:[-*+•]\s+|\d+[.)]\s+)/.test(raw);
+    // A markdown heading is a title, the same thing a trailing colon is: it
+    // names the subject, it does not state anything about it.
+    const isHeading = /^\s*#{1,6}\s/.test(raw);
+    const line = stripMarkup(raw);
+    if (isStructural(line)) continue;
+    if (isHeading || isLabelLine(line)) {
+      // Remember the caption: a fact whose body is *only* a caption should
+      // still say something rather than falling back to its file name.
+      if (!label) label = line.replace(/:\s*$/, '');
+      continue;
+    }
+    if (isBullet) {
+      if (!bullet) bullet = line;
+      continue;
+    }
+    return cutAtBoundary(line, max);
   }
+
+  if (bullet) return cutAtBoundary(bullet, max);
+  if (label) return cutAtBoundary(label, max);
   return '';
+}
+
+// ------------------------------------------------- wall semantics
+//
+// The wall's editorial rules, kept here rather than in the components so they
+// are testable without a DOM and so the deeper screens apply the same ones.
+
+/** Cycle statuses and failure phrases that must never become the hero line. */
+const STATUS_PHRASES = [
+  'no provider budget left',
+  'no budget',
+  'budget',
+  'quota',
+  'rate limit',
+  'rate-limited',
+  'no key',
+  'no_key',
+  'timeout',
+  'timed out',
+  'error',
+  'failed',
+  'failure',
+  'exception',
+  'traceback',
+  'aborted',
+  'cancelled',
+  'canceled',
+  'skipped',
+  'paused',
+  'unavailable',
+  'http 4',
+  'http 5',
+  '429',
+  '503',
+];
+
+/** True when a cycle summary is machine status rather than understanding.
+ *
+ *  The deployed wall put `no provider budget left` in 38px serif as what the
+ *  house's brain understands. A cycle that died has a status, not a thought:
+ *  anything that looks like one is suppressed here and surfaced instead as a
+ *  condition beside the machine line. Fragment detection (short, lowercase, no
+ *  terminal punctuation) catches the next such string without a new phrase. */
+export function isStatusSummary(summary: string | null | undefined): boolean {
+  const s = (summary ?? '').trim();
+  if (!s) return true;
+  const lower = s.toLowerCase();
+  if (STATUS_PHRASES.some((p) => lower.includes(p))) return true;
+  // A bare fragment: no sentence end, no capital, few words. A real summary the
+  // model wrote is a sentence; `status=ok rounds=3` is not.
+  const words = lower.split(/\s+/).length;
+  if (words <= 8 && !/[.!?…]$/.test(s) && s[0] === lower[0]) return true;
+  if (/^[a-z_]+=[^\s]/.test(lower)) return true;
+  return false;
+}
+
+/** The hero sentence: what the house's brain currently understands.
+ *
+ *  SEAM: there is no endpoint that generates a standing "what I understand"
+ *  sentence. The best honest source is the brain's last cycle summary — the
+ *  model's own words — and when that is absent or is status text (see
+ *  `isStatusSummary`) we count what is actually on disk instead. Neither is
+ *  invented. When a real understanding field lands, point this at it and delete
+ *  the counting fallback. */
+export function heroSentence(
+  summary: string | undefined,
+  agents: AgentSummary[],
+  pending: number,
+): string {
+  const trimmed = (summary ?? '').trim();
+  if (trimmed && !isStatusSummary(trimmed)) return trimmed;
+
+  if (agents.length === 0) return 'Hjärnan har inte sagt något ännu.';
+
+  const facts = agents.reduce((sum, a) => sum + (a.facts ?? 0), 0);
+  const parts = [
+    `Hjärnan håller ${facts} fakta om huset över ${agents.length} ${
+      agents.length === 1 ? 'loop' : 'loopar'
+    }`,
+  ];
+  // "förslag" is the same in singular and plural, so no branch is needed.
+  if (pending > 0) parts.push(`${pending} förslag väntar på ditt ✅`);
+  return `${parts.join(', ')}.`;
+}
+
+/** A machine condition worth one word near the machine line. */
+export type Condition = { id: string; label: string; tone: Tone };
+
+/** The conditions the wall admits to, in the order they matter.
+ *
+ *  This is where "tom budget" belongs — beside the telemetry, not in the hero.
+ *  Returns [] on a healthy brain, so the strip disappears entirely. */
+export function conditions(
+  status: Status | null | undefined,
+  agents: AgentSummary[],
+  offline: boolean = false,
+): Condition[] {
+  const out: Condition[] = [];
+  if (offline) out.push({ id: 'offline', label: 'ingen kontakt', tone: 'error' });
+  if (status?.paused) out.push({ id: 'paused', label: 'pausad', tone: 'warn' });
+
+  const keys = status?.ledger?.keys ?? [];
+  if (keys.length > 0) {
+    const usable = keys.filter(
+      (k) => !k.disabled_until && !k.blocked_until && (k.requests_remaining ?? 0) > 0,
+    );
+    if (usable.length === 0) {
+      out.push({ id: 'budget', label: 'tom budget', tone: 'error' });
+    } else if (usable.length < keys.length) {
+      out.push({
+        id: 'budget-partial',
+        label: `${keys.length - usable.length} nyckel slut`,
+        tone: 'warn',
+      });
+    }
+  }
+
+  if (status?.settings?.dry_run) out.push({ id: 'dry-run', label: 'torrkörning', tone: 'warn' });
+  if (status?.slack && status.slack.configured && !status.slack.connected) {
+    out.push({ id: 'slack', label: 'slack nere', tone: 'warn' });
+  }
+  const compacting = agents.filter((a) => a.needs_compaction).length;
+  if (compacting > 0) {
+    out.push({ id: 'compaction', label: `${compacting} vill kompaktera`, tone: 'warn' });
+  }
+  return out;
+}
+
+// ------------------------------------------------- proposals
+
+const EXECUTED_STATUSES = new Set(['executed', 'executing']);
+const REJECTED_STATUSES = new Set(['rejected', 'denied']);
+
+export function isPending(p: Proposal): boolean {
+  return p.status === 'pending';
+}
+
+export function isExecuted(p: Proposal): boolean {
+  return EXECUTED_STATUSES.has(p.status);
+}
+
+export function isRejected(p: Proposal): boolean {
+  return REJECTED_STATUSES.has(p.status);
+}
+
+/** Which executor runs a proposal kind. The kind *is* the executor entry point
+ *  in ai-brain (`Executors.run`), so this only gives it a name a room can read;
+ *  an unknown kind falls through to the raw identifier rather than being hidden. */
+const EXECUTOR_LABEL: Record<string, string> = {
+  sonos_say: 'Sonos',
+  ha_todo_add: 'Att göra-listan',
+  ha_service: 'Home Assistant',
+};
+
+export function executorName(kind: string): string {
+  return EXECUTOR_LABEL[kind] ?? kind;
+}
+
+/** Proposal timestamps are ISO strings; everything else is epoch seconds.
+ *  Unparseable input yields null so `formatAgo` shows a dash. */
+export function createdSeconds(created: string | undefined): number | null {
+  if (!created) return null;
+  const ms = Date.parse(created);
+  return Number.isFinite(ms) ? ms / 1000 : null;
+}
+
+/** The one line a proposal is about: its payload's own text where the kind has
+ *  one, else the topic. Keeps the UI showing the thing, not the JSON. */
+export function proposalSentence(p: Proposal): string {
+  const payload = (p.payload ?? {}) as Record<string, unknown>;
+  for (const key of ['text', 'item', 'message', 'title', 'entity_id']) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return p.topic || p.kind || p.id;
+}
+
+/** Several executions of the same thing, collapsed into one line with a count. */
+export type ProposalGroup = {
+  /** Grouping key — the normalised sentence. Stable across polls. */
+  key: string;
+  /** The newest member; its sentence and reason are what render. */
+  latest: Proposal;
+  sentence: string;
+  count: number;
+  /** Newest first — every proposal that collapsed into this line. */
+  members: Proposal[];
+};
+
+/** Lowercased, punctuation- and whitespace-normalised, so "Replace Roborock S6
+ *  MaxV main brush" and "Replace Roborock S6 MaxV main brush." are one thing. */
+export function groupKey(p: Proposal): string {
+  return `${p.kind}\u0000${proposalSentence(p)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?,;:]+$/, '')
+    .trim()}`;
+}
+
+/** Collapse repeated proposals by what they actually say.
+ *
+ *  The deployed wall printed "Replace Roborock S6 MaxV main brush" three times
+ *  under Verkställt, twice near-identically — which is exactly the repetition
+ *  this UI exists to make visible, shown as three separate events instead of
+ *  one with a count. Input order is preserved (the API serves newest first) and
+ *  a group takes the position of its newest member. */
+export function groupProposals(proposals: Proposal[]): ProposalGroup[] {
+  const byKey = new Map<string, ProposalGroup>();
+  for (const p of proposals ?? []) {
+    const key = groupKey(p);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.members.push(p);
+      continue;
+    }
+    byKey.set(key, {
+      key,
+      latest: p,
+      sentence: proposalSentence(p),
+      count: 1,
+      members: [p],
+    });
+  }
+  return [...byKey.values()];
+}
+
+// ------------------------------------------------- loops
+
+/** A topic proposed once is not a loop.
+ *
+ *  `/api/loops` groups every proposal by topic, including topics with a single
+ *  member — so the deployed wall's "Tjatar om" listed `1× roborock` as
+ *  something the brain keeps coming back to. Two laps is the floor for the word
+ *  to mean anything; the caller hides the whole section when this is empty. */
+export function naggingLoops(
+  loops: Loop[] | null | undefined,
+  minLaps: number = 2,
+  limit: number = Infinity,
+): Loop[] {
+  return (loops ?? [])
+    .filter((l) => (l?.laps ?? 0) >= minLaps)
+    .sort((a, b) => b.laps - a.laps || a.topic.localeCompare(b.topic, 'sv'))
+    .slice(0, limit === Infinity ? undefined : limit);
+}
+
+/** Share of a loop's cycles that produced something real, in 0..1. `null` when
+ *  the loop has not run — a 0 % bar for a loop with no cycles is a lie. */
+export function usefulShare(b: UsefulnessBuckets | null | undefined): number | null {
+  if (!b || !b.total) return null;
+  return (b.real + b.note) / b.total;
+}
+
+// ------------------------------------------------- ledger
+
+/** Ledger keys split into the ones that have done any work today and a count
+ *  of the ones that have not.
+ *
+ *  The deployed machine line printed `qwen3.8:27b-mlx 0/1000000` and
+ *  `qwen3-coder:30b 0/1000000` — two keys that had not been called at all —
+ *  and wrapped to three lines because of them. A key with no traffic and no
+ *  problem says nothing; a key that is blocked or disabled says a lot, so that
+ *  one stays even at zero. */
+export function activeLedgerKeys(keys: LedgerKey[] | null | undefined): {
+  active: LedgerKey[];
+  silent: number;
+} {
+  const all = keys ?? [];
+  const active = all.filter(
+    (k) =>
+      (k.requests_day ?? 0) > 0 ||
+      (k.tokens_day ?? 0) > 0 ||
+      Boolean(k.blocked_until) ||
+      Boolean(k.disabled_until) ||
+      (k.consecutive_429 ?? 0) > 0,
+  );
+  return { active, silent: all.length - active.length };
+}
+
+// ------------------------------------------------- facts
+
+/** Fact stats newest write first — the order the knowledge screens read in. */
+export function sortFactStats(stats: FactStat[] | null | undefined): FactStat[] {
+  return [...(stats ?? [])].sort((a, b) => (b.written_at ?? 0) - (a.written_at ?? 0));
+}
+
+/** How stale a fact is, as a colour family: fresh under a day, warn under a
+ *  week, error beyond. The thresholds are the wall's, not the brain's — nothing
+ *  in ai-brain declares a fact expired. */
+export function freshnessTone(
+  writtenAt: number | null | undefined,
+  now: number = Date.now() / 1000,
+): Tone {
+  if (writtenAt === null || writtenAt === undefined || !Number.isFinite(writtenAt)) return 'idle';
+  const age = now - writtenAt;
+  if (age < 86_400) return 'ok';
+  if (age < 7 * 86_400) return 'warn';
+  return 'error';
+}
+
+/** "2026-09-20" or an ISO timestamp → "20 sep" for a dense list. */
+export function formatDay(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '–';
+  const ms = typeof value === 'number' ? value * 1000 : Date.parse(value);
+  if (!Number.isFinite(ms)) return String(value);
+  return new Date(ms).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
 }
