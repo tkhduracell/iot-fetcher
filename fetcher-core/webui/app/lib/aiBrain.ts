@@ -347,3 +347,169 @@ export function truncate(value: string, max: number = 160): { text: string; trun
   if (s.length <= max) return { text: s, truncated: false };
   return { text: s.slice(0, max), truncated: true };
 }
+
+// ------------------------------------------------- wall view (additive)
+//
+// Everything below is used by the always-on wall tablet at /ai-brain/wall.
+// It is strictly additive: nothing above changes, so the existing /ai-brain
+// page keeps its imports. Several of these endpoints and fields are still
+// being built in ai-brain — the fetchers here resolve to `null`/`undefined`
+// rather than throwing, so a section can go dark without blanking the wall.
+
+/** `fact_stats` entry — per-fact freshness and write count (ai-brain A1). */
+export type FactStat = {
+  name: string;
+  /** epoch seconds of the last write. */
+  written_at: number;
+  /** epoch seconds of the first write; equals `written_at` when unknown. */
+  first_written_at: number;
+  /** times this fact has been written; >= 1. */
+  writes: number;
+};
+
+/** A known unknown the agent has recorded (ai-brain A3). Only open gaps are
+ *  served on agent detail, so `closed_at`/`answer` are not modelled here. */
+export type Gap = {
+  id: string;
+  question: string;
+  /** what it blocks; may be "". */
+  why: string;
+  opened_at: number;
+};
+
+/** One superseded identity/goals body (ai-brain A2). */
+export type Revision = { at: number; body: string };
+
+/** Agent detail once the backend carries the memory-introspection fields.
+ *  Every added field is optional: today's API omits them all. */
+export type AgentDetailPlus = AgentDetail & {
+  fact_stats?: FactStat[];
+  gaps?: Gap[];
+  identity_history?: Revision[];
+  goals_history?: Revision[];
+};
+
+export type LoopProposal = {
+  id: string;
+  kind: string;
+  created: string;
+  status: string;
+  result: string;
+};
+
+/** One repeated topic from `/api/loops` — the same subject proposed N times. */
+export type Loop = {
+  topic: string;
+  laps: number;
+  first_at: string;
+  last_at: string;
+  pending: number;
+  approved: number;
+  rejected: number;
+  kinds: string[];
+  proposals: LoopProposal[];
+};
+
+export type LoopsResponse = { loops: Loop[] };
+
+export type UsefulnessBuckets = {
+  total: number;
+  nothing: number;
+  note: number;
+  real: number;
+  repeat: number;
+};
+
+export type UsefulnessLoop = UsefulnessBuckets & { name: string };
+
+export type UsefulnessResponse = { loops: UsefulnessLoop[]; totals: UsefulnessBuckets };
+
+/** True for the error `fetch` raises when its AbortSignal fires. An aborted
+ *  poll must not be mistaken for "endpoint missing" — the caller is unmounting
+ *  and the next poll will ask again. */
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError');
+}
+
+/** GET `path`, resolving to `null` when ai-brain does not serve it (yet).
+ *
+ *  The wall calls endpoints that are still landing in ai-brain; a 404 there is
+ *  a section that stays dark, not a page error. Aborts still reject so the
+ *  polling hook can distinguish teardown from an absent endpoint. */
+export async function getJsonOptional<T>(
+  path: string,
+  signal?: AbortSignal,
+): Promise<T | null> {
+  try {
+    return await getJson<T>(path, signal);
+  } catch (e) {
+    if (isAbortError(e) || signal?.aborted) throw e;
+    return null;
+  }
+}
+
+/** `/api/loops` — repeated proposal topics. `null` until the endpoint exists. */
+export const fetchLoops = (signal?: AbortSignal) =>
+  getJsonOptional<LoopsResponse>('api/loops', signal);
+
+/** `/api/usefulness` — cycle outcomes bucketed per loop. `null` until it exists. */
+export const fetchUsefulness = (signal?: AbortSignal) =>
+  getJsonOptional<UsefulnessResponse>('api/usefulness', signal);
+
+/** Agent detail, typed with the optional memory-introspection fields. Same
+ *  endpoint as `fetchAgent` — the extra keys simply appear when ai-brain adds
+ *  them, so nothing here needs to change on that day. */
+export const fetchAgentPlus = (name: string, signal?: AbortSignal) =>
+  getJson<AgentDetailPlus>(`api/agents/${encodeURIComponent(name)}`, signal);
+
+/** Fact bodies for one agent, keyed by fact name.
+ *
+ *  The wall shows beliefs as sentences, and the sentence lives in the fact's
+ *  body — there is no bulk endpoint, so this fans out over the per-fact one.
+ *  Individual failures are dropped rather than failing the batch: one unreadable
+ *  fact should cost one line, not the column. Keep `names` short. */
+export async function fetchFactBodies(
+  agent: string,
+  names: string[],
+  signal?: AbortSignal,
+): Promise<Record<string, string>> {
+  const results = await Promise.allSettled(
+    names.map((fact) => fetchFact(agent, fact, signal)),
+  );
+  const out: Record<string, string> = {};
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value && typeof r.value.body === 'string') {
+      out[r.value.name] = r.value.body;
+    }
+  }
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  return out;
+}
+
+/** "pool_pump_schedule" → "Pool pump schedule" — a readable stand-in for a
+ *  fact whose body has not been fetched (or is empty). */
+export function humanizeFactName(name: string): string {
+  const words = String(name ?? '')
+    .replace(/\.md$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!words) return '–';
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** The one sentence a fact body says.
+ *
+ *  Facts are markdown notes; the wall has room for a line, so take the first
+ *  line that is prose — skipping headings, bullets markers and blank lines —
+ *  and cut it at `max`. Returns "" when the body carries nothing usable, which
+ *  is the caller's cue to fall back to the humanized name. */
+export function factSentence(body: string | undefined, max: number = 180): string {
+  if (!body) return '';
+  for (const raw of String(body).split('\n')) {
+    const line = raw.replace(/^[#>\s*-]+/, '').trim();
+    if (!line) continue;
+    return line.length > max ? `${line.slice(0, max).trimEnd()}…` : line;
+  }
+  return '';
+}
