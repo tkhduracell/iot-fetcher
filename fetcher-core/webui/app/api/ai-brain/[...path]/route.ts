@@ -47,6 +47,39 @@ export async function GET(
   const search = request.nextUrl.searchParams.toString();
   const url = `${base.replace(/\/+$/, '')}/${pathStr}${search ? `?${search}` : ''}`;
 
+  // The live feed is a stream that outlives any request/response cycle: it
+  // must not be buffered into a string and must not be killed by the 10s
+  // timeout below, which every other route on this proxy wants. `joined`
+  // (not `pathStr`) is the check, since `pathStr` is percent-encoded.
+  if (joined === 'api/feed') {
+    try {
+      const resp = await fetch(url, {
+        cache: 'no-store',
+        headers: { Accept: 'text/event-stream' },
+      });
+      if (!resp.body) {
+        return NextResponse.json(
+          { error: 'ai-brain returned no stream body' },
+          { status: 502, headers: NO_STORE },
+        );
+      }
+      return new NextResponse(resp.body, {
+        status: resp.status,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          Connection: 'keep-alive',
+          ...NO_STORE,
+        },
+      });
+    } catch (e) {
+      console.error(`Error proxying ai-brain stream to ${url}:`, e);
+      return NextResponse.json(
+        { error: 'ai-brain unavailable' },
+        { status: 502, headers: NO_STORE },
+      );
+    }
+  }
+
   try {
     const resp = await fetch(url, {
       cache: 'no-store',

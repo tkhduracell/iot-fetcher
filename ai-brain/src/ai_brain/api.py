@@ -24,6 +24,7 @@ has no authentication at all:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -60,6 +61,11 @@ MAX_REVISION_BODY = 2000
 # How many revisions of each document the detail body carries. ``memory.py``
 # keeps at most 20; five is what a "has this drifted lately" panel reads.
 REVISION_LIMIT = 5
+
+# Rounds can be minutes apart; without a write in between, an idle SSE
+# connection is indistinguishable from a dead one to anything sitting between
+# this and the browser (a reverse proxy's own idle timeout is commonly 30-60s).
+FEED_KEEPALIVE_S = 20
 
 # -- usefulness buckets -------------------------------------------------
 #
@@ -532,6 +538,50 @@ def build_app(
     async def usefulness(_request: web.Request) -> web.Response:
         return _json(_usefulness_json(system))
 
+    async def feed(request: web.Request) -> web.StreamResponse:
+        """Every loop's ``round_started``/``round_complete``/``cycle_ended``
+        events, live, merged across all loops.
+
+        Still a GET that mutates nothing -- it just never closes its
+        response. A subscriber queue is created and torn down entirely
+        within this one connection's lifetime, so a client that never
+        connects costs nothing and one that vanishes mid-stream (tab closed,
+        network dropped) is cleaned up by the ``finally`` below the instant
+        ``resp.write`` raises on the dead socket.
+        """
+        resp = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-store",
+                # Told to whatever sits between this and the browser: a
+                # streaming response that gets buffered anyway is silently
+                # indistinguishable from one that works until the first
+                # round should have appeared and does not.
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await resp.prepare(request)
+        with system.events.subscribe() as queue:
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=FEED_KEEPALIVE_S)
+                    except TimeoutError:
+                        # Rounds can be minutes apart; an idle SSE connection
+                        # looks identical to a dead one to anything sitting
+                        # between here and the browser. A comment line is
+                        # invisible to ``EventSource`` and keeps the socket
+                        # writing often enough that nothing times it out --
+                        # and doubles as the fastest way to notice this
+                        # client is actually gone, via the write below.
+                        await resp.write(b": keepalive\n\n")
+                        continue
+                    await resp.write(f"data: {json.dumps(event)}\n\n".encode())
+            except (ConnectionResetError, asyncio.CancelledError):
+                pass
+        return resp
+
     async def slack_sessions(_request: web.Request) -> web.Response:
         out = system.slack_out
         if out is None:
@@ -565,6 +615,7 @@ def build_app(
     app.router.add_get("/api/loops", loops)
     app.router.add_get("/api/usefulness", usefulness)
     app.router.add_get("/api/slack/sessions", slack_sessions)
+    app.router.add_get("/api/feed", feed)
     return app
 
 
