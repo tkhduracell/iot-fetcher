@@ -78,6 +78,13 @@ services:
     volumes:
       - ./volumes/ai-assistant-data:/app/data
 
+  ollama:
+    container_name: ollama
+    deploy:
+      resources:
+        limits:
+          cpus: 2.75
+
   wud:
     container_name: wud
     env_file: ./wud/.env
