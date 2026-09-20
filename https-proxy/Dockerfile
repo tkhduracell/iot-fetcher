@@ -9,9 +9,15 @@ RUN xcaddy build --with github.com/porech/caddy-maxmind-geolocation@v1.0.3
 # unlike MaxMind's own GeoLite2 downloads) and ships in the same .mmdb format
 # the module reads. Snapshots are published monthly; this pins to whatever
 # month the image is built, so a rebuild is how the data gets refreshed.
+#
+# DB-IP only keeps the current and previous month's file live at the
+# predictable dbip-country-lite-<YYYY-MM> path -- a build in the first few
+# days of a new month can race the new snapshot's publish and 404, so fall
+# back to the previous month's file if the current month isn't up yet.
 FROM alpine:3.20 AS geoip
 RUN apk add --no-cache curl && \
-    curl -fSL -o /tmp/dbip.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).mmdb.gz" && \
+    ( curl -fSL -o /tmp/dbip.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).mmdb.gz" \
+      || curl -fSL -o /tmp/dbip.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date -d @$(($(date +%s) - 35*86400)) +%Y-%m).mmdb.gz" ) && \
     gunzip /tmp/dbip.mmdb.gz && \
     mv /tmp/dbip.mmdb /dbip-country-lite.mmdb
 
