@@ -35,14 +35,24 @@ log = logging.getLogger(__name__)
 # Error bodies can be long; enough to identify the failure is enough to log.
 _LOG_BODY_CHARS = 500
 
+# This box's own hardware, not a cloud SLA -- the chain's default 60s (sized
+# for the metered providers ahead of it) is too tight for a local model under
+# load and cuts it off mid-answer rather than letting it finish. Same
+# reasoning as the lan: provider's much longer timeout, just a smaller number:
+# this is the rpi5 itself running a 3B model, not a desktop GPU running
+# something bigger.
+CALL_TIMEOUT_S = 600.0
+
 
 class OllamaProvider(Provider):
+    call_timeout_s = CALL_TIMEOUT_S
+
     def __init__(
         self,
         model: str,
         base_url: str,
         client: httpx.AsyncClient | None = None,
-        timeout_s: float | httpx.Timeout = 60,
+        timeout_s: float | httpx.Timeout = CALL_TIMEOUT_S,
     ):
         self.model = model
         self.key = f"ollama:{model}"
@@ -71,7 +81,12 @@ class OllamaProvider(Provider):
     ) -> Reply:
         payload = build_request(self.model, messages, tools, max_tokens)
         body = json.dumps(payload)
-        log.debug("%s request: %d bytes, %d messages", self.key, len(body), len(payload["messages"]))
+        log.debug(
+            "%s request: %d bytes, %d messages",
+            self.key,
+            len(body),
+            len(payload["messages"]),
+        )
 
         try:
             response = await self._http().post(
@@ -82,7 +97,9 @@ class OllamaProvider(Provider):
         except httpx.TimeoutException as err:
             raise ProviderError(f"{self.key} timed out: {err}", kind="timeout") from err
         except httpx.HTTPError as err:
-            raise ProviderError(f"{self.key} transport error: {err}", kind="server") from err
+            raise ProviderError(
+                f"{self.key} transport error: {err}", kind="server"
+            ) from err
 
         if response.status_code >= 400:
             raise self._error(response)
@@ -95,8 +112,16 @@ class OllamaProvider(Provider):
         # Ollama returns 404 for an unpulled model and 400 for a malformed
         # request; everything else (5xx, and anything unexpected) is treated
         # as transient since this is a local/LAN service with no quota concept.
-        kind: ErrorKind = "not_found" if status == 404 else "bad_request" if status == 400 else "server"
-        return ProviderError(f"{self.key} HTTP {status}: {_error_message(response)}", kind=kind)
+        kind: ErrorKind = (
+            "not_found"
+            if status == 404
+            else "bad_request"
+            if status == 400
+            else "server"
+        )
+        return ProviderError(
+            f"{self.key} HTTP {status}: {_error_message(response)}", kind=kind
+        )
 
     def _reply(self, body: dict) -> Reply:
         message = body.get("message") or {}
