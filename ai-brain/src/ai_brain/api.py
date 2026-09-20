@@ -49,6 +49,64 @@ MAX_JOURNAL_DAYS = 30
 # proposal it ever made into one response.
 MAX_PROPOSALS = 100
 
+# Identity and goals are free text the brain rewrites itself, and nothing caps
+# how long it makes them. The history endpoint exists so a reader can see that
+# the wording drifted, not to serve the full document -- a dozen revisions of a
+# multi-kilobyte persona would dwarf the rest of the agent detail body and the
+# page only ever renders an excerpt. Truncated bodies are marked so the reader
+# can tell a cut-off revision from a short one.
+MAX_REVISION_BODY = 2000
+
+# How many revisions of each document the detail body carries. ``memory.py``
+# keeps at most 20; five is what a "has this drifted lately" panel reads.
+REVISION_LIMIT = 5
+
+# -- usefulness buckets -------------------------------------------------
+#
+# ``AgentLoop.cycle_counts`` counts cycles by the ``Status`` literal in
+# ``loop.py``: ok, max_rounds, error, timeout, no_budget, paused, cancelled.
+# Rolled into four buckets by what the cycle actually left behind:
+#
+# * ``real``    -- ``ok``: the model called ``end_cycle``, so a cycle closed
+#                  with a summary and a chosen wake. The only status that
+#                  means the cycle did what a cycle is for.
+# * ``repeat``  -- ``max_rounds``: the model used every round without ever
+#                  calling ``end_cycle``. ``loop.py`` logs exactly this as "a
+#                  loop that may be going in circles every heartbeat", which
+#                  is the definition of this bucket.
+# * ``note``    -- ``error``/``timeout``: the cycle reached the model and cost
+#                  budget, and is in ``CONSUMED_STATUSES`` so it archived the
+#                  inbox and wrote a journal line -- it left a trace, but no
+#                  work.
+# * ``nothing`` -- ``no_budget``/``paused``/``cancelled``: no provider call
+#                  happened at all (none of them are in ``CONSUMED_STATUSES``;
+#                  ``paused`` returns before the chain, ``no_budget`` is
+#                  ``ChainExhausted``, ``cancelled`` is shutdown).
+#
+# Any status not listed here also lands in ``nothing`` rather than being
+# dropped, so the four buckets always sum to ``total``: a status added to
+# ``loop.py`` later must not quietly make the numbers stop reconciling.
+CYCLE_BUCKETS: dict[str, str] = {
+    "ok": "real",
+    "max_rounds": "repeat",
+    "error": "note",
+    "timeout": "note",
+    "no_budget": "nothing",
+    "paused": "nothing",
+    "cancelled": "nothing",
+}
+BUCKETS = ("nothing", "note", "real", "repeat")
+
+# Which proposal statuses count as answered how. ``approvals.py`` stores seven:
+# pending, executing, executed, failed, rejected, blocked_quiet_hours, expired.
+# Only some of them record a human's answer -- ``failed`` is written both when
+# a proposal blew up after a checkmark *and* when Slack was unreachable at
+# propose time, and ``expired`` means nobody ever answered -- so neither is
+# counted as approved or rejected. The three counters are therefore a subset of
+# ``laps``, not a partition of it; the per-proposal ``status`` carries the rest.
+APPROVED_STATUSES = frozenset({"executing", "executed", "blocked_quiet_hours"})
+REJECTED_STATUSES = frozenset({"rejected"})
+
 
 def _json(payload: Any, status: int = 200) -> web.Response:
     """Every response in one place, so no route can forget ``no-store``.
@@ -57,7 +115,9 @@ def _json(payload: Any, status: int = 200) -> web.Response:
     show a paused brain as running, or a dead loop as healthy, with nothing on
     screen to say the answer is minutes old.
     """
-    return web.json_response(payload, status=status, headers={"Cache-Control": "no-store"})
+    return web.json_response(
+        payload, status=status, headers={"Cache-Control": "no-store"}
+    )
 
 
 @web.middleware
@@ -133,6 +193,104 @@ def _agent_summary(name: str, loop: AgentLoop, memory: MemoryDir) -> dict:
         "facts": len(memory.list_facts()),
         "unread_notes": len(memory.unread_notes()),
     }
+
+
+def _fact_stat_json(stat) -> dict:
+    return {
+        "name": stat.name,
+        "written_at": stat.written_at,
+        "first_written_at": stat.first_written_at,
+        "writes": stat.writes,
+    }
+
+
+def _gap_json(gap) -> dict:
+    """An open gap. ``closed_at``/``answer`` are omitted on purpose.
+
+    The detail body only ever carries open gaps, so both fields are constants
+    there -- ``None`` and ``""`` -- and a reader that saw them might reasonably
+    start filtering on them.
+    """
+    return {
+        "id": gap.id,
+        "question": gap.question,
+        "why": gap.why,
+        "opened_at": gap.opened_at,
+    }
+
+
+def _revision_json(revision) -> dict:
+    body = revision.body
+    truncated = len(body) > MAX_REVISION_BODY
+    return {
+        "at": revision.at,
+        "body": body[:MAX_REVISION_BODY],
+        "truncated": truncated,
+    }
+
+
+def _loops_json(system: System) -> dict:
+    """Proposals grouped by topic -- the same subject, proposed again and again.
+
+    A topic is how the agent names what a proposal is *about*, so proposals
+    sharing one are the same loop coming round again. Four rejected
+    ``ha_todo_add`` proposals on one topic is the signal: the brain keeps
+    asking for something Filip keeps saying no to, and nothing else in the API
+    makes that visible.
+
+    ``Approvals.all()`` is oldest first (the ids are timestamped), so the first
+    and last member of each group are the first and last lap without sorting.
+    """
+    groups: dict[str, list] = {}
+    for proposal in system.approvals.all():
+        groups.setdefault(proposal.topic, []).append(proposal)
+
+    loops = []
+    for topic, proposals in groups.items():
+        loops.append(
+            {
+                "topic": topic,
+                # One proposal is a loop of one: a subject that has come round
+                # once is still the unit this endpoint counts.
+                "laps": len(proposals),
+                "first_at": proposals[0].created,
+                "last_at": proposals[-1].created,
+                "pending": sum(1 for p in proposals if p.status == "pending"),
+                "approved": sum(1 for p in proposals if p.status in APPROVED_STATUSES),
+                "rejected": sum(1 for p in proposals if p.status in REJECTED_STATUSES),
+                "kinds": sorted({p.kind for p in proposals}),
+                "proposals": [
+                    {
+                        "id": p.id,
+                        "kind": p.kind,
+                        "created": p.created,
+                        "status": p.status,
+                        "result": p.result,
+                    }
+                    for p in proposals
+                ],
+            }
+        )
+    # Loudest loop first; topic breaks the tie so the order is stable between
+    # polls rather than dependent on dict insertion for equal lap counts.
+    loops.sort(key=lambda loop: (-loop["laps"], loop["topic"]))
+    return {"loops": loops}
+
+
+def _usefulness_json(system: System) -> dict:
+    """Every loop's cycles, rolled into the four buckets above."""
+    rows = []
+    totals = {"total": 0, **dict.fromkeys(BUCKETS, 0)}
+    for name in ["brain"] + sorted(n for n in system.loops if n != "brain"):
+        row = {"name": name, "total": 0, **dict.fromkeys(BUCKETS, 0)}
+        for status, count in system.loops[name].cycle_counts.items():
+            bucket = CYCLE_BUCKETS.get(status, "nothing")
+            row[bucket] += count
+            row["total"] += count
+        for key in ("total", *BUCKETS):
+            totals[key] += row[key]
+        rows.append(row)
+    return {"loops": rows, "totals": totals}
 
 
 def _ledger_json(system: System) -> dict:
@@ -234,7 +392,8 @@ def build_app(
                 "pause_file": str(pause_file()),
                 "slack": {
                     "configured": bool(
-                        system.settings.slack_bot_token and system.settings.slack_app_token
+                        system.settings.slack_bot_token
+                        and system.settings.slack_app_token
                     ),
                     "connected": out is not None,
                     "queued": out.queued_count() if out is not None else 0,
@@ -282,6 +441,17 @@ def build_app(
                 ],
                 "journal_days": memory.journal_days(),
                 "trace": _trace_json(loop.trace),
+                "fact_stats": [_fact_stat_json(stat) for stat in memory.fact_stats()],
+                # Open gaps only: a closed gap is an answered question, which
+                # belongs to the facts, not to the list of what is unknown.
+                "gaps": [_gap_json(gap) for gap in memory.gaps()],
+                "identity_history": [
+                    _revision_json(rev)
+                    for rev in memory.identity_history(REVISION_LIMIT)
+                ],
+                "goals_history": [
+                    _revision_json(rev) for rev in memory.goals_history(REVISION_LIMIT)
+                ],
             }
         )
         return _json(body)
@@ -295,7 +465,9 @@ def build_app(
             try:
                 days = int(raw)
             except ValueError:
-                return _json({"error": f"days must be an integer, got {raw!r}"}, status=400)
+                return _json(
+                    {"error": f"days must be an integer, got {raw!r}"}, status=400
+                )
         days = max(MIN_JOURNAL_DAYS, min(MAX_JOURNAL_DAYS, days))
 
         # Read the dated files directly rather than counting back from today:
@@ -354,6 +526,12 @@ def build_app(
             }
         )
 
+    async def loops(_request: web.Request) -> web.Response:
+        return _json(_loops_json(system))
+
+    async def usefulness(_request: web.Request) -> web.Response:
+        return _json(_usefulness_json(system))
+
     async def slack_sessions(_request: web.Request) -> web.Response:
         out = system.slack_out
         if out is None:
@@ -384,6 +562,8 @@ def build_app(
     app.router.add_get("/api/agents/{name}/trace", agent_trace)
     app.router.add_get("/api/agents/{name}/facts/{fact}", agent_fact)
     app.router.add_get("/api/proposals", proposals)
+    app.router.add_get("/api/loops", loops)
+    app.router.add_get("/api/usefulness", usefulness)
     app.router.add_get("/api/slack/sessions", slack_sessions)
     return app
 
@@ -414,7 +594,9 @@ async def start_api(
     try:
         await site.start()
     except OSError as exc:
-        log.error("HTTP API could not bind %s:%d (%s); continuing without it", host, port, exc)
+        log.error(
+            "HTTP API could not bind %s:%d (%s); continuing without it", host, port, exc
+        )
         await runner.cleanup()
         return None
     log.info("HTTP API listening on %s:%d", host, port)

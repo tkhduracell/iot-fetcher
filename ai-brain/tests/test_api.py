@@ -197,7 +197,14 @@ async def test_status_never_leaks_a_token(tmp_path):
         text = await response.text()
 
     assert response.status == 200
-    secrets = (BOT_TOKEN, APP_TOKEN, GEMINI_KEY, INFLUX, "brave-super-secret", "ha-super-secret")
+    secrets = (
+        BOT_TOKEN,
+        APP_TOKEN,
+        GEMINI_KEY,
+        INFLUX,
+        "brave-super-secret",
+        "ha-super-secret",
+    )
     for secret in secrets:
         assert secret not in text
     assert "super-secret" not in text
@@ -211,7 +218,10 @@ async def test_status_shows_a_pause(client, system):
 async def test_status_counts_proposals(client, system, tmp_path):
     outbox = system.memories["brain"].outbox_dir
     outbox.mkdir(parents=True, exist_ok=True)
-    for name, status in (("20260906T100000-a", "pending"), ("20260906T110000-b", "executed")):
+    for name, status in (
+        ("20260906T100000-a", "pending"),
+        ("20260906T110000-b", "executed"),
+    ):
         (outbox / f"{name}.json").write_text(
             json.dumps(
                 {
@@ -227,7 +237,10 @@ async def test_status_counts_proposals(client, system, tmp_path):
             encoding="utf-8",
         )
 
-    assert (await get_json(client, "/api/status"))["proposals"] == {"pending": 1, "total": 2}
+    assert (await get_json(client, "/api/status"))["proposals"] == {
+        "pending": 1,
+        "total": 2,
+    }
 
 
 # -- agents ------------------------------------------------------------
@@ -257,7 +270,9 @@ async def test_agents_lists_the_brain_first(client):
 
 async def test_agents_reports_the_last_cycle_and_the_next_wake(client, system):
     loop = system.loops["brain"]
-    loop.last_cycle = CycleResult(status="ok", model="fake:1", rounds=3, next_wake_s=1800)
+    loop.last_cycle = CycleResult(
+        status="ok", model="fake:1", rounds=3, next_wake_s=1800
+    )
     loop.last_cycle_at = NOW - 60
     loop.cycle_counts = {"ok": 4, "error": 1}
     loop.trace = CycleTrace(started_at=NOW - 60)
@@ -315,6 +330,79 @@ async def test_agent_detail_adds_identity_goals_facts_and_inbox(client, system):
     assert note["file"].endswith(".md")
 
 
+async def test_agent_detail_carries_fact_stats_and_open_gaps(client, system):
+    memory = system.memories["brain"]
+    memory.write_fact("pool", "cold")
+    memory.write_fact("pool", "colder")
+    memory.open_gap("Why does the pump stop at 03:00?", "blocks the heating plan")
+    answered = memory.open_gap("Is the hall sensor dead?", "")
+    assert memory.close_gap(answered.id, "it is dead")
+
+    body = await get_json(client, "/api/agents/brain")
+
+    assert [stat["name"] for stat in body["fact_stats"]] == ["pool"]
+    stat = body["fact_stats"][0]
+    assert stat["writes"] == 2
+    assert stat["first_written_at"] <= stat["written_at"]
+
+    # Closed gaps are answered questions; only the open one is a known unknown.
+    assert [gap["question"] for gap in body["gaps"]] == [
+        "Why does the pump stop at 03:00?"
+    ]
+    gap = body["gaps"][0]
+    assert gap["why"] == "blocks the heating plan"
+    assert gap["id"]
+    assert gap["opened_at"] > 0
+    # The detail body never carries a closed gap, so it never carries the two
+    # fields that would only ever describe one.
+    assert "closed_at" not in gap
+    assert "answer" not in gap
+
+
+async def test_agent_detail_has_empty_history_before_any_rewrite(client):
+    body = await get_json(client, "/api/agents/brain")
+    assert body["fact_stats"] == []
+    assert body["gaps"] == []
+    assert body["identity_history"] == []
+    assert body["goals_history"] == []
+
+
+async def test_agent_detail_shows_identity_and_goals_drift_newest_first(client, system):
+    memory = system.memories["brain"]
+    memory.rewrite_identity("first identity")
+    memory.rewrite_identity("second identity")
+    memory.rewrite_identity("third identity")
+    memory.rewrite_goals("first goals")
+    memory.rewrite_goals("second goals")
+
+    body = await get_json(client, "/api/agents/brain")
+
+    # Newest first, and the seeded persona the first rewrite replaced is the
+    # oldest revision of all -- nothing is dropped just because it was seeded.
+    assert [rev["body"] for rev in body["identity_history"]][:2] == [
+        "second identity",
+        "first identity",
+    ]
+    assert len(body["identity_history"]) == 3
+    assert [rev["body"] for rev in body["goals_history"]] == ["first goals"]
+    assert body["identity"] == "third identity"
+    assert all(rev["at"] > 0 for rev in body["identity_history"])
+    assert all(rev["truncated"] is False for rev in body["identity_history"])
+
+
+async def test_agent_detail_caps_a_huge_revision_body(client, system):
+    memory = system.memories["brain"]
+    memory.rewrite_identity("x" * 5000)
+    memory.rewrite_identity("short")
+
+    revision = (await get_json(client, "/api/agents/brain"))["identity_history"][0]
+
+    assert len(revision["body"]) == 2000
+    assert revision["truncated"] is True
+    # The live document is never truncated -- only the history excerpt is.
+    assert (await get_json(client, "/api/agents/brain"))["identity"] == "short"
+
+
 async def test_an_expert_has_no_goals(client, system):
     body = await get_json(client, "/api/agents/energy")
     assert body["is_brain"] is False
@@ -328,7 +416,7 @@ async def test_an_unknown_agent_is_a_404(client):
 
 async def test_an_unknown_agent_name_cannot_break_the_json_body(client):
     """The name is URL input, so it is encoded, never interpolated."""
-    response = await client.get('/api/agents/he%22llo')
+    response = await client.get("/api/agents/he%22llo")
     assert response.status == 404
     # Parses at all -- an f-string body would have emitted invalid JSON here.
     assert await response.json() == {"error": 'unknown agent: he"llo'}
@@ -418,7 +506,10 @@ async def test_journal_skips_a_file_pruned_between_listing_and_reading(
 
 
 async def test_trace_is_null_before_the_first_cycle(client):
-    assert await get_json(client, "/api/agents/brain/trace") == {"agent": "brain", "trace": None}
+    assert await get_json(client, "/api/agents/brain/trace") == {
+        "agent": "brain",
+        "trace": None,
+    }
 
 
 async def test_trace_renders_the_live_cycle(client, system):
@@ -443,7 +534,9 @@ async def test_trace_renders_the_live_cycle(client, system):
     assert trace["status"] is None
     assert trace["rounds"][0]["text"] == "looking"
     assert trace["rounds"][0]["tool_calls"] == [{"name": "list_facts", "args": {}}]
-    assert trace["rounds"][0]["tool_results"] == [{"name": "list_facts", "result_preview": "[]"}]
+    assert trace["rounds"][0]["tool_results"] == [
+        {"name": "list_facts", "result_preview": "[]"}
+    ]
 
 
 # -- facts -------------------------------------------------------------
@@ -468,7 +561,9 @@ async def test_an_unsafe_fact_name_is_a_400(client, name):
 
 
 async def test_a_traversing_fact_name_cannot_read_outside_the_facts_dir(client, system):
-    (system.settings.memory_root / "constitution.md").write_text("secret", encoding="utf-8")
+    (system.settings.memory_root / "constitution.md").write_text(
+        "secret", encoding="utf-8"
+    )
     response = await client.get("/api/agents/brain/facts/..%2F..%2Fconstitution")
     assert response.status == 400
     assert "secret" not in await response.text()
@@ -553,11 +648,246 @@ async def test_slack_sessions_lists_the_topic_threads(client, system):
     ]
 
 
+# -- loops -------------------------------------------------------------
+
+
+def _write_proposals(system, rows) -> None:
+    """Drop proposal files straight into the outbox.
+
+    ``Approvals.propose`` needs a live Slack to produce anything at all, and
+    these endpoints only ever read what is on disk.
+    """
+    outbox = system.memories["brain"].outbox_dir
+    outbox.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        (outbox / f"{row['id']}.json").write_text(
+            json.dumps(
+                {
+                    "kind": "sonos_say",
+                    "payload": {"text": "hi"},
+                    "reason": "why",
+                    "created": "2026-09-06T10:00:00Z",
+                    "result": "",
+                    **row,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+async def test_loops_is_empty_without_proposals(client):
+    assert await get_json(client, "/api/loops") == {"loops": []}
+
+
+async def test_loops_group_by_topic_loudest_first(client, system):
+    _write_proposals(
+        system,
+        [
+            {
+                "id": "20260906T100000-a",
+                "topic": "pool",
+                "kind": "ha_todo_add",
+                "status": "rejected",
+                "created": "2026-09-06T10:00:00Z",
+            },
+            {
+                "id": "20260906T110000-b",
+                "topic": "pool",
+                "kind": "ha_todo_add",
+                "status": "rejected",
+                "created": "2026-09-06T11:00:00Z",
+            },
+            {
+                "id": "20260906T120000-c",
+                "topic": "pool",
+                "kind": "sonos_say",
+                "status": "pending",
+                "created": "2026-09-06T12:00:00Z",
+            },
+            {
+                "id": "20260906T130000-d",
+                "topic": "heating",
+                "kind": "sonos_say",
+                "status": "executed",
+                "created": "2026-09-06T13:00:00Z",
+                "result": "spoke",
+            },
+        ],
+    )
+
+    loops = (await get_json(client, "/api/loops"))["loops"]
+
+    assert [loop["topic"] for loop in loops] == ["pool", "heating"]
+    pool = loops[0]
+    assert pool["laps"] == 3
+    assert pool["first_at"] == "2026-09-06T10:00:00Z"
+    assert pool["last_at"] == "2026-09-06T12:00:00Z"
+    assert (pool["pending"], pool["approved"], pool["rejected"]) == (1, 0, 2)
+    assert pool["kinds"] == ["ha_todo_add", "sonos_say"]
+    assert [p["id"] for p in pool["proposals"]] == [
+        "20260906T100000-a",
+        "20260906T110000-b",
+        "20260906T120000-c",
+    ]
+    assert pool["proposals"][0] == {
+        "id": "20260906T100000-a",
+        "kind": "ha_todo_add",
+        "created": "2026-09-06T10:00:00Z",
+        "status": "rejected",
+        "result": "",
+    }
+    # A topic proposed once is still a loop of one.
+    assert loops[1] == {
+        "topic": "heating",
+        "laps": 1,
+        "first_at": "2026-09-06T13:00:00Z",
+        "last_at": "2026-09-06T13:00:00Z",
+        "pending": 0,
+        "approved": 1,
+        "rejected": 0,
+        "kinds": ["sonos_say"],
+        "proposals": [
+            {
+                "id": "20260906T130000-d",
+                "kind": "sonos_say",
+                "created": "2026-09-06T13:00:00Z",
+                "status": "executed",
+                "result": "spoke",
+            }
+        ],
+    }
+
+
+async def test_loops_never_leak_the_payload_or_the_slack_ts(client, system):
+    _write_proposals(
+        system,
+        [
+            {
+                "id": "20260906T100000-a",
+                "topic": "pool",
+                "status": "pending",
+                "slack_ts": "1725_secret",
+            }
+        ],
+    )
+
+    loop = (await get_json(client, "/api/loops"))["loops"][0]
+
+    assert set(loop["proposals"][0]) == {"id", "kind", "created", "status", "result"}
+    assert "1725_secret" not in json.dumps(loop)
+
+
+async def test_loops_counts_are_a_subset_of_the_laps(client, system):
+    """``expired`` and ``failed`` are neither a checkmark nor a cross."""
+    _write_proposals(
+        system,
+        [
+            {"id": "20260906T100000-a", "topic": "pool", "status": "expired"},
+            {"id": "20260906T110000-b", "topic": "pool", "status": "failed"},
+        ],
+    )
+
+    loop = (await get_json(client, "/api/loops"))["loops"][0]
+
+    assert loop["laps"] == 2
+    assert (loop["pending"], loop["approved"], loop["rejected"]) == (0, 0, 0)
+    assert [p["status"] for p in loop["proposals"]] == ["expired", "failed"]
+
+
+async def test_loops_ties_are_ordered_by_topic(client, system):
+    _write_proposals(
+        system,
+        [
+            {"id": "20260906T100000-a", "topic": "zeta", "status": "pending"},
+            {"id": "20260906T110000-b", "topic": "alpha", "status": "pending"},
+        ],
+    )
+
+    loops = (await get_json(client, "/api/loops"))["loops"]
+    assert [loop["topic"] for loop in loops] == ["alpha", "zeta"]
+
+
+# -- usefulness --------------------------------------------------------
+
+
+async def test_usefulness_lists_every_loop_at_zero_before_any_cycle(client):
+    body = await get_json(client, "/api/usefulness")
+
+    assert [row["name"] for row in body["loops"]] == ["brain", "energy"]
+    assert body["loops"][0] == {
+        "name": "brain",
+        "total": 0,
+        "nothing": 0,
+        "note": 0,
+        "real": 0,
+        "repeat": 0,
+    }
+    assert body["totals"] == {
+        "total": 0,
+        "nothing": 0,
+        "note": 0,
+        "real": 0,
+        "repeat": 0,
+    }
+
+
+async def test_usefulness_buckets_every_status_loop_py_records(client, system):
+    system.loops["brain"].cycle_counts = {
+        "ok": 5,
+        "max_rounds": 2,
+        "error": 1,
+        "timeout": 1,
+        "no_budget": 3,
+        "paused": 1,
+        "cancelled": 1,
+    }
+    system.loops["energy"].cycle_counts = {"ok": 2}
+
+    body = await get_json(client, "/api/usefulness")
+
+    brain = body["loops"][0]
+    assert brain["real"] == 5
+    assert brain["repeat"] == 2
+    assert brain["note"] == 2
+    assert brain["nothing"] == 5
+    assert brain["total"] == 14
+    assert body["totals"] == {
+        "total": 16,
+        "nothing": 5,
+        "note": 2,
+        "real": 7,
+        "repeat": 2,
+    }
+
+
+async def test_usefulness_keeps_an_unknown_status_rather_than_dropping_it(
+    client, system
+):
+    """The buckets must always sum to ``total``, whatever ``loop.py`` adds."""
+    system.loops["brain"].cycle_counts = {"ok": 1, "brand_new_status": 4}
+
+    brain = (await get_json(client, "/api/usefulness"))["loops"][0]
+
+    assert brain["total"] == 5
+    assert brain["nothing"] == 4
+    assert brain["real"] == 1
+    assert (
+        brain["nothing"] + brain["note"] + brain["real"] + brain["repeat"]
+        == brain["total"]
+    )
+
+
 # -- method and error handling -----------------------------------------
 
 
 async def test_the_api_is_read_only(client):
-    for path in ("/api/status", "/api/agents", "/api/proposals"):
+    for path in (
+        "/api/status",
+        "/api/agents",
+        "/api/proposals",
+        "/api/loops",
+        "/api/usefulness",
+    ):
         response = await client.post(path, json={})
         assert response.status == 405, path
 

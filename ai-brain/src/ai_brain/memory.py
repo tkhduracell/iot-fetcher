@@ -16,6 +16,7 @@ half-written file.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -28,6 +29,12 @@ SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
+MAX_REVISIONS = 20
+MAX_CONTEXT_GAPS = 10
+
+# The fact sidecar lives beside the facts but is not one: ``list_facts`` globs
+# ``*.md``, so a ``.json`` name can never be mistaken for a fact.
+FACT_META_NAME = "_meta.json"
 
 
 def now_utc() -> datetime:
@@ -47,12 +54,54 @@ def _atomic_write(path: Path, body: str) -> None:
     os.replace(tmp, path)
 
 
+def slug_name(text: str) -> str:
+    """Turn free text into a name ``safe_name`` accepts.
+
+    Gaps are addressed by a slug of their question so that asking the same
+    thing twice is the same gap. Every character class outside ``SAFE_NAME``
+    collapses to ``-``; the trailing strip matters because truncating to the
+    64-char limit can land mid-separator, which ``safe_name`` would reject.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:64].strip("-.")
+    return safe_name(slug or "gap")
+
+
 @dataclass
 class Note:
     path: Path
     sender: str
     body: str
     created: datetime
+
+
+@dataclass(frozen=True)
+class FactStat:
+    """One fact, with enough metadata for a reader to judge its freshness."""
+
+    name: str
+    written_at: float
+    first_written_at: float
+    writes: int
+
+
+@dataclass(frozen=True)
+class Revision:
+    """A previous identity/goals body, kept at the moment it was replaced."""
+
+    at: float
+    body: str
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A known unknown: something the agent could not determine and cares about."""
+
+    id: str
+    question: str
+    why: str
+    opened_at: float
+    closed_at: float | None
+    answer: str
 
 
 class MemoryDir:
@@ -89,6 +138,18 @@ class MemoryDir:
     @property
     def outbox_dir(self) -> Path:
         return self.root / "outbox"
+
+    @property
+    def gaps_dir(self) -> Path:
+        return self.root / "gaps"
+
+    @property
+    def history_dir(self) -> Path:
+        return self.root / "history"
+
+    @property
+    def fact_meta_path(self) -> Path:
+        return self.facts_dir / FACT_META_NAME
 
     @property
     def persona_path(self) -> Path:
@@ -128,11 +189,62 @@ class MemoryDir:
 
     def rewrite_identity(self, body: str) -> None:
         self._require_brain("rewrite_identity")
+        self._keep_revision("identity", self.persona_path, body)
         _atomic_write(self.persona_path, body)
 
     def rewrite_goals(self, body: str) -> None:
         self._require_brain("rewrite_goals")
+        self._keep_revision("goals", self.goals_path, body)
         _atomic_write(self.goals_path, body)
+
+    def identity_history(self, limit: int = 10) -> list[Revision]:
+        return self._history("identity", limit)
+
+    def goals_history(self, limit: int = 10) -> list[Revision]:
+        return self._history("goals", limit)
+
+    def _keep_revision(self, kind: str, path: Path, body: str) -> None:
+        """Park the body that is about to be overwritten.
+
+        Two guards, both about noise: an identical rewrite is not drift and
+        would otherwise fill the history with duplicates, and an empty (or
+        absent) previous body has nothing worth keeping -- ``seed_from``
+        creates ``goals.md`` empty, so the very first real goals would
+        otherwise record a blank revision.
+        """
+        previous = self._read(path)
+        if not previous or previous == body:
+            return
+        now = self.clock()
+        directory = self.history_dir / safe_name(kind)
+        directory.mkdir(parents=True, exist_ok=True)
+        # A frozen or coarse clock can hand out the same millisecond twice;
+        # the filename is both the identity and the ordering of the revision,
+        # so step past everything already there. Stepping past the *highest*
+        # stamp, not just past collisions, is what keeps pruning honest: a
+        # stamp freed by ``_prune_history`` would otherwise be reused and the
+        # revision just written would be the next one pruned.
+        stamp = max([int(now.timestamp() * 1000)] + [s + 1 for s in _stamps(directory)])
+        _atomic_write(directory / f"{stamp}.md", previous)
+        self._prune_history(directory)
+
+    @staticmethod
+    def _prune_history(directory: Path) -> None:
+        for stamp in sorted(_stamps(directory), reverse=True)[MAX_REVISIONS:]:
+            (directory / f"{stamp}.md").unlink()
+
+    def _history(self, kind: str, limit: int) -> list[Revision]:
+        directory = self.history_dir / safe_name(kind)
+        if not directory.exists():
+            return []
+        # ``_stamps`` drops anything whose name is not a stamp: a stray file in
+        # the history dir is not a revision, and a reader of the brain's own
+        # drift must never blow up over one.
+        stamps = sorted(_stamps(directory), reverse=True)[: max(limit, 0)]
+        return [
+            Revision(at=s / 1000, body=(directory / f"{s}.md").read_text(encoding="utf-8"))
+            for s in stamps
+        ]
 
     # -- journal -------------------------------------------------------
 
@@ -169,6 +281,7 @@ class MemoryDir:
     def write_fact(self, name: str, body: str) -> None:
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.facts_dir / f"{safe_name(name)}.md", body)
+        self._bump_fact_meta(name)
 
     def read_fact(self, name: str) -> str | None:
         path = self.facts_dir / f"{safe_name(name)}.md"
@@ -188,12 +301,173 @@ class MemoryDir:
         if not path.exists():
             return False
         path.unlink()
+        meta = self._read_fact_meta()
+        if meta.pop(name, None) is not None:
+            self._write_fact_meta(meta)
         return True
 
     def list_facts(self) -> list[str]:
         if not self.facts_dir.exists():
             return []
         return sorted(p.stem for p in self.facts_dir.glob("*.md"))
+
+    def fact_stats(self) -> list[FactStat]:
+        """Every fact with its age and how often it has been rewritten.
+
+        The sidecar is advisory: the fact files are the truth, so anything
+        missing or unreadable degrades to "written once, just now" instead of
+        failing. A reader asking what the brain knows must never get an
+        exception because a metadata file was half-written or hand-edited.
+        """
+        meta = self._read_fact_meta()
+        stats: list[FactStat] = []
+        for name in self.list_facts():
+            path = self.facts_dir / f"{name}.md"
+            try:
+                written_at = path.stat().st_mtime
+            except OSError:
+                # Deleted between the listing and the stat; it is simply gone.
+                continue
+            entry = meta.get(name)
+            first, writes = written_at, 1
+            if isinstance(entry, dict):
+                try:
+                    first = float(entry.get("first_written_at", written_at))
+                    writes = max(int(entry.get("writes", 1)), 1)
+                except (TypeError, ValueError):
+                    first, writes = written_at, 1
+            stats.append(
+                FactStat(
+                    name=name,
+                    written_at=written_at,
+                    first_written_at=first,
+                    writes=writes,
+                )
+            )
+        stats.sort(key=lambda s: s.name)
+        return stats
+
+    def _read_fact_meta(self) -> dict:
+        try:
+            data = json.loads(self.fact_meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _write_fact_meta(self, meta: dict) -> None:
+        self.facts_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(self.fact_meta_path, json.dumps(meta, indent=2, sort_keys=True))
+
+    def _bump_fact_meta(self, name: str) -> None:
+        meta = self._read_fact_meta()
+        entry = meta.get(name)
+        now = self.clock().timestamp()
+        if isinstance(entry, dict):
+            try:
+                first = float(entry.get("first_written_at", now))
+                writes = max(int(entry.get("writes", 0)), 0) + 1
+            except (TypeError, ValueError):
+                first, writes = now, 1
+        else:
+            first, writes = now, 1
+        meta[name] = {"first_written_at": first, "writes": writes}
+        self._write_fact_meta(meta)
+
+    # -- gaps ----------------------------------------------------------
+
+    def open_gap(self, question: str, why: str = "") -> Gap:
+        """Record a known unknown, keyed by a slug of the question.
+
+        Idempotent on that slug: an agent that keeps failing to answer the
+        same question must not grow one gap per cycle, so an already-open gap
+        comes back untouched. A closed one reopens instead -- the question
+        came back, and the old answer no longer holds.
+        """
+        gap_id = slug_name(question)
+        path = self.gaps_dir / f"{gap_id}.json"
+        existing = self._read_gap(path)
+        if existing is not None and existing.closed_at is None:
+            return existing
+        gap = Gap(
+            id=gap_id,
+            question=question,
+            why=why or (existing.why if existing else ""),
+            # Reopening keeps the original opening time: the point of the
+            # gap is how long this has been unknown, not when it last recurred.
+            opened_at=existing.opened_at if existing else self.clock().timestamp(),
+            closed_at=None,
+            answer="",
+        )
+        self._write_gap(gap)
+        return gap
+
+    def close_gap(self, gap_id: str, answer: str) -> bool:
+        """Answer a gap. False when there is no such gap to answer."""
+        path = self.gaps_dir / f"{safe_name(gap_id)}.json"
+        gap = self._read_gap(path)
+        if gap is None:
+            return False
+        self._write_gap(
+            Gap(
+                id=gap.id,
+                question=gap.question,
+                why=gap.why,
+                opened_at=gap.opened_at,
+                closed_at=self.clock().timestamp(),
+                answer=answer,
+            )
+        )
+        return True
+
+    def gaps(self, include_closed: bool = False) -> list[Gap]:
+        if not self.gaps_dir.exists():
+            return []
+        found: list[Gap] = []
+        for path in self.gaps_dir.glob("*.json"):
+            gap = self._read_gap(path)
+            # A corrupt gap file hides one known unknown; raising here would
+            # hide every fact and note in the context alongside it.
+            if gap is None:
+                continue
+            if include_closed or gap.closed_at is None:
+                found.append(gap)
+        found.sort(key=lambda g: (g.opened_at, g.id), reverse=True)
+        return found
+
+    def _write_gap(self, gap: Gap) -> None:
+        self.gaps_dir.mkdir(parents=True, exist_ok=True)
+        body = {
+            "id": gap.id,
+            "question": gap.question,
+            "why": gap.why,
+            "opened_at": gap.opened_at,
+            "closed_at": gap.closed_at,
+            "answer": gap.answer,
+        }
+        _atomic_write(self.gaps_dir / f"{gap.id}.json", json.dumps(body, indent=2))
+
+    @staticmethod
+    def _read_gap(path: Path) -> Gap | None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or not data.get("question"):
+            return None
+        try:
+            opened_at = float(data.get("opened_at", 0.0))
+            closed = data.get("closed_at")
+            closed_at = None if closed is None else float(closed)
+        except (TypeError, ValueError):
+            return None
+        return Gap(
+            id=str(data.get("id") or path.stem),
+            question=str(data["question"]),
+            why=str(data.get("why") or ""),
+            opened_at=opened_at,
+            closed_at=closed_at,
+            answer=str(data.get("answer") or ""),
+        )
 
     # -- inbox ---------------------------------------------------------
 
@@ -294,6 +568,15 @@ class MemoryDir:
             for n in (self.unread_notes() if notes is None else notes)
         )
         parts.append(f"# Inbox\n{inbox}")
+        open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
+        # Silence when there is nothing unknown: an empty heading is pure
+        # prompt budget, and the cap is there because a brain that opens gaps
+        # faster than it closes them would otherwise crowd out the journal.
+        if open_gaps:
+            luckor = "\n".join(
+                f"- {g.question}" + (f" ({g.why})" if g.why else "") for g in open_gaps
+            )
+            parts.append(f"## Öppna luckor\n{luckor}")
         return "\n\n".join(parts)
 
     # -- housekeeping --------------------------------------------------
@@ -336,6 +619,17 @@ class MemoryDir:
         if not sender:
             return None
         return Note(path=path, sender=sender, body=body, created=created)
+
+
+def _stamps(directory: Path) -> list[int]:
+    """Epoch-ms revision stamps in ``directory``, ignoring anything else in it."""
+    stamps = []
+    for path in directory.glob("*.md"):
+        try:
+            stamps.append(int(path.stem))
+        except ValueError:
+            continue
+    return stamps
 
 
 def _iso(dt: datetime) -> str:
