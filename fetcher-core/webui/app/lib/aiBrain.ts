@@ -816,6 +816,44 @@ export function groupKey(p: Proposal): string {
     .trim()}`;
 }
 
+/** The words of a proposal that identify *what* it is about.
+ *
+ *  Parentheticals go first: the deployed brain wrote "Replace Roborock S6 MaxV
+ *  main brush (time left: 6.1 hours)" and "Replace Roborock S6 MaxV main brush"
+ *  as separate proposals, and a countdown baked into the text must not make two
+ *  sayings of one thing look like two things. Stop words go too, so word order
+ *  and filler ("main brush on X" vs "X main brush") stop mattering. */
+export function contentWords(text: string): Set<string> {
+  const STOP = new Set(['the', 'a', 'an', 'on', 'in', 'of', 'to', 'for', 'and', 'with', 'i', 'på', 'och', 'en', 'ett', 'den', 'det']);
+  return new Set(
+    String(text ?? '')
+      .toLowerCase()
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .split(' ')
+      .filter((w) => w.length > 1 && !STOP.has(w)),
+  );
+}
+
+/** Jaccard overlap of two word sets, 0..1. Two empty sets are not "identical" —
+ *  a proposal with no words left is unidentifiable, not a match for everything. */
+export function wordOverlap(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const w of a) if (b.has(w)) shared += 1;
+  return shared / (a.size + b.size - shared);
+}
+
+/** How alike two proposals have to read before they are one thing said twice.
+ *
+ *  0.75, and the margin is thin on purpose. The widest real pair -- "Replace
+ *  Roborock S6 MaxV main brush" against "Replace main brush on Roborock S6 MaxV
+ *  vacuum cleaner" -- shares six of eight content words, exactly 0.75. Lower it
+ *  to 0.7 and "main brush" starts merging with "side brush", which are two
+ *  different parts and two real errands. So this is the loosest threshold that
+ *  still tells those apart, and both cases are pinned by tests. */
+const SAME_THING = 0.75;
+
 /** Collapse repeated proposals by what they actually say.
  *
  *  The deployed wall printed "Replace Roborock S6 MaxV main brush" three times
@@ -824,24 +862,35 @@ export function groupKey(p: Proposal): string {
  *  one with a count. Input order is preserved (the API serves newest first) and
  *  a group takes the position of its newest member. */
 export function groupProposals(proposals: Proposal[]): ProposalGroup[] {
-  const byKey = new Map<string, ProposalGroup>();
+  // An exact key alone was not enough. The three brush proposals on the real
+  // wall differed by a parenthetical countdown and by word order, so they hashed
+  // to three keys and printed as three events -- the repetition this view exists
+  // to expose, reproduced inside it. So: exact key first (cheap, and it settles
+  // the identical ones), then a similarity pass over the groups of the same
+  // kind, which is quadratic in the number of *groups* and so bounded by what a
+  // screen shows.
+  const groups: (ProposalGroup & { words: Set<string> })[] = [];
   for (const p of proposals ?? []) {
     const key = groupKey(p);
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.count += 1;
-      existing.members.push(p);
+    const words = contentWords(proposalSentence(p));
+    const match =
+      groups.find((g) => g.key === key) ??
+      groups.find((g) => g.latest.kind === p.kind && wordOverlap(g.words, words) >= SAME_THING);
+    if (match) {
+      match.count += 1;
+      match.members.push(p);
       continue;
     }
-    byKey.set(key, {
+    groups.push({
       key,
       latest: p,
       sentence: proposalSentence(p),
       count: 1,
       members: [p],
+      words,
     });
   }
-  return [...byKey.values()];
+  return groups.map(({ words: _words, ...group }) => group);
 }
 
 // ------------------------------------------------- loops

@@ -506,6 +506,32 @@ describe('groupProposals', () => {
     expect(groups[0].sentence).toBe('Replace Roborock S6 MaxV main brush');
   });
 
+  it('collapses the three brush variants the deployed brain actually wrote', () => {
+    // Verbatim from the wall on the tablet. They differ by a parenthetical
+    // countdown and by word order, which an exact-match key does not survive --
+    // the first version of this grouping shipped green and still printed three
+    // lines here.
+    const groups = groupProposals([
+      p('c', 'Replace main brush on Roborock S6 MaxV vacuum cleaner (time left: 6.1 hours)'),
+      p('b', 'Replace Roborock S6 MaxV main brush'),
+      p('a', 'Replace Roborock S6 MaxV main brush (time left: 6.1 hours)'),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].count).toBe(3);
+  });
+
+  it('keeps two different parts of the same machine apart', () => {
+    // The near-miss that decides the threshold: these share every word but one,
+    // and they are two different errands.
+    const groups = groupProposals([
+      p('a', 'Replace Roborock S6 MaxV main brush'),
+      p('b', 'Replace Roborock S6 MaxV side brush'),
+      p('c', 'Empty the Roborock S6 MaxV dust bin'),
+    ]);
+    expect(groups).toHaveLength(3);
+  });
+
   it('keeps different actions, and different executors, apart', () => {
     const groups = groupProposals([
       p('a', 'Byt borste'),

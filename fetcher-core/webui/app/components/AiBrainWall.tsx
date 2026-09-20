@@ -134,10 +134,11 @@ const AiBrainWall: React.FC = () => {
   const offline = Boolean((status.error || agents.error) && !anyData);
   const stale = Boolean((status.error || agents.error) && anyData);
 
-  const clock = new Date(now * 1000).toLocaleTimeString('sv-SE', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  // Before the clock has mounted there is no honest time to show, and printing
+  // the server's would be a hydration mismatch on the largest text on the wall.
+  const clock = now
+    ? new Date(now * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+    : '––:––';
 
   /** The single machine line. Everything here is deliberately unreadable from
    *  across the room: it is for the person standing at the tablet. */
