@@ -166,13 +166,19 @@ class Approvals:
             self._finish(proposal, "failed", NOT_CONFIGURED)
             raise RuntimeError("slack not configured")
 
+        summary = (
+            f"Proposal {proposal.id} ({kind}): {reason}\n\n"
+            f"```{json.dumps(payload)}```\n"
+            "React ✅ to approve, ❌ to reject, or use the buttons below."
+        )
         try:
+            # The same text goes in both places on purpose: as ``text`` it is
+            # the notification and the fallback, and as a section block it is
+            # what is actually rendered beside the buttons.
             posted = await self.on_message(
                 topic,
-                f"Proposal {proposal.id} ({kind}): {reason}\n\n"
-                f"```{json.dumps(payload)}```\n"
-                "React ✅ to approve, ❌ to reject, or use the buttons below.",
-                _approval_blocks(proposal.id),
+                summary,
+                _approval_blocks(proposal.id, summary),
             )
         except Exception as exc:
             # Anything the poster raises -- the hourly cap, a transport error,
@@ -337,8 +343,16 @@ class Approvals:
         return proposal
 
 
-def _approval_blocks(proposal_id: str) -> list[dict]:
-    """Block Kit actions block for a proposal's message.
+def _approval_blocks(proposal_id: str, summary: str) -> list[dict]:
+    """Block Kit blocks for a proposal's message: what it asks, then the buttons.
+
+    The section block is not decoration. Once a message carries ``blocks``,
+    Slack renders those and nothing else -- the top-level ``text`` becomes the
+    notification and the fallback for clients that cannot draw blocks, and
+    disappears from the conversation. Posting only an actions block therefore
+    published a pair of buttons with no proposal above them: the kind, the
+    reason and the payload were all in ``text``, and none of it was on screen.
+    Approving blind is worse than not being asked, so the text ships as a block.
 
     ``value`` carries the proposal id rather than the action id, because the
     id is per-message but the two actions (``APPROVE_ACTION``/
@@ -346,6 +360,10 @@ def _approval_blocks(proposal_id: str) -> list[dict]:
     echoes both the clicked action's id and its value back on ``block_actions``.
     """
     return [
+        # Slack rejects a section whose text exceeds 3000 characters, which
+        # would fail the post outright and leave the proposal unaskable; a
+        # payload that long is already unreadable, so it is cut instead.
+        {"type": "section", "text": {"type": "mrkdwn", "text": _fit_section(summary)}},
         {
             "type": "actions",
             "elements": [
@@ -366,6 +384,17 @@ def _approval_blocks(proposal_id: str) -> list[dict]:
             ],
         }
     ]
+
+
+#: Slack's hard limit on a section block's text.
+SECTION_LIMIT = 3000
+
+
+def _fit_section(text: str) -> str:
+    """``text`` cut to what a section block will accept, ellipsis included."""
+    if len(text) <= SECTION_LIMIT:
+        return text
+    return text[: SECTION_LIMIT - 1] + "…"
 
 
 def _iso(dt: datetime) -> str:
