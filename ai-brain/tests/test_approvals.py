@@ -149,10 +149,42 @@ async def test_propose_posts_approve_and_reject_buttons(approvals, slack):
 
     p = await approvals.propose("sonos_say", {"text": "hi"}, "user asked", "#home")
 
-    [actions_block] = slack.blocks[0]
+    [_section, actions_block] = slack.blocks[0]
     assert actions_block["type"] == "actions"
     buttons = {b["action_id"]: b["value"] for b in actions_block["elements"]}
     assert buttons == {APPROVE_ACTION: p.id, REJECT_ACTION: p.id}
+
+
+async def test_propose_renders_the_ask_beside_the_buttons(approvals, slack):
+    """A message with blocks renders only its blocks.
+
+    Slack drops the top-level ``text`` from the conversation once ``blocks`` is
+    present, so the kind, the reason and the payload have to be a block of their
+    own. Without this the DM was two buttons and nothing to read -- which is
+    what shipped, and what nobody could approve.
+    """
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "user asked", "#home")
+
+    [section, _actions] = slack.blocks[0]
+    assert section["type"] == "section"
+    rendered = section["text"]["text"]
+    assert p.id in rendered
+    assert "sonos_say" in rendered
+    assert "user asked" in rendered
+    assert '{"text": "hi"}' in rendered
+
+
+async def test_a_huge_payload_still_fits_a_section(approvals, slack):
+    """Slack rejects a section over 3000 chars, which would fail the post and
+    leave a proposal nobody was ever asked about."""
+    from ai_brain.approvals import SECTION_LIMIT
+
+    await approvals.propose("sonos_say", {"text": "x" * 6000}, "long", "#home")
+
+    [section, _actions] = slack.blocks[0]
+    rendered = section["text"]["text"]
+    assert len(rendered) <= SECTION_LIMIT
+    assert rendered.endswith("…")
 
 
 async def test_propose_without_slack_is_failed_not_pending(brain_dir, executors, moving_clock):
