@@ -11,6 +11,7 @@ import {
   quotaTone,
   shortModel,
   quotaCounts,
+  modelAvailability,
   compactTokens,
   formatUptime,
   truncate,
@@ -29,6 +30,7 @@ import {
   usefulShare,
   freshnessTone,
   type AgentSummary,
+  type LanState,
   type LedgerKey,
   type Loop,
   type Proposal,
@@ -249,6 +251,101 @@ describe('shortModel', () => {
   });
 });
 
+describe('modelAvailability', () => {
+  const now = 1_000;
+
+  it('is available for a cloud key with no ledger entry', () => {
+    expect(modelAvailability('gemini:gemini-3.8-flash', [], null, now)).toBe('available');
+  });
+
+  it('is blocked when the ledger entry is blocked_until in the future', () => {
+    const keys: LedgerKey[] = [
+      {
+        key: 'gemini:gemini-3.8-flash',
+        requests_day: 3,
+        tokens_day: 300,
+        requests_limit: 5,
+        tokens_limit: 5000,
+        requests_remaining: 0.4,
+        tokens_remaining: 0.9,
+        consecutive_429: 3,
+        blocked_until: now + 3600,
+        disabled_until: null,
+        recent_requests: 0,
+      },
+    ];
+    expect(modelAvailability('gemini:gemini-3.8-flash', keys, null, now)).toBe('blocked');
+  });
+
+  it('is available once blocked_until has passed', () => {
+    const keys: LedgerKey[] = [
+      {
+        key: 'gemini:gemini-3.8-flash',
+        requests_day: 3,
+        tokens_day: 300,
+        requests_limit: 5,
+        tokens_limit: 5000,
+        requests_remaining: 0.4,
+        tokens_remaining: 0.9,
+        consecutive_429: 3,
+        blocked_until: now - 1,
+        disabled_until: null,
+        recent_requests: 0,
+      },
+    ];
+    expect(modelAvailability('gemini:gemini-3.8-flash', keys, null, now)).toBe('available');
+  });
+
+  it('is no_lan_host for a lan: entry when the finder found nothing', () => {
+    const lanHost: LanState = {
+      enabled: true,
+      hosts: [{ model: 'qwen3-coder:30b', host: null, found_at: null, subnets: [] }],
+    };
+    expect(modelAvailability('lan:qwen3-coder:30b', [], lanHost, now)).toBe('no_lan_host');
+  });
+
+  it('is no_lan_host for a lan: entry with no lan_host data at all', () => {
+    expect(modelAvailability('lan:qwen3-coder:30b', [], null, now)).toBe('no_lan_host');
+  });
+
+  it('is available for a lan: entry the finder actually found', () => {
+    const lanHost: LanState = {
+      enabled: true,
+      hosts: [
+        {
+          model: 'qwen3-coder:30b',
+          host: 'http://192.168.68.69:11434',
+          found_at: now - 60,
+          subnets: [],
+        },
+      ],
+    };
+    expect(modelAvailability('lan:qwen3-coder:30b', [], lanHost, now)).toBe('available');
+  });
+
+  it('is unaffected by an unmetered lan: key that the ledger never blocks', () => {
+    // lan: providers are UNMETERED (limits_from_settings), so a ledger check
+    // alone would call this "available" even with no host -- the bug this
+    // helper exists to fix.
+    const keys: LedgerKey[] = [
+      {
+        key: 'lan:qwen3-coder:30b',
+        requests_day: 40,
+        tokens_day: 40000,
+        requests_limit: 10000,
+        tokens_limit: 100000000,
+        requests_remaining: 0.996,
+        tokens_remaining: 0.9996,
+        consecutive_429: 0,
+        blocked_until: null,
+        disabled_until: null,
+        recent_requests: 2,
+      },
+    ];
+    expect(modelAvailability('lan:qwen3-coder:30b', keys, null, now)).toBe('no_lan_host');
+  });
+});
+
 describe('quotaCounts', () => {
   it('renders used over limit', () => {
     expect(quotaCounts(11, 200)).toBe('11/200');
@@ -261,6 +358,12 @@ describe('quotaCounts', () => {
 
   it('treats a missing numerator as zero', () => {
     expect(quotaCounts(undefined as unknown as number, 200)).toBe('0/200');
+  });
+
+  it('shows an infinity denominator for an unmetered key regardless of its limit', () => {
+    // A lan: key carries UNMETERED's real (huge) Limits, not 0 -- unmetered
+    // must win over the numeric limit or this would still print "2/1000000".
+    expect(quotaCounts(2, 1_000_000, true)).toBe('2/∞');
   });
 });
 
