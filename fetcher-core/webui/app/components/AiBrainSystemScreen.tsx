@@ -19,6 +19,7 @@ import {
   isExecuted,
   isPending,
   isRejected,
+  modelAvailability,
   proposalSentence,
   shortModel,
 } from '../lib/aiBrain';
@@ -242,7 +243,8 @@ const AiBrainSystemScreen: React.FC = () => {
                 className="text-[12px] tabular-nums break-words"
                 style={{ fontFamily: MONO, color: WALL.inkFaint }}
               >
-                {shortModel(k.key)} · 0 av {k.requests_limit || '–'} anrop
+                {shortModel(k.key)} · 0 av{' '}
+                {k.key.startsWith('lan:') ? '∞' : k.requests_limit || '–'} anrop
               </li>
             ))}
           </ul>
@@ -251,7 +253,7 @@ const AiBrainSystemScreen: React.FC = () => {
 
       {/* ------------------------------------------------------ model chain */}
       <Section
-        title="Modellkedja"
+        title="Modeller"
         accent={WALL.sage}
         show={(settings?.llm_chain?.length ?? 0) > 0}
         empty={
@@ -260,37 +262,42 @@ const AiBrainSystemScreen: React.FC = () => {
           </EmptyState>
         }
       >
-        <ol className="flex flex-col gap-1 list-none m-0 p-0">
+        {/* One row: the fallback order as a chain of badges, each toned by
+            live availability -- not the model's position, which never
+            changes and so never needs its own colour. Arrows read the same
+            direction the chain is actually tried in. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 min-w-0">
           {(settings?.llm_chain ?? []).map((model, i) => {
-            const entry = (ledger.keys ?? []).find((k) => k.key === model);
-            const blocked = Boolean(
-              entry && ((entry.blocked_until ?? 0) > now || (entry.disabled_until ?? 0) > now),
-            );
+            // "Available" here means nothing this page knows of blocks the
+            // entry -- a lan: model still needs the host to actually answer
+            // once called, and a blocked cloud key can still be tried again
+            // after its cooldown. See modelAvailability's own docstring.
+            const availability = modelAvailability(model, ledger.keys, s?.lan_host, now);
+            const tone = availability === 'available' ? 'ok' : 'error';
+            const reason =
+              availability === 'no_lan_host'
+                ? 'ingen LAN-värd hittad'
+                : availability === 'blocked'
+                  ? 'otillgänglig'
+                  : 'tillgänglig';
             return (
-              <li key={`${model}-${i}`} className="flex items-baseline gap-3 min-w-0">
-                <span
-                  className="text-[12px] tabular-nums shrink-0"
-                  style={{ fontFamily: MONO, color: WALL.inkFaint }}
-                >
-                  {i + 1}
-                </span>
-                <span
-                  className="text-[15px] break-words"
-                  style={{ fontFamily: MONO, color: blocked ? WALL.rose : WALL.ink }}
-                  title={model}
-                >
-                  {shortModel(model)}
-                </span>
-                {blocked && <Pill tone="error">otillgänglig</Pill>}
-                {!entry && (
-                  <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
-                    ingen huvudbokspost
+              <React.Fragment key={`${model}-${i}`}>
+                {i > 0 && (
+                  <span
+                    aria-hidden
+                    className="text-[13px] shrink-0"
+                    style={{ fontFamily: MONO, color: WALL.inkFaint }}
+                  >
+                    →
                   </span>
                 )}
-              </li>
+                <Pill tone={tone} title={`${model} · ${reason}`}>
+                  {shortModel(model)}
+                </Pill>
+              </React.Fragment>
             );
           })}
-        </ol>
+        </div>
       </Section>
 
       {/* ---------------------------------------------------------- loops */}
@@ -365,13 +372,14 @@ const AiBrainSystemScreen: React.FC = () => {
             {s?.pause_file || '–'}
             {s?.paused ? ' · finns' : ' · saknas (hjärnan går)'}
           </Field>
-          {s?.lan_host?.enabled && (
-            <Field term="LAN-modeller" className="col-span-2 sm:col-span-3">
-              {(s.lan_host.hosts ?? []).length === 0
-                ? 'ingen värd hittad'
-                : (s.lan_host.hosts ?? [])
-                    .map((h) => `${shortModel(h.model)} → ${h.host ?? 'ej hittad'}`)
-                    .join(' · ')}
+          {/* Whether a LAN model is reachable is already a pill in "Modeller"
+              above; this is only the address, for a model that was found. */}
+          {s?.lan_host?.enabled && (s.lan_host.hosts ?? []).some((h) => h.host) && (
+            <Field term="LAN-värdar" className="col-span-2 sm:col-span-3">
+              {(s.lan_host.hosts ?? [])
+                .filter((h) => h.host)
+                .map((h) => `${shortModel(h.model)} → ${h.host}`)
+                .join(' · ')}
             </Field>
           )}
         </dl>

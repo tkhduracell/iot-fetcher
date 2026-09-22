@@ -55,10 +55,15 @@ export const LedgerKeyRow: React.FC<{ entry: LedgerKey; now: number }> = ({ entr
   const disabled = entry.disabled_until !== null && entry.disabled_until > now;
   const unusable = blocked || disabled;
 
+  // A `lan:` key carries the UNMETERED Limits (rpm/tpm/rpd all huge, never 0)
+  // -- the ledger needs some real bucket to record against -- so its bar and
+  // count would otherwise read as a normal, nearly-empty budget rather than
+  // no real cap at all.
+  const unmetered = entry.key.startsWith('lan:');
   const reqLimit = entry.requests_limit;
   const tokLimit = entry.tokens_limit;
-  const reqFraction = spentFraction(entry.requests_day, reqLimit);
-  const tokFraction = spentFraction(entry.tokens_day, tokLimit);
+  const reqFraction = unmetered ? 0 : spentFraction(entry.requests_day, reqLimit);
+  const tokFraction = unmetered ? 0 : spentFraction(entry.tokens_day, tokLimit);
 
   // A key that cannot be called is the loudest thing on the row whatever its
   // numbers say — quotaTone only knows about the budget.
@@ -102,23 +107,23 @@ export const LedgerKeyRow: React.FC<{ entry: LedgerKey; now: number }> = ({ entr
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 min-w-0">
         <div className="flex items-center gap-3 min-w-0">
-          <Bar fraction={reqFraction} color={toneColor(reqTone)} known={reqLimit > 0} />
+          <Bar fraction={reqFraction} color={toneColor(reqTone)} known={!unmetered && reqLimit > 0} />
           <span
             className="text-[12px] tabular-nums whitespace-nowrap shrink-0"
             style={{ fontFamily: MONO, color: WALL.inkDim }}
-            title="Anrop förbrukade av dygnets budget"
+            title={unmetered ? 'Ingen dygnsbudget för lan: — ohindrad' : 'Anrop förbrukade av dygnets budget'}
           >
-            {quotaCounts(entry.requests_day, reqLimit)} anrop
+            {quotaCounts(entry.requests_day, reqLimit, unmetered)} anrop
           </span>
         </div>
         <div className="flex items-center gap-3 min-w-0">
-          <Bar fraction={tokFraction} color={toneColor(tokTone)} known={tokLimit > 0} />
+          <Bar fraction={tokFraction} color={toneColor(tokTone)} known={!unmetered && tokLimit > 0} />
           <span
             className="text-[12px] tabular-nums whitespace-nowrap shrink-0"
             style={{ fontFamily: MONO, color: WALL.inkDim }}
-            title="Tokens förbrukade av dygnets budget"
+            title={unmetered ? 'Ingen dygnsbudget för lan: — ohindrad' : 'Tokens förbrukade av dygnets budget'}
           >
-            {compactTokens(entry.tokens_day)}/{tokLimit > 0 ? compactTokens(tokLimit) : '–'} tok
+            {compactTokens(entry.tokens_day)}/{unmetered ? '∞' : tokLimit > 0 ? compactTokens(tokLimit) : '–'} tok
           </span>
         </div>
       </div>

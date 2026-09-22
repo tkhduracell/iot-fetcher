@@ -334,9 +334,54 @@ export function shortModel(key: string | null | undefined): string {
   return s || '–';
 }
 
-/** "11/200" — the compact counts beside a single quota bar. */
-export function quotaCounts(used: number, limit: number): string {
+/** Why a chain entry cannot answer right now, or that it can.
+ *
+ *  "available" only means nothing here is known to block it -- an unmetered
+ *  `lan:` host can still fail if reached (never discovered again after a
+ *  restart, network down), and a "blocked" cloud key can still be tried once
+ *  its cooldown lapses. This is a status label, not a promise. */
+export type ModelAvailability = 'available' | 'no_lan_host' | 'blocked';
+
+/** Whether one `llm_chain` entry can actually be reached right now.
+ *
+ *  A `lan:` entry is served by an `OllamaFinder` that must have located a
+ *  host on the network -- and that provider is unmetered (see
+ *  `limits_from_settings` in ai_brain/llm/__init__.py), so its ledger bucket
+ *  is almost never `blocked_until`. Reading only the ledger, as the model
+ *  chain list used to, renders a `lan:` model with no host found as plain
+ *  "available": the ledger genuinely has nothing against it, but there is
+ *  nowhere for a call to go. `lan_host.hosts` is the only source for that. */
+export function modelAvailability(
+  model: string,
+  ledgerKeys: LedgerKey[] | null | undefined,
+  lanHost: LanState | null | undefined,
+  now: number,
+): ModelAvailability {
+  const colon = model.indexOf(':');
+  const provider = colon === -1 ? model : model.slice(0, colon);
+  if (provider === 'lan') {
+    const bareModel = colon === -1 ? '' : model.slice(colon + 1);
+    const host = (lanHost?.hosts ?? []).find((h) => h.model === bareModel);
+    if (!host || !host.host) return 'no_lan_host';
+    return 'available';
+  }
+  const entry = (ledgerKeys ?? []).find((k) => k.key === model);
+  const blocked = Boolean(
+    entry && ((entry.blocked_until ?? 0) > now || (entry.disabled_until ?? 0) > now),
+  );
+  return blocked ? 'blocked' : 'available';
+}
+
+/** "11/200" — the compact counts beside a single quota bar.
+ *
+ *  `unmetered` is for a `lan:` key: it still carries a real (huge) `Limits`
+ *  value -- the ledger needs some bucket to record against -- so `limit` here
+ *  is never 0 or missing, and without this flag the count would print a
+ *  denominator like "2/1000000" that looks like a real, nearly-empty budget
+ *  rather than what it is: no budget at all. */
+export function quotaCounts(used: number, limit: number, unmetered = false): string {
   const u = Number.isFinite(used) ? used : 0;
+  if (unmetered) return `${u}/∞`;
   if (!Number.isFinite(limit) || limit <= 0) return `${u}/–`;
   return `${u}/${limit}`;
 }
