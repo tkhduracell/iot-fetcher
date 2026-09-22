@@ -167,7 +167,7 @@ class Approvals:
             raise RuntimeError("slack not configured")
 
         summary = (
-            f"Proposal {proposal.id} ({kind}): {reason}\n\n"
+            f"{_proposal_line(proposal)}\n\n"
             f"```{json.dumps(payload)}```\n"
             "React ✅ to approve, ❌ to reject, or use the buttons below."
         )
@@ -341,6 +341,37 @@ class Approvals:
         self._locks.pop(proposal.id, None)
         self.brain.drop_note(NOTE_SENDER, f"proposal {proposal.id} {status}: {result}")
         return proposal
+
+
+def _proposal_line(proposal: Proposal) -> str:
+    """"Proposal <id> (<kind>): <reason>" -- shared by the initial post and
+    the resolved edit, so the two never drift apart."""
+    return f"Proposal {proposal.id} ({proposal.kind}): {proposal.reason}"
+
+
+#: One line per terminal status, appended to the resolved message. Deliberately
+#: not built from the status string itself (e.g. "blocked_quiet_hours" is not
+#: a sentence): every status a reaction/button path can produce gets its own
+#: wording, and STATUSES growing without this dict growing too is a KeyError,
+#: not a silently blank line.
+RESOLVED_WORDING: dict[str, str] = {
+    "executed": "✅ Approved and run.",
+    "rejected": "❌ Rejected.",
+    "expired": "⌛ Expired before anyone reacted.",
+    "blocked_quiet_hours": "🌙 Approved, but blocked by quiet hours.",
+    "failed": "⚠️ Approved, but it failed.",
+}
+
+
+def resolved_text(proposal: Proposal) -> str:
+    """What a resolved proposal's message becomes: the original ask, plus
+    the verdict and (for a failure) why. Used for both the ``chat_update``
+    fallback ``text`` and its lone section block -- see ``_approval_blocks``
+    for why the block, not the fallback, is what Slack actually renders."""
+    wording = RESOLVED_WORDING.get(proposal.status, f"Resolved: {proposal.status}.")
+    if proposal.status in ("failed", "blocked_quiet_hours") and proposal.result:
+        wording = f"{wording} {proposal.result}"
+    return f"{_proposal_line(proposal)}\n\n{wording}"
 
 
 def _approval_blocks(proposal_id: str, summary: str) -> list[dict]:

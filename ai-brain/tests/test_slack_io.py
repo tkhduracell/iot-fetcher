@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from ai_brain.approvals import Proposal
 from ai_brain.config import load_settings
 from ai_brain.llm import ToolCall
 from ai_brain.slack_io import SlackIn, SlackOut, SlackRateCapped, start_slack
@@ -12,6 +13,22 @@ from ai_brain.tools.slack_tools import register_slack_tools
 
 START = datetime(2026, 9, 6, 10, 0, tzinfo=timezone.utc)
 USER = "U-filip"
+
+
+def make_proposal(status: str = "executed", result: str = "", **overrides) -> Proposal:
+    """A resolved Proposal, exactly as approvals.on_button/on_reaction return one."""
+    fields = {
+        "id": "20260906T100000-sonos_say-abcd",
+        "kind": "sonos_say",
+        "payload": {"text": "hej"},
+        "reason": "testing",
+        "topic": "pool",
+        "created": "2026-09-06T10:00:00Z",
+        "status": status,
+        "result": result,
+    }
+    fields.update(overrides)
+    return Proposal(**fields)
 
 
 class SlackError(Exception):
@@ -54,6 +71,10 @@ class FakeClient:
 
     async def reactions_remove(self, **kwargs):
         self._record("reactions_remove", kwargs)
+        return {"ok": True}
+
+    async def chat_update(self, **kwargs):
+        self._record("chat_update", kwargs)
         return {"ok": True}
 
     async def api_call(self, api_method: str, **kwargs):
@@ -613,6 +634,118 @@ async def test_a_button_payload_with_no_actions_is_ignored(slack_in, app, approv
     assert approvals.buttons == []
 
 
+# -- resolving the approval message --------------------------------------
+
+
+async def test_an_approved_button_click_replaces_the_buttons_with_a_verdict(
+    app, brain_dir, out, client, woken
+):
+    from ai_brain.approvals import APPROVE_ACTION
+
+    proposal = make_proposal(status="executed", result="ok")
+    listener = SlackIn(app, brain_dir, FakeApprovals(resolves=proposal), out, woken.append, USER)
+    listener.register()
+
+    await app.actions[APPROVE_ACTION](
+        {
+            "user": {"id": USER},
+            "actions": [{"action_id": APPROVE_ACTION, "value": proposal.id}],
+            "message": {"ts": "7.7"},
+            "channel": {"id": "D1"},
+        },
+        _ack,
+    )
+
+    [update] = client.methods("chat_update")
+    assert update["channel"] == "D1"
+    assert update["ts"] == "7.7"
+    assert "✅ Approved and run." in update["text"]
+    assert update["blocks"] == [{"type": "section", "text": {"type": "mrkdwn", "text": update["text"]}}]
+    # No buttons block survives -- there is exactly one block, the section.
+    assert len(update["blocks"]) == 1
+
+
+async def test_a_rejected_button_click_replaces_the_buttons_with_a_verdict(
+    app, brain_dir, out, client, woken
+):
+    from ai_brain.approvals import REJECT_ACTION
+
+    proposal = make_proposal(status="rejected")
+    listener = SlackIn(app, brain_dir, FakeApprovals(resolves=proposal), out, woken.append, USER)
+    listener.register()
+
+    await app.actions[REJECT_ACTION](
+        {
+            "user": {"id": USER},
+            "actions": [{"action_id": REJECT_ACTION, "value": proposal.id}],
+            "message": {"ts": "7.7"},
+            "channel": {"id": "D1"},
+        },
+        _ack,
+    )
+
+    [update] = client.methods("chat_update")
+    assert "❌ Rejected." in update["text"]
+
+
+async def test_an_ignored_button_click_leaves_the_message_alone(
+    slack_in, app, client, approvals
+):
+    """approvals.resolves defaults to None -- an already-resolved or unknown
+    proposal id -- and that must not touch the message at all."""
+    from ai_brain.approvals import APPROVE_ACTION
+
+    await app.actions[APPROVE_ACTION](
+        {
+            "user": {"id": USER},
+            "actions": [{"action_id": APPROVE_ACTION, "value": "some-proposal-id"}],
+            "message": {"ts": "7.7"},
+            "channel": {"id": "D1"},
+        },
+        _ack,
+    )
+
+    assert client.methods("chat_update") == []
+
+
+async def test_an_approving_reaction_replaces_the_buttons_with_a_verdict(
+    app, brain_dir, out, client, woken
+):
+    proposal = make_proposal(status="executed")
+    listener = SlackIn(app, brain_dir, FakeApprovals(resolves=proposal), out, woken.append, USER)
+    listener.register()
+
+    await app.handlers["reaction_added"](
+        {
+            "user": USER,
+            "reaction": "white_check_mark",
+            "item": {"ts": "7.7", "channel": "D1"},
+        },
+        _ack,
+    )
+
+    [update] = client.methods("chat_update")
+    assert update["channel"] == "D1"
+    assert update["ts"] == "7.7"
+
+
+async def test_a_failed_execution_shows_the_result_in_the_verdict(
+    app, brain_dir, out, client, woken
+):
+    proposal = make_proposal(status="failed", result="boom: connection refused")
+    listener = SlackIn(app, brain_dir, FakeApprovals(resolves=proposal), out, woken.append, USER)
+    listener.register()
+
+    await app.handlers["reaction_added"](
+        {"user": USER, "reaction": "white_check_mark", "item": {"ts": "7.7", "channel": "D1"}},
+        _ack,
+    )
+
+    [update] = client.methods("chat_update")
+    assert "⚠️" in update["text"]
+    assert "boom: connection refused" in update["text"]
+
+
 async def test_stopping_a_session_tells_the_brain(slack_in, app, out, brain_dir, woken):
     await out.post("pool", "the pool is cold")
 
@@ -857,7 +990,9 @@ async def test_a_failed_flush_stops_before_the_next_message(brain_dir, moving_cl
 async def test_a_reaction_that_resolves_a_proposal_wakes_the_brain(
     app, brain_dir, out, woken
 ):
-    listener = SlackIn(app, brain_dir, FakeApprovals(resolves=object()), out, woken.append, USER)
+    listener = SlackIn(
+        app, brain_dir, FakeApprovals(resolves=make_proposal()), out, woken.append, USER
+    )
     listener.register()
 
     await app.handlers["reaction_added"](
