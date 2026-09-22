@@ -25,6 +25,7 @@ import useAiBrain from '../hooks/useAiBrain';
 import AiBrainWallBeliefs from './AiBrainWallBeliefs';
 import { ExecutedProposals, NaggingLoops, PendingProposals } from './AiBrainWallActions';
 import {
+  BackLink,
   ConditionStrip,
   EmptyState,
   MONO,
@@ -177,6 +178,7 @@ const AiBrainWall: React.FC = () => {
       density="wall"
       title={HOUSE}
       current="/ai-brain"
+      back={<BackLink href="/">{HOUSE}</BackLink>}
       headerRight={
         <div className="flex items-baseline gap-4 shrink-0">
           <span className="text-[13px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
