@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ai_brain.approvals import KINDS, Approvals, Proposal
+from ai_brain.approvals import KINDS, Approvals, Proposal, resolved_text
 from ai_brain.config import load_settings
 from ai_brain.executors import QuietHours
 from ai_brain.llm import ToolCall
@@ -700,6 +700,65 @@ def test_proposal_round_trips_through_json():
         status="pending",
     )
     assert Proposal(**json.loads(json.dumps(p.__dict__))) == p
+
+
+# --- resolved_text ---------------------------------------------------------
+
+
+def _proposal(status: str, result: str = "") -> Proposal:
+    return Proposal(
+        id="20260906T100000-sonos_say-ab12",
+        kind="sonos_say",
+        payload={"text": "hi"},
+        reason="testing",
+        topic="pool",
+        created="2026-09-06T10:00:00Z",
+        status=status,
+        result=result,
+    )
+
+
+def test_resolved_text_names_the_proposal_and_the_verdict():
+    text = resolved_text(_proposal("executed"))
+    assert "Proposal 20260906T100000-sonos_say-ab12 (sonos_say): testing" in text
+    assert "✅ Approved and run." in text
+
+
+def test_resolved_text_for_a_rejection():
+    assert "❌ Rejected." in resolved_text(_proposal("rejected"))
+
+
+def test_resolved_text_for_an_expiry():
+    assert "⌛" in resolved_text(_proposal("expired"))
+
+
+def test_resolved_text_includes_the_result_on_failure():
+    text = resolved_text(_proposal("failed", result="RuntimeError: boom"))
+    assert "⚠️" in text
+    assert "RuntimeError: boom" in text
+
+
+def test_resolved_text_includes_the_result_when_blocked_by_quiet_hours():
+    text = resolved_text(_proposal("blocked_quiet_hours", result="not run during quiet hours"))
+    assert "🌙" in text
+    assert "not run during quiet hours" in text
+
+
+def test_resolved_text_omits_an_empty_result():
+    # executed's happy path carries no result worth repeating -- an empty
+    # string must not show up as a trailing space or a stray "None".
+    text = resolved_text(_proposal("executed", result=""))
+    assert text.endswith("✅ Approved and run.")
+
+
+def test_resolved_text_covers_every_terminal_status():
+    # STATUSES includes "pending"/"executing", which a resolved message never
+    # reaches -- resolved_text only has to cover what on_button/on_reaction's
+    # _finish can actually produce.
+    from ai_brain.approvals import RESOLVED_WORDING
+
+    terminal = {"executed", "failed", "rejected", "blocked_quiet_hours", "expired"}
+    assert terminal <= RESOLVED_WORDING.keys()
 
 
 # --- expiry on reaction ---------------------------------------------------

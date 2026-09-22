@@ -188,6 +188,32 @@ class SlackOut:
         except Exception as exc:  # noqa: BLE001 - the reaction is decoration
             log.info("[slack] reactions_add failed (%s)", _slack_error(exc))
 
+    # -- resolving an approval message ----------------------------------
+
+    async def mark_resolved(self, channel: str, ts: str, text: str) -> None:
+        """Replace an approval message's Approve/Reject buttons with a verdict.
+
+        Called once a click or reaction has actually resolved the proposal
+        (``on_button``/``on_reaction`` in ``SlackIn`` both return the settled
+        ``Proposal``, and ``text`` is ``approvals.resolved_text`` of it) --
+        never speculatively, so a click that turned out to be a no-op
+        (already resolved, expired) leaves the message alone rather than
+        overwriting it with a stale-looking edit. ``chat_update`` replaces
+        the whole message, buttons and all -- there is no way to edit only
+        the blocks and leave a fallback ``text`` that no longer matches, so
+        both become the same resolved text. Best-effort, like the reactions
+        above -- a failed edit must not stop the proposal from having run.
+        """
+        try:
+            await self.client.chat_update(
+                channel=channel,
+                ts=ts,
+                text=text,
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": text}}],
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort, like the reactions above
+            log.info("[slack] chat_update failed (%s)", _slack_error(exc))
+
     # -- posting -------------------------------------------------------
 
     async def post(self, topic: str, text: str, blocks: list[dict] | None = None) -> str:
@@ -513,14 +539,14 @@ class SlackIn:
         await _ack(ack)
         if event.get("user") != self.user_id:
             return
-        item = event.get("item")
-        proposal = await self.approvals.on_reaction(
-            str((item or {}).get("ts", "")), str(event.get("reaction", ""))
-        )
+        item = event.get("item") or {}
+        message_ts = str(item.get("ts", ""))
+        proposal = await self.approvals.on_reaction(message_ts, str(event.get("reaction", "")))
         # A reaction resolves a proposal and drops a note about it. Without a
         # wake the brain reads that note whenever its heartbeat next comes
         # round -- up to half an hour after Filip approved something.
         if proposal is not None:
+            await self._resolve_message(str(item.get("channel", "")), message_ts, proposal)
             self.wake("brain")
 
     async def on_button(self, body: dict, ack: Ack = None) -> None:
@@ -530,9 +556,10 @@ class SlackIn:
         ``event`` -- the clicked button (and its ``value``, the proposal id)
         is under ``actions[0]``, the user under ``user``, and the message it
         lives in under ``message`` (``ts`` there is the same id a reaction on
-        this message would report). ``approvals.on_button`` is keyed on that
-        message ts exactly like ``on_reaction`` is; the button's ``value`` is
-        not used for lookup, only Slack's own record of who clicked and where.
+        this message would report) with the channel as its own top-level
+        ``channel``. ``approvals.on_button`` is keyed on that message ts
+        exactly like ``on_reaction`` is; the button's ``value`` is not used
+        for lookup, only Slack's own record of who clicked and where.
         """
         await _ack(ack)
         if body.get("user", {}).get("id") != self.user_id:
@@ -544,6 +571,8 @@ class SlackIn:
         message_ts = str(body.get("message", {}).get("ts", ""))
         proposal = await self.approvals.on_button(message_ts, action_id)
         if proposal is not None:
+            channel = str(body.get("channel", {}).get("id", ""))
+            await self._resolve_message(channel, message_ts, proposal)
             self.wake("brain")
 
     async def on_session_stopped(self, event: dict, ack: Ack = None) -> None:
@@ -583,6 +612,21 @@ class SlackIn:
     async def on_ignored(self, event: dict, ack: Ack = None) -> None:
         await _ack(ack)
         log.debug("[slack] ignored event: %s", event.get("type"))
+
+    async def _resolve_message(self, channel: str, ts: str, proposal: Any) -> None:
+        """Swap an approval message's buttons for its verdict, if reachable.
+
+        ``channel``/``ts`` come from whichever Bolt payload triggered the
+        resolution (a button click or a ✅/❌ reaction) -- both name the
+        message the same way a post's own ``ts`` would. Missing either means
+        there is nothing to edit (a malformed or partial event), not an error
+        worth logging on top of ``mark_resolved``'s own best-effort logging.
+        """
+        if not channel or not ts:
+            return
+        from ai_brain.approvals import resolved_text
+
+        await self.out.mark_resolved(channel, ts, resolved_text(proposal))
 
 
 async def start_slack(
