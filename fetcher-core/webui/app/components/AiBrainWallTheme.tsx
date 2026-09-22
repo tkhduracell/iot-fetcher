@@ -38,12 +38,18 @@ export const WALL = {
   clay: '#D9895E',
 } as const;
 
-/** Font stacks. The families themselves are loaded by the Google Fonts link in
- *  `app/layout.tsx`; each stack falls back to a system face so the wall stays
- *  legible if that request is slow or blocked. */
-export const SERIF = "'Fraunces', Georgia, 'Times New Roman', serif";
+/** One font stack for the whole section. The family is loaded by the Google
+ *  Fonts link in `app/layout.tsx`; the stack falls back to a system face so
+ *  the wall stays legible if that request is slow or blocked.
+ *
+ *  `SERIF` and `MONO` used to be Fraunces and IBM Plex Mono — a deliberate
+ *  three-face mix (serif hero, sans chrome, mono telemetry). Collapsed to one
+ *  face on request; the names stay so call sites still say what a given piece
+ *  of text *is* (a hero sentence vs. a machine value), even though they now
+ *  render identically. */
 export const SANS = "'IBM Plex Sans', Inter, system-ui, sans-serif";
-export const MONO = "'IBM Plex Mono', ui-monospace, 'SF Mono', monospace";
+export const SERIF = SANS;
+export const MONO = SANS;
 
 /** Wall density is the glanced-at tablet; read density is the phone. */
 export type Density = 'wall' | 'read';
@@ -250,17 +256,20 @@ export const MoreLink: React.FC<{
   </Link>
 );
 
-/** Back to the wall (or anywhere else). Detail screens open this way. */
-export const BackLink: React.FC<{ href?: string; children?: React.ReactNode }> = ({
+/** Leave this screen — a rounded ✕, right of the header. Every nav-mapped
+ *  screen closes back to the wall; the wall itself closes out to the site. */
+export const CloseButton: React.FC<{ href?: string; label?: string }> = ({
   href = '/ai-brain',
-  children = 'Väggen',
+  label = 'Stäng',
 }) => (
   <Link
     href={href}
-    className="text-[13px] no-underline hover:underline"
-    style={{ fontFamily: SANS, color: WALL.inkDim }}
+    aria-label={label}
+    title={label}
+    className="flex items-center justify-center w-7 h-7 rounded-full no-underline shrink-0"
+    style={{ fontFamily: SANS, color: WALL.inkDim, border: `1px solid ${WALL.inkFaint}` }}
   >
-    ← {children}
+    ✕
   </Link>
 );
 
@@ -489,17 +498,19 @@ export const MachineLine: React.FC<{
 export const WallShell: React.FC<{
   children: React.ReactNode;
   density?: Density;
-  /** Left of the header. On the wall this is the house; elsewhere the screen. */
-  title: string;
+  /** Left of the header, next to the nav. Only needed when the screen isn't
+   *  one of `WALL_NAV`'s routes — the nav already highlights the current one,
+   *  so a nav-mapped screen doesn't repeat its own name here. */
+  title?: string;
   /** Route to mark in the nav, e.g. '/ai-brain/loops'. */
   current?: string;
   /** Right of the header — the clock and state on the wall. */
   headerRight?: React.ReactNode;
-  /** Above the nav on a detail screen. */
-  back?: React.ReactNode;
+  /** Far right of the header — a `CloseButton` out of this screen. */
+  close?: React.ReactNode;
   /** The footer: conditions and the machine line. */
   footer?: React.ReactNode;
-}> = ({ children, density = 'wall', title, current, headerRight, back, footer }) => {
+}> = ({ children, density = 'wall', title, current, headerRight, close, footer }) => {
   const wall = density === 'wall';
   return (
     <main
@@ -510,18 +521,22 @@ export const WallShell: React.FC<{
       }
       style={{ background: WALL.ground, color: WALL.ink, fontFamily: SANS }}
     >
-      <header className="flex items-baseline justify-between gap-6 shrink-0 min-w-0">
+      <header className="flex items-center justify-between gap-6 shrink-0 min-w-0">
         <div className="flex items-baseline gap-5 min-w-0">
-          {back}
-          <h1
-            className={`${wall ? 'text-[18px]' : 'text-[16px]'} tracking-[0.28em] uppercase m-0 whitespace-nowrap`}
-            style={{ fontFamily: SANS, color: WALL.inkDim, fontWeight: 500 }}
-          >
-            {title}
-          </h1>
+          {title && (
+            <h1
+              className={`${wall ? 'text-[18px]' : 'text-[16px]'} tracking-[0.28em] uppercase m-0 whitespace-nowrap`}
+              style={{ fontFamily: SANS, color: WALL.inkDim, fontWeight: 500 }}
+            >
+              {title}
+            </h1>
+          )}
           <WallNav current={current} className="hidden md:flex" />
         </div>
-        {headerRight}
+        <div className="flex items-center gap-4 shrink-0">
+          {headerRight}
+          {close}
+        </div>
       </header>
 
       {children}

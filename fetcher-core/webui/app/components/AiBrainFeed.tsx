@@ -9,7 +9,7 @@ import {
   formatClock,
 } from '../lib/aiBrain';
 import {
-  BackLink,
+  CloseButton,
   EmptyState,
   MONO,
   Pill,
@@ -275,9 +275,8 @@ const AiBrainFeed: React.FC = () => {
   return (
     <WallShell
       density="read"
-      title="Flöde"
       current="/ai-brain/feed"
-      back={<BackLink />}
+      close={<CloseButton />}
       headerRight={
         error ? (
           <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.rose }}>

@@ -18,7 +18,7 @@ import useAiBrain from '../hooks/useAiBrain';
 import AiBrainCharterUsefulness from './AiBrainCharterUsefulness';
 import {
   Age,
-  BackLink,
+  CloseButton,
   EmptyState,
   MONO,
   SANS,
@@ -147,9 +147,8 @@ const AiBrainCharter: React.FC = () => {
   return (
     <WallShell
       density="read"
-      title="Charter"
       current="/ai-brain/charter"
-      back={<BackLink />}
+      close={<CloseButton />}
       headerRight={
         agentList.length > 1 ? (
           <div className="flex flex-wrap items-center gap-2 shrink-0" role="group" aria-label="Loop">

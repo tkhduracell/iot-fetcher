@@ -25,7 +25,7 @@ import useAiBrain from '../hooks/useAiBrain';
 import AiBrainWallBeliefs from './AiBrainWallBeliefs';
 import { ExecutedProposals, NaggingLoops, PendingProposals } from './AiBrainWallActions';
 import {
-  BackLink,
+  CloseButton,
   ConditionStrip,
   EmptyState,
   MONO,
@@ -51,8 +51,6 @@ import {
  *  second screenful — depth lives behind the "fler →" links instead. When a
  *  number here disagrees with the count on a deeper screen, this one is the
  *  summary and that one is the truth. */
-
-const HOUSE = 'Irisgatan';
 
 const POLL_MS = 10_000;
 /** `/api/loops` aggregates the whole approval ledger; once a minute is plenty. */
@@ -135,12 +133,6 @@ const AiBrainWall: React.FC = () => {
   const offline = Boolean((status.error || agents.error) && !anyData);
   const stale = Boolean((status.error || agents.error) && anyData);
 
-  // Before the clock has mounted there is no honest time to show, and printing
-  // the server's would be a hydration mismatch on the largest text on the wall.
-  const clock = now
-    ? new Date(now * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
-    : '––:––';
-
   /** The single machine line. Everything here is deliberately unreadable from
    *  across the room: it is for the person standing at the tablet. */
   const machineBits: string[] = [];
@@ -176,17 +168,13 @@ const AiBrainWall: React.FC = () => {
   return (
     <WallShell
       density="wall"
-      title={HOUSE}
       current="/ai-brain"
-      back={<BackLink href="/">{HOUSE}</BackLink>}
+      close={<CloseButton href="/" label="Till startsidan" />}
       headerRight={
         <div className="flex items-baseline gap-4 shrink-0">
           <span className="text-[13px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
             {state}
             {brain?.last_cycle?.model ? ` · ${shortModel(brain.last_cycle.model)}` : ''}
-          </span>
-          <span className="text-[26px] tabular-nums" style={{ fontFamily: MONO }}>
-            {clock}
           </span>
         </div>
       }

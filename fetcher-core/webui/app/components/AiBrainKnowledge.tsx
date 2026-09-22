@@ -20,7 +20,7 @@ import AiBrainKnowledgeFacts, { type FactRowData, claimOf } from './AiBrainKnowl
 import AiBrainKnowledgeFilters, { ALL_LOOPS } from './AiBrainKnowledgeFilters';
 import {
   Age,
-  BackLink,
+  CloseButton,
   BeliefRow,
   EmptyState,
   MONO,
@@ -257,9 +257,8 @@ const AiBrainKnowledge: React.FC = () => {
   return (
     <WallShell
       density="read"
-      title="Kunskap"
       current="/ai-brain/knowledge"
-      back={<BackLink />}
+      close={<CloseButton />}
       headerRight={
         <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
           {offline ? 'ingen kontakt' : `taket ${FACT_CAP} fakta per loop`}
