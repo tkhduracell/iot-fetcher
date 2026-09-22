@@ -326,9 +326,30 @@ async def test_watchdog_leaves_a_fresh_spinner_alone(out, client, moving_clock):
     assert client.methods("reactions_remove") == []
 
 
+async def test_mark_unanswered_swaps_the_spinner_at_once(out, client):
+    await out.mark_pending("pool", "D1", "100.1")
+    client.calls.clear()
+
+    await out.mark_unanswered("pool")
+    await out.mark_unanswered("pool")  # once only
+
+    assert client.methods("reactions_remove") == [
+        {"channel": "D1", "timestamp": "100.1", "name": "loading"}
+    ]
+    assert client.methods("reactions_add") == [
+        {"channel": "D1", "timestamp": "100.1", "name": "red_circle"}
+    ]
+
+
+async def test_mark_unanswered_is_a_no_op_without_a_spinner(out, client):
+    await out.mark_unanswered("pool")
+
+    assert client.calls == []
+
+
 async def test_watchdog_swaps_a_stale_spinner_for_a_red_circle(out, client, moving_clock):
     await out.mark_pending("pool", "D1", "100.1")
-    moving_clock.state["now"] = START + timedelta(minutes=16)
+    moving_clock.state["now"] = START + timedelta(minutes=61)
 
     await out.check_watchdog()
 
@@ -344,7 +365,7 @@ async def test_watchdog_swaps_a_stale_spinner_for_a_red_circle(out, client, movi
 
 async def test_watchdog_only_fires_once_per_topic(out, client, moving_clock):
     await out.mark_pending("pool", "D1", "100.1")
-    moving_clock.state["now"] = START + timedelta(minutes=16)
+    moving_clock.state["now"] = START + timedelta(minutes=61)
     await out.check_watchdog()
     client.calls.clear()
 
@@ -356,7 +377,7 @@ async def test_watchdog_only_fires_once_per_topic(out, client, moving_clock):
 
 async def test_a_late_reply_after_the_watchdog_fired_posts_normally(out, client, moving_clock):
     await out.mark_pending("pool", "D1", "100.1")
-    moving_clock.state["now"] = START + timedelta(minutes=16)
+    moving_clock.state["now"] = START + timedelta(minutes=61)
     await out.check_watchdog()
     client.calls.clear()
 
