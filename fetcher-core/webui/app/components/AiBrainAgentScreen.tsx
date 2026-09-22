@@ -16,7 +16,7 @@ import {
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import {
-  BackLink,
+  CloseButton,
   EmptyState,
   MONO,
   MachineLine,
@@ -237,7 +237,7 @@ const AiBrainAgentScreen: React.FC<{ name: string }> = ({ name }) => {
     <WallShell
       density="read"
       title="Loop"
-      back={<BackLink />}
+      close={<CloseButton />}
       headerRight={
         others.length > 0 ? (
           <nav

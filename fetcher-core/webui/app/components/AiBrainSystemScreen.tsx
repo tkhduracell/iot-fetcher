@@ -24,7 +24,7 @@ import {
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import {
-  BackLink,
+  CloseButton,
   EmptyState,
   MONO,
   MachineLine,
@@ -177,9 +177,8 @@ const AiBrainSystemScreen: React.FC = () => {
   return (
     <WallShell
       density="read"
-      title="System"
       current="/ai-brain/system"
-      back={<BackLink />}
+      close={<CloseButton />}
       headerRight={
         <div className="flex items-center gap-2 shrink-0">
           {s?.paused ? <Pill tone="warn">pausad</Pill> : <Pill tone={offline ? 'error' : 'ok'}>

@@ -12,7 +12,7 @@ import {
 import useAiBrain from '../hooks/useAiBrain';
 import AiBrainLoopCard from './AiBrainLoopCard';
 import {
-  BackLink,
+  CloseButton,
   EmptyState,
   MONO,
   Mono,
@@ -92,9 +92,8 @@ const AiBrainLoops: React.FC = () => {
   return (
     <WallShell
       density="read"
-      title="Slingor"
       current="/ai-brain/loops"
-      back={<BackLink />}
+      close={<CloseButton />}
       footer={
         <p className="text-[12px] m-0" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
           /api/loops · grupperar varje förslag på ämne · vyn är skrivskyddad, beslut fattas med ✅ i
