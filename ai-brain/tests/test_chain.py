@@ -301,6 +301,22 @@ def test_limits_from_settings_covers_every_chain_key():
     }
 
 
+def test_gemini_3_8_flash_gets_its_measured_rpd_not_the_configured_one():
+    settings = load_settings(
+        {
+            "LLM_CHAIN": "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite",
+            "RPM": "8",
+            "TPM": "200000",
+            "RPD": "200",
+        }
+    )
+    limits = limits_from_settings(settings)
+    # rpm/tpm are untouched -- only the daily cap is overridden, and only for
+    # the one key it was measured against.
+    assert limits["gemini:gemini-3.8-flash"] == Limits(rpm=8, tpm=200000, rpd=11)
+    assert limits["gemini:gemini-3.5-flash-lite"] == Limits(rpm=8, tpm=200000, rpd=200)
+
+
 async def test_success_clears_a_previous_429_streak(tmp_path):
     ledger, _ = make_ledger(tmp_path, ["a"])
     ledger.record_429("a", 0.0)

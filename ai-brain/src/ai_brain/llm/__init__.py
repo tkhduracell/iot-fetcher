@@ -151,13 +151,33 @@ class Provider(ABC):
 # exhaust, and the free-tier arithmetic stays about the free tier.
 UNMETERED = Limits(rpm=10_000, tpm=100_000_000, rpd=1_000_000)
 
+# gemini-3.8-flash's free-tier RPD is nowhere near the RPM/TPM/RPD every other
+# metered key gets from settings -- Google's own docs no longer publish the
+# number, so this is measured, not guessed: on 2026-09-22 it answered 12
+# calls, then every call for the rest of the day was a 429. One below that
+# observed ceiling, so the ledger's own rpd check blocks the key before a
+# cycle ever has to spend a real request discovering it is gone (see
+# EXHAUSTED_AFTER_429 in ledger.py -- without this, three separate loops each
+# burn one real 429 finding this out the hard way, every single day). A key
+# not listed here keeps the env-configured tier, unchanged.
+KEY_RPD_OVERRIDES: dict[str, int] = {
+    "gemini:gemini-3.8-flash": 11,
+}
+
 
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
-    """One budget per chain key: the env-configured tier, except for local hosts."""
+    """One budget per chain key: the env-configured tier, except for local
+    hosts (unmetered) and any key in KEY_RPD_OVERRIDES (a lower, measured rpd)."""
     limits = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
-    return {
-        key: UNMETERED if key.startswith("lan:") else limits for key in settings.llm_chain
-    }
+    out: dict[str, Limits] = {}
+    for key in settings.llm_chain:
+        if key.startswith("lan:"):
+            out[key] = UNMETERED
+        elif key in KEY_RPD_OVERRIDES:
+            out[key] = Limits(rpm=limits.rpm, tpm=limits.tpm, rpd=KEY_RPD_OVERRIDES[key])
+        else:
+            out[key] = limits
+    return out
 
 
 class ProviderChain:
