@@ -39,6 +39,8 @@ from ai_brain.ledger import Priority
 from ai_brain.llm import ChainExhausted, Message, ProviderChain
 from ai_brain.memory import MemoryDir, Note
 from ai_brain.tools import ToolContext, ToolRegistry
+from ai_brain.slack_io import CHAT_TOPIC
+from ai_brain.tools.slack_tools import ANY_TOPIC, owed_replies
 
 log = logging.getLogger(__name__)
 
@@ -127,10 +129,11 @@ metrics alone.
 
 # Answering Filip
 Messages in the Inbox section from `filip` are Filip talking to you on Slack.
-He cannot see your journal. If a note asks you something or expects a reply,
-answer it with slack_post in the same cycle: reuse the `topic:` given in the
-note if present, otherwise choose a short new topic (2-4 words) that names the
-subject. Keep replies short and concrete. Notes from other senders (experts,
+He cannot see your journal. Every note from him gets a slack_post reply in the
+same cycle -- a question gets its answer, and a statement or correction gets a
+one-line acknowledgement of what you understood or changed. Reuse the `topic:`
+given in the note if present, otherwise choose a short new topic (2-4 words)
+that names the subject. Keep replies short and concrete. Notes from other senders (experts,
 approvals, ledger) are internal and need no Slack reply unless Filip would want
 to know.
 
@@ -356,6 +359,7 @@ class AgentLoop:
             # this list, so that note would be shown to the model and then left
             # unread, to be shown again next cycle.
             notes = self.memory.unread_notes()
+            self.ctx.extras["owed_replies"] = owed_replies(notes)
             messages = self._opening_messages(notes)
 
             while rounds < self.max_rounds:
@@ -556,6 +560,18 @@ class AgentLoop:
             log.exception("[%s] could not write back memory", self.name)
 
         self.ctx.extras.pop("end_cycle", None)
+        self.ctx.extras.pop("owed_refused", None)
+        owed = self.ctx.extras.pop("owed_replies", None) or set()
+        slack_out = self.ctx.extras.get("slack_out")
+        if consumed and slack_out is not None:
+            # The notes are archived now, so no later cycle will answer them:
+            # say so on Filip's message straight away rather than leaving the
+            # spinner for the watchdog. A bare DM's spinner sits under ``chat``.
+            for topic in sorted(owed):
+                try:
+                    await slack_out.mark_unanswered(CHAT_TOPIC if topic == ANY_TOPIC else topic)
+                except Exception:  # noqa: BLE001 - the reaction is decoration
+                    log.exception("[%s] could not mark %s unanswered", self.name, topic)
 
         result = CycleResult(
             status=status, model=model, rounds=rounds, next_wake_s=int(next_wake_s)

@@ -51,9 +51,12 @@ Four properties shape the code more than the API does:
   answer several topics' notes at once and ``loop.py`` has no notion of Slack
   at all, so "did this topic get a reply" is answered here, from the posts
   this module actually sent, not from the loop's own idea of how it went. A
-  cycle that errors before ever posting would otherwise leave the spinner
-  forever, so ``check_watchdog`` sweeps for anything still pending past
-  ``LOADING_TIMEOUT_S`` and swaps it for :red_circle:, once.
+  cycle that consumed the note and ended without a reply calls
+  ``mark_unanswered``, which swaps the spinner for :red_circle: at once.
+  ``check_watchdog`` is only the backstop for a cycle that never gets that
+  far (a hang, a dead process), so ``LOADING_TIMEOUT_S`` is long: a lan:
+  cycle legitimately runs half an hour, and a 15-minute watchdog used to
+  paint a slow-but-successful reply red.
 """
 
 from __future__ import annotations
@@ -80,11 +83,12 @@ CHAT_TOPIC = "chat"
 LOADING_REACTION = "loading"
 ERROR_REACTION = "red_circle"
 # How long a topic may sit with an unanswered :loading: before check_watchdog
-# gives up on it and marks it failed. Generous on purpose: a cycle on the lan:
-# provider can legitimately run several tool-calling rounds against a local
-# model (see ai_brain.llm.ollama's own CALL_TIMEOUT_S), and a false red_circle
-# on a cycle that was simply slow is worse than a spinner that lingers.
-LOADING_TIMEOUT_S = 900.0
+# gives up on it and marks it failed. Only a backstop -- the loop marks an
+# unanswered note itself the moment its cycle ends (``mark_unanswered``). A note
+# that lands mid-cycle waits out that cycle and then a whole one of its own, and
+# on the lan: provider that was measured at ~33 minutes; the old 15 minutes
+# painted a slow-but-fine reply red.
+LOADING_TIMEOUT_S = 3600.0
 SUGGESTED_PROMPTS = [
     {"title": "Status", "message": "Vad jobbar du med just nu?"},
     {"title": "El", "message": "Hur mycket el producerar vi just nu?"},
@@ -164,8 +168,20 @@ class SlackOut:
             if now - marked_at >= LOADING_TIMEOUT_S
         ]
         for topic in stale:
-            channel, ts, _ = self._pending.pop(topic)
-            await self._swap_reaction(channel, ts, LOADING_REACTION, ERROR_REACTION)
+            await self.mark_unanswered(topic)
+
+    async def mark_unanswered(self, topic: str) -> None:
+        """Swap the topic's :loading: for :red_circle:, if one is pending.
+
+        Called by the loop when a cycle archives Filip's note without having
+        replied on its topic, and by ``check_watchdog``. A no-op for a topic
+        with nothing pending -- e.g. one a queued post already cleared.
+        """
+        pending = self._pending.pop(topic, None)
+        if pending is None:
+            return
+        channel, ts, _ = pending
+        await self._swap_reaction(channel, ts, LOADING_REACTION, ERROR_REACTION)
 
     async def _clear_pending(self, topic: str) -> None:
         """Remove the topic's :loading: reaction, if one is still pending."""

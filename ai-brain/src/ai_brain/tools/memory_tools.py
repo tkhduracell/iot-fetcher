@@ -124,6 +124,18 @@ async def _send_note(ctx: ToolContext, args: dict) -> str:
 
 
 async def _end_cycle(ctx: ToolContext, args: dict) -> str:
+    owed = ctx.extras.get("owed_replies")
+    if owed and not ctx.extras.get("owed_refused"):
+        # Refused once, not forever: a model that still will not answer must
+        # not burn every remaining round on the same refusal.
+        ctx.extras["owed_refused"] = True
+        named = ", ".join(sorted("a topic of your choosing" if t == "*" else t for t in owed))
+        return err(
+            f"Filip is still waiting for a reply ({named}). Every note from him gets "
+            "a slack_post answer -- even a statement or a correction, where a one-line "
+            "acknowledgement of what you changed is the reply. Post it, then call "
+            "end_cycle again."
+        )
     minutes = int(args["next_wake_minutes"])
     summary = str(args["summary"])
     ctx.extras["end_cycle"] = (minutes, summary)

@@ -62,8 +62,16 @@ def _last_journal_line(memory) -> str:
 
 
 class FakeSlackOut:
+    def __init__(self) -> None:
+        self.posts: list[str] = []
+        self.unanswered: list[str] = []
+
     async def post(self, topic: str, text: str) -> str:
+        self.posts.append(topic)
         return "1.0"
+
+    async def mark_unanswered(self, topic: str) -> None:
+        self.unanswered.append(topic)
 
 
 @pytest.fixture
@@ -596,7 +604,7 @@ async def test_a_note_survives_a_paused_cycle(make_loop, brain_dir, tmp_path):
 
 
 async def test_a_note_is_archived_after_a_successful_cycle(make_loop, brain_dir):
-    brain_dir.drop_note("filip", "important")
+    brain_dir.drop_note("energy", "important")
     loop, _ = make_loop([reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))])
 
     result = await loop.run_cycle()
@@ -657,6 +665,108 @@ async def test_a_note_from_filip_reaches_the_model_with_the_slack_guidance(make_
     assert "from: filip" in system
     assert "how warm is it?" in system
     assert "slack_post" in system
+
+
+def test_cycle_instructions_say_a_statement_still_gets_a_reply():
+    """"18 is the floor" is a correction, not a question -- it still needs an answer."""
+    assert "Every note from him gets a slack_post reply" in CYCLE_INSTRUCTIONS
+
+
+async def test_end_cycle_is_refused_once_while_filip_waits(make_loop, brain_dir):
+    brain_dir.drop_note("filip", "topic: bedroom-heater\n18 is the lower bar.")
+    loop, provider = make_loop(
+        [
+            reply("", call("end_cycle", "c1", next_wake_minutes=10, summary="quiet")),
+            reply("", call("slack_post", "c2", topic="bedroom-heater", text="Noted.")),
+            reply("", call("end_cycle", "c3", next_wake_minutes=10, summary="answered")),
+        ]
+    )
+    slack = FakeSlackOut()
+    loop.ctx.extras["slack_out"] = slack
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    tool_results = [m.content for m in provider.calls[-1][0] if m.role == "tool"]
+    assert "bedroom-heater" in tool_results[0] and "slack_post" in tool_results[0]
+    assert len(provider.calls) == 3
+    assert slack.posts == ["bedroom-heater"]
+    assert slack.unanswered == []
+    assert "answered" in _last_journal_line(brain_dir)
+
+
+async def test_a_second_end_cycle_is_honoured_and_the_note_is_marked_unanswered(
+    make_loop, brain_dir
+):
+    brain_dir.drop_note("filip", "topic: bedroom-heater\n18 is the lower bar.")
+    loop, _ = make_loop(
+        [
+            reply("", call("end_cycle", "c1", next_wake_minutes=10, summary="quiet")),
+            reply("", call("end_cycle", "c2", next_wake_minutes=10, summary="still quiet")),
+        ]
+    )
+    slack = FakeSlackOut()
+    loop.ctx.extras["slack_out"] = slack
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert slack.unanswered == ["bedroom-heater"]
+    assert brain_dir.unread_notes() == []
+
+
+async def test_a_bare_dm_is_answered_by_any_topic(make_loop, brain_dir):
+    brain_dir.drop_note("filip", "how warm is the pool?")
+    loop, provider = make_loop(
+        [
+            reply("", call("slack_post", "c1", topic="pool-temp", text="21 C")),
+            reply("", call("end_cycle", "c2", next_wake_minutes=10, summary="s")),
+        ]
+    )
+    slack = FakeSlackOut()
+    loop.ctx.extras["slack_out"] = slack
+
+    await loop.run_cycle()
+
+    assert len(provider.calls) == 2
+    assert slack.unanswered == []
+
+
+async def test_notes_from_experts_are_not_owed_a_reply(make_loop, brain_dir):
+    brain_dir.drop_note("energy", "prices spike at 18")
+    loop, provider = make_loop(
+        [reply("", call("end_cycle", "c1", next_wake_minutes=10, summary="s"))]
+    )
+    slack = FakeSlackOut()
+    loop.ctx.extras["slack_out"] = slack
+
+    await loop.run_cycle()
+
+    assert len(provider.calls) == 1
+    assert slack.unanswered == []
+
+
+async def test_a_note_that_arrives_mid_cycle_is_not_marked_by_that_cycle(make_loop, brain_dir):
+    async def drop(_ctx, _args):
+        brain_dir.drop_note("filip", "topic: pool\nlate arrival")
+        return "ok"
+
+    loop, _ = make_loop(
+        [
+            reply("", call("poke", "c1")),
+            reply("", call("end_cycle", "c2", next_wake_minutes=10, summary="s")),
+        ]
+    )
+    loop.registry.register(
+        Tool(spec=ToolSpec(name="poke", description="", parameters={}), fn=drop, loops=None)
+    )
+    slack = FakeSlackOut()
+    loop.ctx.extras["slack_out"] = slack
+
+    await loop.run_cycle()
+
+    assert slack.unanswered == []
+    assert [n.body for n in brain_dir.unread_notes()] == ["topic: pool\nlate arrival"]
 
 
 def test_slack_post_says_it_is_the_only_way_filip_hears_from_you(registry):
