@@ -103,6 +103,7 @@ const AgentHeader: React.FC<{ summary: AgentSummary; now: number }> = ({ summary
           className="text-[30px] m-0 leading-none break-words"
           style={{ fontFamily: MONO, color: WALL.ink }}
         >
+          {summary.emoji ? `${summary.emoji} ` : ''}
           {summary.name}
         </h2>
         <span
@@ -253,6 +254,7 @@ const AiBrainAgentScreen: React.FC<{ name: string }> = ({ name }) => {
                   color: a.in_progress ? toneColor('busy') : WALL.inkFaint,
                 }}
               >
+                {a.emoji ? `${a.emoji} ` : ''}
                 {a.name}
               </Link>
             ))}

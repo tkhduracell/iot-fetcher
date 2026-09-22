@@ -334,6 +334,7 @@ const AiBrainSystemScreen: React.FC = () => {
                   className="text-[13px] no-underline hover:underline"
                   style={{ fontFamily: MONO, color: WALL.inkDim }}
                 >
+                  {a.emoji ? `${a.emoji} ` : ''}
                   {a.name} · {a.in_progress ? 'kör' : (a.last_cycle?.status ?? 'okänd')}
                 </Link>
               </li>

@@ -8,12 +8,63 @@ alone -- an expert that asks for it gets a policy refusal from the registry.
 
 from __future__ import annotations
 
+import re
+
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 
 BRAIN_ONLY = frozenset({"brain"})
 
 _NO_ARGS: dict = {"type": "object", "properties": {}}
+
+# ``safe_name`` treats "-", "_" and "." as ordinary characters, so
+# "tibber-bridge-baseline" and "tibber_bridge_baseline" are two different
+# files -- nothing normalises them together. This is the same split, used
+# only to *compare* names for write_fact's duplicate warning; it never
+# touches what actually gets written to disk.
+_NAME_TOKENS = re.compile(r"[-_.]+")
+
+# A new name sharing this fraction or more of its tokens with an existing one
+# is flagged. High enough that "goals" (one token, shared by every persona's
+# housekeeping fact) does not flag against unrelated single-token names, low
+# enough to catch "tibber-bridge-baseline" against "tibber_bridge_status"
+# (2 of 3 tokens shared each way).
+_SIMILAR_THRESHOLD = 0.5
+
+
+def _tokens(name: str) -> frozenset[str]:
+    return frozenset(t for t in _NAME_TOKENS.split(name.lower()) if t)
+
+
+def _similar_fact_names(name: str, existing: list[str]) -> list[str]:
+    """Existing fact names that look like they are about the same thing as
+    ``name``, so a new write can be shown them instead of silently adding a
+    third spelling of a fact already on disk. Excludes an exact match --
+    that is an ordinary overwrite, not a duplicate.
+
+    A single-token name (``goals``, ``status``) is skipped rather than
+    compared: a lone generic word shared with an unrelated longer name (e.g.
+    ``deploy_status``) would hit the threshold every time on a coincidence,
+    not a real duplicate, and a one-word name is short enough that Filip or
+    the agent will notice a real clash without this hint's help.
+    """
+    new_tokens = _tokens(name)
+    if len(new_tokens) < 2:
+        return []
+    found = []
+    for other in existing:
+        if other == name:
+            continue
+        other_tokens = _tokens(other)
+        if len(other_tokens) < 2:
+            continue
+        overlap = len(new_tokens & other_tokens)
+        if overlap == 0:
+            continue
+        smaller = min(len(new_tokens), len(other_tokens))
+        if overlap / smaller >= _SIMILAR_THRESHOLD:
+            found.append(other)
+    return sorted(found)
 
 
 def _schema(props: dict, required: list[str]) -> dict:
@@ -26,12 +77,26 @@ async def _append_journal(ctx: ToolContext, args: dict) -> str:
 
 
 async def _write_fact(ctx: ToolContext, args: dict) -> str:
-    ctx.memory.write_fact(str(args["name"]), str(args["body"]))
-    return ok({"written": args["name"]})
+    name = str(args["name"])
+    # Read before writing: once written, name is its own exact match and
+    # would never show up as a "similar" existing name against itself.
+    similar = _similar_fact_names(name, ctx.memory.list_facts())
+    ctx.memory.write_fact(name, str(args["title"]), str(args["body"]))
+    result: dict = {"written": name}
+    if similar:
+        result["similar_existing_facts"] = similar
+        result["hint"] = (
+            "these look like they may be about the same thing -- read them, and if so "
+            "delete_fact the old name(s) so this is not a third copy of the same fact"
+        )
+    return ok(result)
 
 
 async def _read_fact(ctx: ToolContext, args: dict) -> str:
-    return ok(ctx.memory.read_fact(str(args["name"])))
+    fact = ctx.memory.read_fact(str(args["name"]))
+    if fact is None:
+        return ok(None)
+    return ok({"name": fact.name, "title": fact.title, "body": fact.body})
 
 
 async def _delete_fact(ctx: ToolContext, args: dict) -> str:
@@ -115,11 +180,21 @@ def register_memory_tools(registry: ToolRegistry) -> None:
                 description=(
                     "Store or replace a durable fact under a short lowercase name "
                     "(letters, digits, '.', '-', '_'). Use it for things that stay true "
-                    "across cycles, not for one-off observations."
+                    "across cycles, not for one-off observations. '-' and '_' are "
+                    "different characters to this tool, so the same fact under two "
+                    "spellings of its name is two facts, not one update -- if the result "
+                    "lists similar_existing_facts, read them and delete_fact whichever "
+                    "name you are not keeping. 'title' is a short human-readable label "
+                    "(20 words or fewer, longer is cut) for list views -- put the detail "
+                    "in 'body' instead of stretching the title to fit it."
                 ),
                 parameters=_schema(
-                    {"name": {"type": "string"}, "body": {"type": "string"}},
-                    ["name", "body"],
+                    {
+                        "name": {"type": "string"},
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                    },
+                    ["name", "title", "body"],
                 ),
             ),
             _write_fact,
@@ -129,8 +204,9 @@ def register_memory_tools(registry: ToolRegistry) -> None:
             ToolSpec(
                 name="read_fact",
                 description=(
-                    "Read one stored fact by name. Returns null when no such fact exists; "
-                    "call list_facts first if you are unsure of the name."
+                    "Read one stored fact by name: its title and full body. Returns null "
+                    "when no such fact exists; call list_facts first if you are unsure of "
+                    "the name."
                 ),
                 parameters=_schema({"name": {"type": "string"}}, ["name"]),
             ),

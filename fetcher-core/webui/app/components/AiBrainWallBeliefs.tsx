@@ -4,20 +4,25 @@ import React, { useCallback, useMemo } from 'react';
 import {
   type AgentDetailPlus,
   type FactStat,
-  factSentence,
+  cutAtBoundary,
   fetchAgentPlus,
   fetchFactBodies,
-  humanizeFactName,
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
-import { Age, BeliefRow, EmptyState, MONO, WALL } from './AiBrainWallTheme';
+import { Age, BeliefRow, EmptyState, MONO, SANS, WALL } from './AiBrainWallTheme';
 
-/** The beliefs columns: one per agent, each fact rendered as its own sentence.
+/** The beliefs columns: one per agent, each fact shown as title, slug, body
+ *  excerpt and age.
  *
  *  Four per column, because the wall is glanced at and must fit 1024×768 with
  *  nothing below the fold — the rest lives on /ai-brain/knowledge behind the
  *  section's "fler →". Luckor (gaps) live there too: the wall says what the
- *  house's brain knows, the knowledge screen says what it does not. */
+ *  house's brain knows, the knowledge screen says what it does not.
+ *
+ *  ``fact_stats`` (already in hand from ``fetchAgentPlus``) carries every
+ *  fact's title — that alone used to need a guess at a sentence from the raw
+ *  body, or the fact's own slug as a last resort. The body is fetched only
+ *  for the excerpt underneath the title, which nothing else already has. */
 
 /** Facts per column. A layout decision and a budget at once: each one costs an
  *  HTTP round trip for its body. */
@@ -83,6 +88,7 @@ const BeliefColumn: React.FC<{ agent: string; facts: number; now: number }> = ({
         style={{ borderBottom: `1px solid ${WALL.rule}` }}
       >
         <span className="text-[14px] tracking-[0.06em] truncate" style={{ fontFamily: MONO, color: WALL.ink }}>
+          {detail.data?.emoji ? `${detail.data.emoji} ` : ''}
           {agent}
         </span>
         <span
@@ -96,25 +102,43 @@ const BeliefColumn: React.FC<{ agent: string; facts: number; now: number }> = ({
       <ul className="flex flex-col gap-3 list-none m-0 p-0 min-h-0 overflow-hidden">
         {shown.map((name) => {
           const stat = stats.get(name);
-          // The sentence is the fact's own first statement; the humanized file
-          // name is the honest stand-in while the body is in flight.
-          const sentence = factSentence(bodies.data?.[name]) || humanizeFactName(name);
+          // A fact from before `title` existed still gets one -- fact_stats
+          // derives it from the body server-side -- so this only stands in
+          // for the still-loading gap before the first successful poll.
+          const title = stat?.title || name;
+          const body = bodies.data?.[name];
+          const excerpt = body ? cutAtBoundary(body, 140) : '';
           return (
-            <BeliefRow
-              key={name}
-              lines={2}
-              meta={
-                stat ? (
-                  <Age
-                    at={stat.written_at}
-                    now={now}
-                    suffix={stat.writes > 1 ? `${stat.writes}× skriven` : undefined}
-                  />
-                ) : undefined
-              }
-            >
-              {sentence}
-            </BeliefRow>
+            <li key={name} className="flex flex-col gap-[2px] min-w-0 list-none">
+              <div className="flex items-baseline gap-2 min-w-0">
+                <h3
+                  className="text-[16px] leading-[1.3] m-0 truncate"
+                  style={{ fontFamily: SANS, color: WALL.ink, fontWeight: 500 }}
+                >
+                  {title}
+                </h3>
+                <span
+                  className="text-[12px] shrink-0"
+                  style={{ fontFamily: MONO, color: WALL.inkFaint }}
+                >
+                  · {name}
+                </span>
+              </div>
+              <BeliefRow
+                lines={2}
+                meta={
+                  stat ? (
+                    <Age
+                      at={stat.written_at}
+                      now={now}
+                      suffix={stat.writes > 1 ? `${stat.writes}× skriven` : undefined}
+                    />
+                  ) : undefined
+                }
+              >
+                {excerpt}
+              </BeliefRow>
+            </li>
           );
         })}
 

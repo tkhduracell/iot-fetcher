@@ -179,6 +179,7 @@ def _agent_summary(name: str, loop: AgentLoop, memory: MemoryDir) -> dict:
         next_wake_at = last_at + last.next_wake_s
     return {
         "name": name,
+        "emoji": memory.persona_meta().get("emoji", ""),
         "priority": loop.priority,
         "heartbeat_s": loop.heartbeat_s,
         "last_cycle": (
@@ -204,6 +205,7 @@ def _agent_summary(name: str, loop: AgentLoop, memory: MemoryDir) -> dict:
 def _fact_stat_json(stat) -> dict:
     return {
         "name": stat.name,
+        "title": stat.title,
         "written_at": stat.written_at,
         "first_written_at": stat.first_written_at,
         "writes": stat.writes,
@@ -504,10 +506,10 @@ def build_app(
             fact = safe_name(raw)
         except ValueError as exc:
             return _json({"error": str(exc)}, status=400)
-        body = memory.read_fact(fact)
-        if body is None:
+        found = memory.read_fact(fact)
+        if found is None:
             return _json({"error": f"unknown fact: {fact}"}, status=404)
-        return _json({"agent": name, "name": fact, "body": body})
+        return _json({"agent": name, "name": found.name, "title": found.title, "body": found.body})
 
     async def proposals(_request: web.Request) -> web.Response:
         everything = system.approvals.all()

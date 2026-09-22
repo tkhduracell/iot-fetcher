@@ -264,7 +264,7 @@ async def test_the_chain_call_is_logged_against_this_loops_name(make_loop, brain
 
 
 async def test_system_and_user_messages_frame_the_cycle(make_loop, brain_dir):
-    brain_dir.write_fact("pool", "the pool is a hole with water in it")
+    brain_dir.write_fact("pool", "Pool status", "the pool is a hole with water in it")
     loop, provider = make_loop(
         [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))]
     )
@@ -375,7 +375,7 @@ async def test_a_small_tool_result_is_left_alone(make_loop, registry):
 
 async def test_compaction_hint_added_when_memory_is_large(make_loop, brain_dir):
     for i in range(45):
-        brain_dir.write_fact(f"fact{i}", "x")
+        brain_dir.write_fact(f"fact{i}", "x", "x")
     loop, provider = make_loop(
         [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))]
     )

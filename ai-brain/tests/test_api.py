@@ -269,6 +269,21 @@ async def test_agents_lists_the_brain_first(client):
     assert brain["unread_notes"] == 0
 
 
+async def test_agents_lists_the_emoji_from_the_real_seed_persona(client):
+    # `system` seeds from the real ai-brain/seed/, whose brain.md now carries
+    # this frontmatter -- see seed/personas/brain.md.
+    agents = (await get_json(client, "/api/agents"))["agents"]
+    assert agents[0]["emoji"] == "🧠"
+
+
+async def test_agents_lists_no_emoji_when_the_persona_has_no_frontmatter(client, system):
+    # Overwrite the seeded persona with one that predates this field.
+    system.memories["brain"].persona_path.write_text("I am the brain.", encoding="utf-8")
+
+    agents = (await get_json(client, "/api/agents"))["agents"]
+    assert agents[0]["emoji"] == ""
+
+
 async def test_agents_reports_the_last_cycle_and_the_next_wake(client, system):
     loop = system.loops["brain"]
     loop.last_cycle = CycleResult(
@@ -294,8 +309,8 @@ async def test_agents_reports_the_last_cycle_and_the_next_wake(client, system):
 
 async def test_agents_counts_facts_and_unread_notes(client, system):
     brain_memory = system.memories["brain"]
-    brain_memory.write_fact("pool", "cold")
-    brain_memory.write_fact("spa", "warm")
+    brain_memory.write_fact("pool", "Pool status", "cold")
+    brain_memory.write_fact("spa", "Spa status", "warm")
     brain_memory.drop_note("filip", "hello")
 
     brain = (await get_json(client, "/api/agents"))["agents"][0]
@@ -310,7 +325,7 @@ async def test_agent_detail_adds_identity_goals_facts_and_inbox(client, system):
     memory = system.memories["brain"]
     memory.rewrite_identity("I am the brain")
     memory.rewrite_goals("keep the house warm")
-    memory.write_fact("pool", "cold")
+    memory.write_fact("pool", "Pool status", "cold")
     memory.drop_note("filip", "check the pool")
     _write_journal(memory, {"2026-09-06": "10:00  [ok] fine\n"})
 
@@ -333,8 +348,8 @@ async def test_agent_detail_adds_identity_goals_facts_and_inbox(client, system):
 
 async def test_agent_detail_carries_fact_stats_and_open_gaps(client, system):
     memory = system.memories["brain"]
-    memory.write_fact("pool", "cold")
-    memory.write_fact("pool", "colder")
+    memory.write_fact("pool", "Pool status", "cold")
+    memory.write_fact("pool", "Pool status", "colder")
     memory.open_gap("Why does the pump stop at 03:00?", "blocks the heating plan")
     answered = memory.open_gap("Is the hall sensor dead?", "")
     assert memory.close_gap(answered.id, "it is dead")
@@ -343,6 +358,7 @@ async def test_agent_detail_carries_fact_stats_and_open_gaps(client, system):
 
     assert [stat["name"] for stat in body["fact_stats"]] == ["pool"]
     stat = body["fact_stats"][0]
+    assert stat["title"] == "Pool status"
     assert stat["writes"] == 2
     assert stat["first_written_at"] <= stat["written_at"]
 
@@ -602,9 +618,14 @@ async def test_feed_disconnect_unsubscribes(client, system):
 
 
 async def test_a_fact_is_returned_by_name(client, system):
-    system.memories["brain"].write_fact("pool", "the pool is cold")
+    system.memories["brain"].write_fact("pool", "Pool status", "the pool is cold")
     body = await get_json(client, "/api/agents/brain/facts/pool")
-    assert body == {"agent": "brain", "name": "pool", "body": "the pool is cold"}
+    assert body == {
+        "agent": "brain",
+        "name": "pool",
+        "title": "Pool status",
+        "body": "the pool is cold",
+    }
 
 
 async def test_a_missing_fact_is_a_404(client):
