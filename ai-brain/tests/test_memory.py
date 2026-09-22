@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from ai_brain.memory import MemoryDir, safe_name
+from ai_brain.memory import MemoryDir, safe_name, split_frontmatter
 
 
 def test_safe_name_rejects_paths():
@@ -13,8 +13,10 @@ def test_safe_name_rejects_paths():
 
 
 def test_fact_roundtrip_and_listing(brain_dir):
-    brain_dir.write_fact("pool", "Pool is 28C")
-    assert brain_dir.read_fact("pool") == "Pool is 28C"
+    brain_dir.write_fact("pool", "Pool temperature", "Pool is 28C")
+    fact = brain_dir.read_fact("pool")
+    assert fact.title == "Pool temperature"
+    assert fact.body == "Pool is 28C"
     assert brain_dir.read_fact("missing") is None
     assert brain_dir.list_facts() == ["pool"]
     assert not list(brain_dir.root.glob("facts/*.tmp"))
@@ -47,7 +49,7 @@ def test_notes_lifecycle(brain_dir):
 def test_read_context_contains_sections(brain_dir):
     brain_dir.rewrite_identity("I am curious")
     brain_dir.rewrite_goals("- watch the pool")
-    brain_dir.write_fact("pool", "28C")
+    brain_dir.write_fact("pool", "Pool temperature", "28C")
     brain_dir.drop_note("filip", "hello")
     ctx = brain_dir.read_context("Be kind.")
     for s in ["Be kind.", "I am curious", "watch the pool", "pool", "from: filip", "hello"]:
@@ -58,7 +60,7 @@ def test_read_context_contains_sections(brain_dir):
 def test_needs_compaction(brain_dir):
     assert not brain_dir.needs_compaction()
     for i in range(41):
-        brain_dir.write_fact(f"f{i}", "x")
+        brain_dir.write_fact(f"f{i}", "x", "x")
     assert brain_dir.needs_compaction()
 
 
@@ -71,6 +73,81 @@ def test_seed_from_copies_once(tmp_path, expert_dir):
     (seed / "personas" / "energy.md").write_text("changed")
     expert_dir.seed_from(seed)
     assert expert_dir.persona_text() == "Energy expert"
+
+
+# --- persona frontmatter ---------------------------------------------------
+
+
+def test_split_frontmatter_separates_meta_from_body():
+    meta, body = split_frontmatter("---\nemoji: ⚡\ncolor: blue\n---\nI am the energy expert.\n")
+    assert meta == {"emoji": "⚡", "color": "blue"}
+    assert body == "I am the energy expert.\n"
+
+
+def test_split_frontmatter_with_no_block_returns_the_whole_text_as_body():
+    meta, body = split_frontmatter("Just a persona, no frontmatter.")
+    assert meta == {}
+    assert body == "Just a persona, no frontmatter."
+
+
+def test_split_frontmatter_ignores_an_unparsable_line():
+    meta, _ = split_frontmatter("---\nemoji: ⚡\nnot a key value line\n---\nbody")
+    assert meta == {"emoji": "⚡"}
+
+
+def test_persona_text_strips_frontmatter_but_persona_meta_keeps_it(tmp_path, expert_dir):
+    seed = tmp_path / "seed"
+    (seed / "personas").mkdir(parents=True)
+    (seed / "personas" / "energy.md").write_text("---\nemoji: ⚡\n---\nI am the energy expert.\n")
+    expert_dir.seed_from(seed)
+
+    assert expert_dir.persona_text() == "I am the energy expert."
+    assert expert_dir.persona_meta() == {"emoji": "⚡"}
+
+
+def test_seed_from_backfills_frontmatter_onto_an_already_live_persona(tmp_path, expert_dir):
+    """A persona seeded before this field existed gets the seed's current
+    frontmatter added in front -- but never touches the body underneath,
+    which may since have been hand-edited or (for the brain) rewritten."""
+    seed = tmp_path / "seed"
+    (seed / "personas").mkdir(parents=True)
+    # Live persona already exists, with no frontmatter -- as if seeded before
+    # this field was invented.
+    expert_dir.persona_path.parent.mkdir(parents=True, exist_ok=True)
+    expert_dir.persona_path.write_text("I am the energy expert, already live.")
+
+    (seed / "personas" / "energy.md").write_text(
+        "---\nemoji: ⚡\n---\nI am the energy expert, from the seed.\n"
+    )
+    expert_dir.seed_from(seed)
+
+    assert expert_dir.persona_meta() == {"emoji": "⚡"}
+    # The live body is untouched -- only the seed's body would have said
+    # "from the seed".
+    assert expert_dir.persona_text() == "I am the energy expert, already live."
+
+
+def test_seed_from_backfill_is_idempotent(tmp_path, expert_dir):
+    seed = tmp_path / "seed"
+    (seed / "personas").mkdir(parents=True)
+    (seed / "personas" / "energy.md").write_text("---\nemoji: ⚡\n---\nseed body\n")
+    expert_dir.seed_from(seed)
+    first = expert_dir.persona_path.read_text(encoding="utf-8")
+
+    expert_dir.seed_from(seed)  # a second boot, same seed
+    assert expert_dir.persona_path.read_text(encoding="utf-8") == first
+
+
+def test_seed_from_does_nothing_when_the_seed_has_no_frontmatter(tmp_path, expert_dir):
+    seed = tmp_path / "seed"
+    (seed / "personas").mkdir(parents=True)
+    (seed / "personas" / "energy.md").write_text("plain seed, no frontmatter")
+    expert_dir.seed_from(seed)
+    assert expert_dir.persona_meta() == {}
+
+    (seed / "personas" / "energy.md").write_text("still plain")
+    expert_dir.seed_from(seed)
+    assert expert_dir.persona_text() == "plain seed, no frontmatter"
 
 
 def test_drop_note_counter_avoids_collisions(brain_dir):
@@ -120,7 +197,7 @@ def test_brain_seed_creates_identity_and_goals(brain_dir, tmp_path):
 
 
 def test_delete_fact_roundtrip(brain_dir):
-    brain_dir.write_fact("pool", "Pool is 28C")
+    brain_dir.write_fact("pool", "Pool temperature", "Pool is 28C")
     assert brain_dir.delete_fact("pool") is True
     assert brain_dir.read_fact("pool") is None
     assert brain_dir.list_facts() == []
@@ -138,7 +215,7 @@ def test_delete_fact_validates_the_name(brain_dir):
 def test_delete_fact_clears_the_compaction_trigger(brain_dir):
     """Overwriting a fact still counts, so without delete the latch never opens."""
     for i in range(41):
-        brain_dir.write_fact(f"f{i}", "x")
+        brain_dir.write_fact(f"f{i}", "x", "x")
     assert brain_dir.needs_compaction()
 
     brain_dir.delete_fact("f0")
@@ -199,45 +276,49 @@ def test_journal_days_is_empty_without_a_journal_dir(tmp_path, clock):
 
 
 def test_fact_stats_counts_writes_and_keeps_the_first_time(brain_dir, clock):
-    brain_dir.write_fact("pool", "28C")
+    brain_dir.write_fact("pool", "Pool temperature", "28C")
     first = clock.state["now"].timestamp()
     clock.state["now"] += timedelta(hours=3)
-    brain_dir.write_fact("pool", "29C")
-    brain_dir.write_fact("spa", "38C")
+    brain_dir.write_fact("pool", "Pool temperature", "29C")
+    brain_dir.write_fact("spa", "Spa temperature", "38C")
 
     stats = brain_dir.fact_stats()
     assert [s.name for s in stats] == ["pool", "spa"]
     pool = stats[0]
+    assert pool.title == "Pool temperature"
     assert pool.writes == 2
     assert pool.first_written_at == first
     assert pool.written_at >= pool.first_written_at
 
 
 def test_fact_stats_sidecar_never_leaks_into_the_fact_list(brain_dir):
-    brain_dir.write_fact("pool", "28C")
+    brain_dir.write_fact("pool", "Pool temperature", "28C")
     assert (brain_dir.facts_dir / "_meta.json").exists()
     assert brain_dir.list_facts() == ["pool"]
     assert [s.name for s in brain_dir.fact_stats()] == ["pool"]
 
 
 def test_delete_fact_drops_the_sidecar_entry(brain_dir):
-    brain_dir.write_fact("pool", "28C")
-    brain_dir.write_fact("pool", "29C")
+    brain_dir.write_fact("pool", "Pool temperature", "28C")
+    brain_dir.write_fact("pool", "Pool temperature", "29C")
     assert brain_dir.delete_fact("pool") is True
 
-    brain_dir.write_fact("pool", "30C")
+    brain_dir.write_fact("pool", "Pool temperature", "30C")
     assert brain_dir.fact_stats()[0].writes == 1
 
 
 def test_fact_stats_degrades_when_the_sidecar_is_corrupt(brain_dir):
     """The facts are the truth; a broken sidecar must not hide them."""
-    brain_dir.write_fact("pool", "28C")
+    brain_dir.write_fact("pool", "Pool temperature", "28C")
     (brain_dir.facts_dir / "_meta.json").write_text("{not json", encoding="utf-8")
 
     stats = brain_dir.fact_stats()
     assert len(stats) == 1
     assert stats[0].writes == 1
     assert stats[0].first_written_at == stats[0].written_at
+    # The sidecar (and its "title": "Pool temperature") is gone -- the title
+    # falls back to the body itself, same as any pre-title fact would.
+    assert stats[0].title == "28C"
 
 
 def test_fact_stats_without_a_facts_dir(tmp_path, clock):

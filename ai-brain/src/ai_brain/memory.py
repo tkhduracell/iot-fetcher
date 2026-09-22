@@ -31,10 +31,66 @@ MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
 MAX_REVISIONS = 20
 MAX_CONTEXT_GAPS = 10
+MAX_TITLE_TOKENS = 20
 
 # The fact sidecar lives beside the facts but is not one: ``list_facts`` globs
 # ``*.md``, so a ``.json`` name can never be mistaken for a fact.
 FACT_META_NAME = "_meta.json"
+
+
+def _fit_title(title: str) -> str:
+    """``title`` cut to ``MAX_TITLE_TOKENS`` words, ellipsis included.
+
+    Truncated rather than rejected: a title one word over the limit is a
+    trivial mistake, and losing the whole ``write_fact`` call over it would
+    make the limit more disruptive than the thing it protects the UI from.
+    """
+    words = title.split()
+    if len(words) <= MAX_TITLE_TOKENS:
+        return title
+    return " ".join(words[:MAX_TITLE_TOKENS]) + "…"
+
+
+def _fallback_title(body: str) -> str:
+    """A title for a fact written before ``title`` existed.
+
+    The first ``MAX_TITLE_TOKENS`` words of the body, so an old fact still
+    gets a readable label in a list view instead of a blank one -- exactly
+    what a writer would have put in ``title`` had the field existed when they
+    wrote it. Computed on read, never stored, so it tracks the body if the
+    body is ever read again before a title is finally set.
+    """
+    words = body.split()
+    title = " ".join(words[:MAX_TITLE_TOKENS])
+    if len(words) > MAX_TITLE_TOKENS:
+        title += "…"
+    return title
+
+
+_FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
+_FRONTMATTER_LINE = re.compile(r"^([a-z][a-z0-9_]*):\s*(.*)$")
+
+
+def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """A persona file's leading ``---\\nkey: value\\n---`` block, and the rest.
+
+    A persona is fed straight into the model's own system prompt (see
+    ``read_context``), so whatever lives in the frontmatter must never reach
+    it -- this is the one place that boundary is drawn, and every reader of a
+    persona (the prompt, the API) goes through it rather than reading the
+    file directly. Deliberately not YAML: one ``key: value`` per line, no
+    nesting, no lists -- everything this needs and nothing a persona file
+    could accidentally trigger a parser edge case with.
+    """
+    match = _FRONTMATTER.match(text)
+    if not match:
+        return {}, text
+    meta: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        line_match = _FRONTMATTER_LINE.match(line.strip())
+        if line_match:
+            meta[line_match.group(1)] = line_match.group(2).strip()
+    return meta, text[match.end() :]
 
 
 def now_utc() -> datetime:
@@ -79,9 +135,19 @@ class FactStat:
     """One fact, with enough metadata for a reader to judge its freshness."""
 
     name: str
+    title: str
     written_at: float
     first_written_at: float
     writes: int
+
+
+@dataclass(frozen=True)
+class Fact:
+    """One fact's full content: the short label and the long body behind it."""
+
+    name: str
+    title: str
+    body: str
 
 
 @dataclass(frozen=True)
@@ -174,13 +240,42 @@ class MemoryDir:
         if not self.persona_path.exists() and src.exists():
             self.persona_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, self.persona_path)
+        elif src.exists():
+            # Already live from before frontmatter existed (or from a seed
+            # that had none yet): backfilling only the frontmatter, never the
+            # body, is what makes this safe to run unconditionally on every
+            # boot -- a persona the agent later rewrote (rewrite_identity)
+            # keeps its own words untouched, and gets the seed's current
+            # metadata sitting in front of them.
+            self._backfill_frontmatter(src)
         if self.is_brain and not self.goals_path.exists():
             _atomic_write(self.goals_path, "")
+
+    def _backfill_frontmatter(self, seed_path: Path) -> None:
+        seed_meta, _ = split_frontmatter(seed_path.read_text(encoding="utf-8"))
+        if not seed_meta:
+            return
+        live = self._read(self.persona_path)
+        live_meta, live_body = split_frontmatter(live)
+        if live_meta == seed_meta:
+            return
+        front = "".join(f"{k}: {v}\n" for k, v in seed_meta.items())
+        _atomic_write(self.persona_path, f"---\n{front}---\n{live_body}")
 
     # -- persona / goals ----------------------------------------------
 
     def persona_text(self) -> str:
-        return self._read(self.persona_path)
+        """The persona body only -- never the frontmatter. This is what goes
+        into the model's own prompt (see ``read_context``), so the split
+        happens here rather than trusting every caller to remember it."""
+        _, body = split_frontmatter(self._read(self.persona_path))
+        return body.strip()
+
+    def persona_meta(self) -> dict[str, str]:
+        """The persona file's frontmatter (e.g. ``{"emoji": "🧠"}``), never
+        its body. Introspection only -- nothing in the loop reads this."""
+        meta, _ = split_frontmatter(self._read(self.persona_path))
+        return meta
 
     def goals_text(self) -> str:
         if not self.is_brain:
@@ -278,16 +373,19 @@ class MemoryDir:
 
     # -- facts ---------------------------------------------------------
 
-    def write_fact(self, name: str, body: str) -> None:
+    def write_fact(self, name: str, title: str, body: str) -> None:
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.facts_dir / f"{safe_name(name)}.md", body)
-        self._bump_fact_meta(name)
+        self._bump_fact_meta(name, _fit_title(title))
 
-    def read_fact(self, name: str) -> str | None:
+    def read_fact(self, name: str) -> Fact | None:
         path = self.facts_dir / f"{safe_name(name)}.md"
         if not path.exists():
             return None
-        return path.read_text(encoding="utf-8")
+        body = path.read_text(encoding="utf-8")
+        meta = self._read_fact_meta().get(name)
+        title = meta.get("title") if isinstance(meta, dict) else None
+        return Fact(name=name, title=title or _fallback_title(body), body=body)
 
     def delete_fact(self, name: str) -> bool:
         """Remove one fact. Returns False when there was nothing to remove.
@@ -312,12 +410,17 @@ class MemoryDir:
         return sorted(p.stem for p in self.facts_dir.glob("*.md"))
 
     def fact_stats(self) -> list[FactStat]:
-        """Every fact with its age and how often it has been rewritten.
+        """Every fact with its title, age and how often it has been rewritten.
 
         The sidecar is advisory: the fact files are the truth, so anything
-        missing or unreadable degrades to "written once, just now" instead of
-        failing. A reader asking what the brain knows must never get an
-        exception because a metadata file was half-written or hand-edited.
+        missing or unreadable degrades to "written once, just now, titled from
+        its own body" instead of failing. A reader asking what the brain
+        knows must never get an exception because a metadata file was
+        half-written or hand-edited.
+
+        A title missing from the sidecar (a fact written before ``title``
+        existed) reads the body to fall back to one -- the one extra file
+        read here is the cost of a list view never showing a blank title.
         """
         meta = self._read_fact_meta()
         stats: list[FactStat] = []
@@ -329,16 +432,24 @@ class MemoryDir:
                 # Deleted between the listing and the stat; it is simply gone.
                 continue
             entry = meta.get(name)
-            first, writes = written_at, 1
+            first, writes, title = written_at, 1, None
             if isinstance(entry, dict):
                 try:
                     first = float(entry.get("first_written_at", written_at))
                     writes = max(int(entry.get("writes", 1)), 1)
                 except (TypeError, ValueError):
                     first, writes = written_at, 1
+                raw_title = entry.get("title")
+                title = raw_title if isinstance(raw_title, str) and raw_title else None
+            if title is None:
+                try:
+                    title = _fallback_title(path.read_text(encoding="utf-8"))
+                except OSError:
+                    title = name
             stats.append(
                 FactStat(
                     name=name,
+                    title=title,
                     written_at=written_at,
                     first_written_at=first,
                     writes=writes,
@@ -358,7 +469,7 @@ class MemoryDir:
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.fact_meta_path, json.dumps(meta, indent=2, sort_keys=True))
 
-    def _bump_fact_meta(self, name: str) -> None:
+    def _bump_fact_meta(self, name: str, title: str) -> None:
         meta = self._read_fact_meta()
         entry = meta.get(name)
         now = self.clock().timestamp()
@@ -370,7 +481,7 @@ class MemoryDir:
                 first, writes = now, 1
         else:
             first, writes = now, 1
-        meta[name] = {"first_written_at": first, "writes": writes}
+        meta[name] = {"first_written_at": first, "writes": writes, "title": title}
         self._write_fact_meta(meta)
 
     # -- gaps ----------------------------------------------------------

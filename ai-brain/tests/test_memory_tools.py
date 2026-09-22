@@ -71,8 +71,11 @@ async def test_journal_and_facts_roundtrip(registry, make_ctx, brain_dir):
     assert (await call(registry, ctx, "append_journal", line="woke up"))["ok"] is True
     assert "woke up" in brain_dir.journal_text(days=1)
 
-    assert (await call(registry, ctx, "write_fact", name="pool", body="28C"))["ok"] is True
-    assert (await call(registry, ctx, "read_fact", name="pool"))["result"] == "28C"
+    assert (
+        await call(registry, ctx, "write_fact", name="pool", title="Pool temp", body="28C")
+    )["ok"] is True
+    out = await call(registry, ctx, "read_fact", name="pool")
+    assert out == {"ok": True, "name": "pool", "title": "Pool temp", "body": "28C"}
     assert (await call(registry, ctx, "list_facts"))["result"] == ["pool"]
 
 
@@ -82,8 +85,65 @@ async def test_read_fact_missing_is_not_an_error(registry, make_ctx):
 
 
 async def test_unsafe_fact_name_is_an_error(registry, make_ctx):
-    out = await call(registry, make_ctx("brain"), "write_fact", name="../escape", body="x")
+    out = await call(
+        registry, make_ctx("brain"), "write_fact", name="../escape", title="t", body="x"
+    )
     assert "ValueError" in out["error"]
+
+
+async def test_write_fact_flags_a_similarly_named_existing_fact(registry, make_ctx):
+    ctx = make_ctx("brain")
+    await call(registry, ctx, "write_fact", name="tibber-bridge-baseline", title="t", body="up")
+    out = await call(
+        registry, ctx, "write_fact", name="tibber_bridge_baseline", title="t", body="stuck"
+    )
+
+    assert out["ok"] is True
+    assert out["similar_existing_facts"] == ["tibber-bridge-baseline"]
+    assert "hint" in out
+
+
+async def test_write_fact_says_nothing_when_nothing_is_similar(registry, make_ctx):
+    ctx = make_ctx("brain")
+    await call(registry, ctx, "write_fact", name="pool_temp", title="t", body="28C")
+    out = await call(
+        registry, ctx, "write_fact", name="volvo_xc40_status", title="t", body="charging"
+    )
+
+    assert "similar_existing_facts" not in out
+    assert "hint" not in out
+
+
+async def test_write_fact_overwriting_itself_is_not_flagged_as_similar(registry, make_ctx):
+    ctx = make_ctx("brain")
+    await call(registry, ctx, "write_fact", name="tibber_bridge_status", title="t", body="up")
+    out = await call(
+        registry, ctx, "write_fact", name="tibber_bridge_status", title="t", body="down again"
+    )
+
+    assert "similar_existing_facts" not in out
+
+
+async def test_write_fact_does_not_flag_a_single_generic_token(registry, make_ctx):
+    """A one-word name (e.g. every persona's own 'goals') must not flag
+    against an unrelated longer name that happens to share that one word."""
+    ctx = make_ctx("brain")
+    await call(registry, ctx, "write_fact", name="status", title="t", body="x")
+    out = await call(
+        registry, ctx, "write_fact", name="deploy_status_report", title="t", body="y"
+    )
+
+    assert "similar_existing_facts" not in out
+
+
+async def test_write_fact_truncates_a_too_long_title(registry, make_ctx, brain_dir):
+    ctx = make_ctx("brain")
+    long_title = " ".join(f"word{i}" for i in range(30))
+    await call(registry, ctx, "write_fact", name="pool", title=long_title, body="28C")
+
+    stats = brain_dir.fact_stats()
+    assert len(stats[0].title.split()) == 20
+    assert stats[0].title.endswith("…")
 
 
 async def test_send_note_writes_to_target_inbox_and_wakes_it(registry, make_ctx, expert_dir, woken):
@@ -132,7 +192,7 @@ async def test_rewrite_goals_and_identity_from_brain(registry, make_ctx, brain_d
 
 async def test_delete_fact_roundtrip(registry, make_ctx, brain_dir):
     ctx = make_ctx("brain")
-    await call(registry, ctx, "write_fact", name="pool", body="28C")
+    await call(registry, ctx, "write_fact", name="pool", title="t", body="28C")
     out = await call(registry, ctx, "delete_fact", name="pool")
 
     assert out["deleted"] == "pool"
@@ -153,7 +213,7 @@ async def test_delete_fact_refuses_a_path(registry, make_ctx):
 async def test_an_expert_may_delete_its_own_facts(registry, make_ctx, expert_dir):
     """Every loop curates its own memory; pruning is not a brain-only power."""
     ctx = make_ctx("energy")
-    await call(registry, ctx, "write_fact", name="usage", body="high")
+    await call(registry, ctx, "write_fact", name="usage", title="t", body="high")
     assert (await call(registry, ctx, "delete_fact", name="usage"))["deleted"] == "usage"
     assert expert_dir.list_facts() == []
 

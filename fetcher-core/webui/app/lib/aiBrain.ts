@@ -42,6 +42,9 @@ export type LastCycle = {
 
 export type AgentSummary = {
   name: string;
+  /** From the persona's own frontmatter; "" when it has none (e.g. seeded
+   *  before this field existed and never backfilled). */
+  emoji: string;
   priority: 'brain' | 'expert';
   heartbeat_s: number;
   last_cycle: LastCycle | null;
@@ -211,7 +214,7 @@ export const fetchJournal = (name: string, days: number, signal?: AbortSignal) =
   );
 
 export const fetchFact = (name: string, fact: string, signal?: AbortSignal) =>
-  getJson<{ agent: string; name: string; body: string }>(
+  getJson<Fact>(
     `api/agents/${encodeURIComponent(name)}/facts/${encodeURIComponent(fact)}`,
     signal,
   );
@@ -376,12 +379,23 @@ export function truncate(value: string, max: number = 160): { text: string; trun
 /** `fact_stats` entry — per-fact freshness and write count (ai-brain A1). */
 export type FactStat = {
   name: string;
+  /** Short human-readable label, <=20 words. A fact written before `title`
+   *  existed gets one derived from its own body, server-side — never blank. */
+  title: string;
   /** epoch seconds of the last write. */
   written_at: number;
   /** epoch seconds of the first write; equals `written_at` when unknown. */
   first_written_at: number;
   /** times this fact has been written; >= 1. */
   writes: number;
+};
+
+/** One fact's full content, from `/api/agents/{name}/facts/{fact}`. */
+export type Fact = {
+  agent: string;
+  name: string;
+  title: string;
+  body: string;
 };
 
 /** A known unknown the agent has recorded (ai-brain A3). Only open gaps are
@@ -486,10 +500,12 @@ export const fetchAgentPlus = (name: string, signal?: AbortSignal) =>
 
 /** Fact bodies for one agent, keyed by fact name.
  *
- *  The wall shows beliefs as sentences, and the sentence lives in the fact's
- *  body — there is no bulk endpoint, so this fans out over the per-fact one.
- *  Individual failures are dropped rather than failing the batch: one unreadable
- *  fact should cost one line, not the column. Keep `names` short. */
+ *  The wall shows each belief's title (from fact_stats, already in hand) with
+ *  its body as the description underneath — the body is the only part not
+ *  already on the agent-detail response, and there is no bulk endpoint for
+ *  it, so this fans out over the per-fact one. Individual failures are
+ *  dropped rather than failing the batch: one unreadable fact should cost one
+ *  line, not the column. Keep `names` short. */
 export async function fetchFactBodies(
   agent: string,
   names: string[],
