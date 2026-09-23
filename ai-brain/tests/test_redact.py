@@ -29,6 +29,32 @@ def test_redacts_google_api_key_bare():
     assert key not in redact(f"key seen: {key}")
 
 
+def test_redacts_google_aq_style_key():
+    key = "AQ.FakeFAKEfake0123456789_abcdefghijABCDEFGHIJ-klmnopqrstu"
+    out = redact(f"leaked key={key}")
+    assert key not in out
+    assert MASK in out
+
+
+def test_redacts_google_aq_style_key_bare_in_prose():
+    key = "AQ.FakeFAKEfake0123456789_abcdefghijABCDEFGHIJ-klmnopqrstu"
+    out = redact(f"found token {key} in the request")
+    assert key not in out
+
+
+def test_leaves_short_aq_prefixed_value_alone():
+    # Too short to be a real AQ.-style key -- must not be eaten.
+    line = "AQ.1"
+    assert redact(line) == line
+
+
+def test_leaves_faq_filename_alone():
+    # "FAQ.txt" contains "AQ." but is not prefixed by a word boundary the
+    # secret pattern should ever fire on.
+    line = "see the FAQ.txt file"
+    assert redact(line) == line
+
+
 def test_redacts_google_oauth_access_token():
     out = redact("Authorization header carried ya29.FAKEtoken1234567890abcdefXYZ")
     assert "ya29." not in out

@@ -36,6 +36,14 @@ _GOOGLE_API_KEY = re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")
 _GOOGLE_OAUTH_TOKEN = re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b")
 _GOOGLE_REFRESH_TOKEN = re.compile(r"\b1//[0-9A-Za-z_-]{20,}\b")
 
+# Newer Google API keys use "AQ." + a long token instead of "AIza...". The
+# negative lookbehind is what keeps "FAQ.txt" or "see the FAQ." out --
+# without it, the "AQ." inside "FAQ." would itself match. \b alone does not
+# help here since '.' is not a word character, so the char immediately
+# before "AQ" has to be checked by hand. The 30-char floor is what keeps a
+# short, ordinary "AQ.something" out too -- nothing credible this short.
+_GOOGLE_AQ_KEY = re.compile(r"(?<![A-Za-z0-9_])AQ\.[A-Za-z0-9_-]{30,}")
+
 # Slack tokens: xoxb- (bot), xoxa- (app), xoxp- (user), xoxr- (refresh), and
 # the newer xoxe.xox[bp]- rotated variants all start this way.
 _SLACK_TOKEN = re.compile(r"\bxox[abpr](?:-[0-9A-Za-z]+)+\b|\bxoxe\.xox[bp]-(?:-?[0-9A-Za-z]+)+\b")
@@ -89,6 +97,7 @@ def redact(text: str) -> str:
 
     out = text
     out = _GOOGLE_API_KEY.sub(MASK, out)
+    out = _GOOGLE_AQ_KEY.sub(MASK, out)
     out = _GOOGLE_OAUTH_TOKEN.sub(MASK, out)
     out = _GOOGLE_REFRESH_TOKEN.sub(MASK, out)
     out = _SLACK_TOKEN.sub(MASK, out)
