@@ -13,3 +13,16 @@ scrape_configs:
       password_file: /etc/wud-metrics-password
     static_configs:
       - targets: ['wud:3000']
+    # wud_containers carries ~45 labels per series (id, watcher, every
+    # image_*/result_* detail field, include/exclude tag lists, ...), which
+    # is over VM's default -maxLabelsPerTimeseries=40, so VM silently drops
+    # the whole series rather than truncating it. Drop the high-detail /
+    # rarely-queried labels here instead of raising the global limit, so the
+    # ones Grafana's wud panels actually use (name, image_name,
+    # image_tag_value, image_architecture, status, update_available) plus a
+    # few generally useful ones (watcher, id, image_registry_name) survive.
+    # See grafana/src/panels/wud.ts for the panel queries this must keep
+    # working.
+    metric_relabel_configs:
+      - regex: 'image_id|image_digest_watch|image_digest_repo|image_digest_value|image_tag_semver|image_variant|image_created|image_registry_url|include_tags|exclude_tags|result_tag|result_digest|result_created|link_type|display_name|display_icon|compose_project|compose_service'
+        action: labeldrop
