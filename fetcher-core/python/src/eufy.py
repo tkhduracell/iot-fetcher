@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from typing import List, Optional
 
@@ -19,8 +20,16 @@ eufy_username = os.environ.get('EUFY_USERNAME', '')
 eufy_password = os.environ.get('EUFY_PASSWORD', '')
 eufy_country = os.environ.get('EUFY_COUNTRY', 'se')
 gemini_token = os.environ.get('GEMINI_TOKEN', '')
+gemini_model = os.environ.get('GEMINI_CAPTCHA_MODEL', 'gemini-3.8-flash')
 
 DOMAIN_BASE = "https://extend.eufylife.com"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# When Gemini answers 429 (quota exceeded), stop attempting CAPTCHA solves
+# until this monotonic timestamp. eufy() runs every 5 minutes and every
+# login that hits the CAPTCHA wall costs a Gemini call, so without a
+# cooldown a quota outage means one failed call per cycle, all logged.
+_gemini_cooldown_until = 0.0
 SERVER_PUBLIC_KEY_HEX = "04c5c00c4f8d1197cc7c3167c52bf7acb054d722f0ef08dcd7e0883236e0d72a3868d9750cb47fa4619248f3d83f0f662671dadc6e2d31c2f41db0161651c7c076"
 
 BASE_HEADERS = {
@@ -80,10 +89,56 @@ def _ecdh_shared_secret(private_key, server_pub_hex):
     return private_key.exchange(ec.ECDH(), server_pub_key)
 
 
+_KEY_QUERY_PARAM_RE = re.compile(r'([?&](?:key|x-goog-api-key)=)[^&\s"\']+', re.IGNORECASE)
+
+
+def _sanitize_exc(exc: BaseException) -> str:
+    """Stringify a requests exception with any ?key=... query param
+    redacted. The API key is sent as a header now, not a query param, so
+    this is a defensive backstop -- it keeps a stray key out of logs even
+    if a future edit reintroduces one, or if an underlying redirect/error
+    surfaces a URL we didn't build ourselves."""
+    return _KEY_QUERY_PARAM_RE.sub(r'\1***REDACTED***', str(exc))
+
+
+def _gemini_retry_delay_seconds(resp: requests.Response) -> Optional[float]:
+    """Extract a backoff duration from a 429 response: prefer the standard
+    Retry-After header, fall back to the RetryInfo.retryDelay Gemini puts in
+    the JSON error body (e.g. "23s")."""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
+
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+
+    for detail in (body.get("error", {}) or {}).get("details", []) or []:
+        delay = detail.get("retryDelay")
+        if isinstance(delay, str) and delay.endswith("s"):
+            try:
+                return float(delay[:-1])
+            except ValueError:
+                continue
+    return None
+
+
 def _solve_captcha(captcha_img: str) -> Optional[str]:
     """Solve CAPTCHA using Gemini API. SVG sent as text, PNG via vision. Returns answer or None."""
+    global _gemini_cooldown_until
+
     if not gemini_token:
         logger.warning("[eufy] GEMINI_TOKEN not set, cannot auto-solve CAPTCHA")
+        return None
+
+    now = time.monotonic()
+    if now < _gemini_cooldown_until:
+        logger.warning("[eufy] Gemini in cooldown for %.0fs after 429, skipping CAPTCHA solve",
+                        _gemini_cooldown_until - now)
         return None
 
     if not captcha_img.startswith("data:"):
@@ -106,12 +161,34 @@ def _solve_captcha(captcha_img: str) -> Optional[str]:
     # gemini-3-pro-preview was retired (404s once Google moves a preview
     # model out from under a name); flash is good enough for reading a few
     # CAPTCHA characters and is the same model ai-brain already leans on.
-    resp = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_token}",
-        json={"contents": [{"parts": parts}]},
-        timeout=120,
-    )
-    resp.raise_for_status()
+    # Model is configurable via GEMINI_CAPTCHA_MODEL for the next retirement.
+    #
+    # The key goes in the x-goog-api-key header, not the URL query string:
+    # requests never puts headers in exceptions/Response.url, so this keeps
+    # the key out of logs and stack traces even on failure (e.g. a 429).
+    try:
+        resp = requests.post(
+            f"{GEMINI_API_BASE}/{gemini_model}:generateContent",
+            headers={"x-goog-api-key": gemini_token},
+            json={"contents": [{"parts": parts}]},
+            timeout=120,
+        )
+    except requests.RequestException as exc:
+        logger.warning("[eufy] Gemini CAPTCHA request failed: %s", _sanitize_exc(exc))
+        return None
+
+    if resp.status_code == 429:
+        delay = _gemini_retry_delay_seconds(resp) or 300.0
+        _gemini_cooldown_until = time.monotonic() + delay
+        logger.warning("[eufy] Gemini quota exceeded (429), backing off %.0fs", delay)
+        return None
+
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        logger.warning("[eufy] Gemini CAPTCHA request failed: %s", _sanitize_exc(exc))
+        return None
+
     answer = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     logger.info("[eufy] Gemini solved CAPTCHA: %s", answer)
     return answer
