@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ai_brain.redact import redact
+
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 MAX_FACTS = 40
@@ -348,7 +350,12 @@ class MemoryDir:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         path = self.journal_dir / f"{now:%Y-%m-%d}.md"
         with path.open("a", encoding="utf-8") as fh:
-            fh.write(f"{now:%H:%M}  {line}\n")
+            # Belt and braces: tool output the model reads is already
+            # redacted (see wrap_external), but the journal is free text the
+            # model composes itself, so a secret it paraphrased or quoted
+            # from elsewhere in the conversation is caught here too, on the
+            # way to a file that persists indefinitely.
+            fh.write(f"{now:%H:%M}  {redact(line)}\n")
 
     def journal_days(self) -> list[str]:
         """Every date the journal has a file for, oldest first.
@@ -374,9 +381,14 @@ class MemoryDir:
     # -- facts ---------------------------------------------------------
 
     def write_fact(self, name: str, title: str, body: str) -> None:
+        # Same belt-and-braces reasoning as append_journal: a fact is the
+        # most durable thing this system writes -- it survives compaction,
+        # gets read back into every future cycle's prompt, and (this repo
+        # being public) could end up in git history -- so it gets its own
+        # redaction pass rather than relying solely on the tool-output fence.
         self.facts_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write(self.facts_dir / f"{safe_name(name)}.md", body)
-        self._bump_fact_meta(name, _fit_title(title))
+        _atomic_write(self.facts_dir / f"{safe_name(name)}.md", redact(body))
+        self._bump_fact_meta(name, _fit_title(redact(title)))
 
     def read_fact(self, name: str) -> Fact | None:
         path = self.facts_dir / f"{safe_name(name)}.md"

@@ -28,6 +28,32 @@ def test_journal_append_uses_day_file(brain_dir, clock):
     assert "woke up" in brain_dir.journal_text(days=2)
 
 
+def test_write_fact_redacts_a_secret_in_the_body(brain_dir):
+    """Defense in depth: even though tool output is already redacted before
+    the model reads it (wrap_external), the write path redacts again -- a
+    fact is the most durable thing this system writes, and this repo is
+    public."""
+    brain_dir.write_fact(
+        "cloud-key", "Cloud API key", "found key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q in logs"
+    )
+    fact = brain_dir.read_fact("cloud-key")
+    assert "AIzaFAKE" not in fact.body
+    assert "[REDACTED]" in fact.body
+
+
+def test_write_fact_redacts_a_secret_in_the_title(brain_dir):
+    brain_dir.write_fact("x", "key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q leaked", "body")
+    fact = brain_dir.read_fact("x")
+    assert "AIzaFAKE" not in fact.title
+
+
+def test_append_journal_redacts_a_secret(brain_dir, clock):
+    brain_dir.append_journal("saw a leaked token=abcDEFghijklmno1234567890 in the log")
+    text = brain_dir.journal_text(days=2)
+    assert "abcDEFghijklmno1234567890" not in text
+    assert "[REDACTED]" in text
+
+
 def test_goals_identity_brain_only(brain_dir, expert_dir):
     brain_dir.rewrite_goals("# Goals\n- learn")
     assert brain_dir.goals_text() == "# Goals\n- learn"
