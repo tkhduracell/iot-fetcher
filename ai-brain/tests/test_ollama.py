@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from ai_brain.llm import Message, ProviderError, ToolCall, ToolSpec
-from ai_brain.llm.ollama import OllamaProvider, build_request
+from ai_brain.llm.ollama import DEFAULT_NUM_CTX, OllamaProvider, build_request
 
 URL = "http://ollama:11434/api/chat"
 
@@ -155,7 +155,7 @@ async def test_request_body_mapping():
             {"role": "tool", "content": '{"c": 17}'},
         ],
         "stream": False,
-        "options": {"num_predict": 512, "temperature": 0.7},
+        "options": {"num_predict": 512, "temperature": 0.7, "num_ctx": DEFAULT_NUM_CTX},
         "tools": [
             {
                 "type": "function",
@@ -224,3 +224,96 @@ def test_build_request_maps_tool_role_directly():
     messages = [Message(role="tool", name="a", tool_call_id="call_1", content="1")]
     payload = build_request("llama3.2:3b", messages, [], 64)
     assert payload["messages"] == [{"role": "tool", "content": "1"}]
+
+
+# --- num_ctx ----------------------------------------------------------------
+
+
+def test_build_request_sends_num_ctx_with_a_default():
+    payload = build_request("llama3.2:3b", [Message(role="user", content="hi")], [], 64)
+    assert payload["options"]["num_ctx"] == DEFAULT_NUM_CTX
+
+
+def test_build_request_honours_an_explicit_num_ctx():
+    payload = build_request(
+        "llama3.2:3b", [Message(role="user", content="hi")], [], 64, num_ctx=16384
+    )
+    assert payload["options"]["num_ctx"] == 16384
+
+
+@respx.mock
+async def test_provider_sends_its_configured_num_ctx():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    await provider(num_ctx=12345).complete([Message(role="user", content="hi")], [], 64)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["options"]["num_ctx"] == 12345
+
+
+def test_provider_defaults_num_ctx_to_a_pi5_sized_value():
+    assert DEFAULT_NUM_CTX >= 8192
+    p = provider()
+    assert p._num_ctx == DEFAULT_NUM_CTX
+
+
+# --- fitting an oversized prompt into num_ctx --------------------------------
+
+
+def _big_messages(n_tool_msgs=5, filler_chars=2000):
+    filler = "x" * filler_chars
+    messages = [Message(role="system", content="You are the brain.")]
+    for i in range(n_tool_msgs):
+        messages.append(
+            Message(role="tool", name="probe", tool_call_id=f"call_{i}", content=filler)
+        )
+    messages.append(Message(role="user", content="what's the status?"))
+    return messages
+
+
+@respx.mock
+async def test_an_oversized_prompt_is_trimmed_not_sent_verbatim(caplog):
+    import logging
+
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = _big_messages()
+
+    with caplog.at_level(logging.WARNING):
+        await provider(num_ctx=1024).complete(messages, [], 64)
+
+    assert any("exceeds num_ctx" in r.getMessage() for r in caplog.records)
+    sent = json.loads(route.calls.last.request.content)
+    sent_tool_bodies = [m["content"] for m in sent["messages"] if m["role"] == "tool"]
+    assert any("[trimmed" in c for c in sent_tool_bodies)
+
+
+@respx.mock
+async def test_trimming_keeps_the_system_and_final_user_turn():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = _big_messages()
+
+    await provider(num_ctx=1024).complete(messages, [], 64)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["messages"][0] == {"role": "system", "content": "You are the brain."}
+    assert sent["messages"][-1] == {"role": "user", "content": "what's the status?"}
+
+
+@respx.mock
+async def test_a_prompt_that_fits_is_sent_unmodified(caplog):
+    import logging
+
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = [
+        Message(role="system", content="short"),
+        Message(role="user", content="hi"),
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        await provider(num_ctx=DEFAULT_NUM_CTX).complete(messages, [], 64)
+
+    assert not any("exceeds num_ctx" in r.getMessage() for r in caplog.records)
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["messages"] == [
+        {"role": "system", "content": "short"},
+        {"role": "user", "content": "hi"},
+    ]

@@ -368,10 +368,11 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
             self.api_key = api_key
 
     class StubOllama:
-        def __init__(self, model, base_url):
+        def __init__(self, model, base_url, num_ctx=8192):
             self.key = f"ollama:{model}"
             self.model = model
             self.base_url = base_url
+            self.num_ctx = num_ctx
 
     gemini_stub = types.ModuleType("ai_brain.llm.gemini")
     gemini_stub.GeminiProvider = StubGemini
@@ -379,6 +380,7 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
     ollama_stub = types.ModuleType("ai_brain.llm.ollama")
     ollama_stub.OllamaProvider = StubOllama
+    ollama_stub.DEFAULT_NUM_CTX = 8192
     monkeypatch.setitem(sys.modules, "ai_brain.llm.ollama", ollama_stub)
 
     env = parse_env_file(ENV_EXAMPLE)

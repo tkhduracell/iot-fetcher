@@ -165,6 +165,21 @@ async def test_provider_calls_the_discovered_host():
 
 
 @respx.mock
+async def test_provider_forwards_its_num_ctx_to_the_discovered_host():
+    route = respx.post("http://192.168.68.9:11434/api/chat").mock(
+        return_value=httpx.Response(200, json=chat_reply())
+    )
+    finder = finder_for()
+    finder._host = OllamaHost("http://192.168.68.9:11434", MODEL, 0.0)
+    await LanOllamaProvider(finder, num_ctx=12345).complete(MSGS, [], 64)
+
+    import json
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["options"]["num_ctx"] == 12345
+
+
+@respx.mock
 async def test_the_host_is_forgotten_after_its_attempts_run_out():
     respx.post("http://192.168.68.9:11434/api/chat").mock(
         return_value=httpx.Response(500, text="boom")
