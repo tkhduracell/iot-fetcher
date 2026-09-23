@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -201,20 +202,47 @@ func (c *Config) fetchHourlyPrices(slots []time.Time) []float64 {
 	return out
 }
 
-// fetchWaterTempAt looks back up to 12h for the most recent pool temperature
-// reading. The sensor publishes only on change (often hourly), so VM's default
-// ~5m lookback regularly misses a valid-enough reading and drops the planner
-// into fallback mode.
+// waterTempMetrics are proxies for pool water temperature. The dedicated
+// Sonoff sensor (pool_temperature_value) is broken, so we use the IQ pump's
+// motor temperature and the heat pump's inlet temperature. Both read high
+// rather than low (motor self-heats; inlet pipe warms from the heat pump),
+// so the minimum is the best estimate.
+var waterTempMetrics = []string{
+	"pool_iqpump_motordata_temperature",
+	"aqua_temp_temp_incoming",
+}
+
+// fetchWaterTempAt returns the minimum of the latest non-zero reading of each
+// waterTempMetrics series within 12h. Sources report sparsely (the pump sleeps
+// for hours), so VM's default ~5m lookback would miss them. Zeros are dropped:
+// IQ pump device "00" always reports 0 and device "17" reports 0 when idle.
+// Each metric is queried separately; `or` would drop same-labelled series.
 func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
-	result, err := c.queryPromInstantAt("pool_temperature_value", at, "12h")
-	if err != nil {
-		log.Printf("[planner] water temp query failed: %v", err)
+	var vals []float64
+	for _, m := range waterTempMetrics {
+		result, err := c.queryPromInstantAt(fmt.Sprintf("last_over_time(%s[12h]) > 0", m), at, "12h")
+		if err != nil {
+			log.Printf("[planner] water temp query %s failed: %v", m, err)
+			continue
+		}
+		for _, r := range result {
+			for _, s := range r.Values {
+				vals = append(vals, s.Value)
+			}
+		}
+	}
+	return minTemp(vals)
+}
+
+func minTemp(vals []float64) (float64, bool) {
+	if len(vals) == 0 {
 		return 0, false
 	}
-	if len(result) == 0 || len(result[0].Values) == 0 {
-		return 0, false
+	m := vals[0]
+	for _, v := range vals[1:] {
+		m = math.Min(m, v)
 	}
-	return result[0].Values[0].Value, true
+	return m, true
 }
 
 // deletePlanForDate removes any existing live-plan points tagged with the
