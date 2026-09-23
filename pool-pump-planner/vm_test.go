@@ -54,7 +54,7 @@ func TestFetchWaterTempAtNoData(t *testing.T) {
 	}
 }
 
-func TestFetchWaterTempAtFiltersZeroInQuery(t *testing.T) {
+func TestFetchWaterTempAtQueryShape(t *testing.T) {
 	var queries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.URL.Query().Get("query"))
@@ -62,9 +62,10 @@ func TestFetchWaterTempAtFiltersZeroInQuery(t *testing.T) {
 	}))
 	defer srv.Close()
 	(&Config{VMURL: srv.URL}).fetchWaterTempAt(time.Now())
-	for _, q := range queries {
-		if !strings.HasSuffix(q, "> 0") {
-			t.Errorf("query %q does not filter zeros", q)
+	for i, q := range queries {
+		want := fmt.Sprintf("last_over_time((sum_gt_over_time(%[1]s[1h], 0) / count_gt_over_time(%[1]s[1h], 0))[12h:1h])", waterTempMetrics[i])
+		if q != want {
+			t.Errorf("query %d = %q, want %q", i, q, want)
 		}
 	}
 	if len(queries) != len(waterTempMetrics) {

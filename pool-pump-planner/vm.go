@@ -212,15 +212,17 @@ var waterTempMetrics = []string{
 	"aqua_temp_temp_incoming",
 }
 
-// fetchWaterTempAt returns the minimum of the latest non-zero reading of each
-// waterTempMetrics series within 12h. Sources report sparsely (the pump sleeps
-// for hours), so VM's default ~5m lookback would miss them. Zeros are dropped:
-// IQ pump device "00" always reports 0 and device "17" reports 0 when idle.
-// Each metric is queried separately; `or` would drop same-labelled series.
+// fetchWaterTempAt averages each waterTempMetrics series into 1h buckets over
+// the last 12h, takes the latest bucket per series, and returns the minimum.
+// Averaging smooths single-sample spikes; the 12h window covers the hours-long
+// gaps while the pump sleeps. Zeros are excluded from the average (IQ pump
+// device "00" always reports 0, "17" reports 0 when idle); an all-zero bucket
+// is 0/0 = NaN, which VM drops. Each metric is queried separately; `or` would
+// drop same-labelled series.
 func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
 	var vals []float64
 	for _, m := range waterTempMetrics {
-		result, err := c.queryPromInstantAt(fmt.Sprintf("last_over_time(%s[12h]) > 0", m), at, "12h")
+		result, err := c.queryPromInstantAt(waterTempQuery(m), at, "")
 		if err != nil {
 			log.Printf("[planner] water temp query %s failed: %v", m, err)
 			continue
@@ -232,6 +234,10 @@ func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
 		}
 	}
 	return minTemp(vals)
+}
+
+func waterTempQuery(metric string) string {
+	return fmt.Sprintf("last_over_time((sum_gt_over_time(%[1]s[1h], 0) / count_gt_over_time(%[1]s[1h], 0))[12h:1h])", metric)
 }
 
 func minTemp(vals []float64) (float64, bool) {
