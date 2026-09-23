@@ -538,3 +538,66 @@ async def test_a_denied_retry_still_remembers_when_the_key_frees_up(tmp_path):
 
     assert caught.value.retry_at is not None
     assert slow.attempts == 1
+
+
+# -- skip logging ---------------------------------------------------------
+
+
+async def test_falling_through_to_the_next_provider_is_not_a_warning(tmp_path, caplog):
+    """The expert floor sending an expert to the LAN is the design, not news."""
+    ledger, _ = make_ledger(tmp_path, ["a", "b"], rpd=10)
+    a = FakeProvider("a", [reply("from-a")] * 8)
+    b = FakeProvider("b", [reply("from-b")])
+    chain = ProviderChain([a, b], ledger)
+    # Spend past the 40% expert floor, so "a" is brain-only from here.
+    for _ in range(7):
+        await chain.complete(MSGS, [], 512, "brain")
+
+    with caplog.at_level("WARNING"):
+        out = await chain.complete(MSGS, [], 512, "expert")
+
+    assert out.text == "from-b"
+    assert [r for r in caplog.records if "skipping" in r.message] == []
+
+
+async def test_a_real_refusal_warns_once_and_then_stays_quiet(tmp_path, caplog):
+    state = {"t": T0}
+    ledger = Ledger(
+        {"a": Limits(rpm=10, tpm=100_000, rpd=1), "b": Limits(rpm=10, tpm=100_000, rpd=100)},
+        tmp_path / "ledger.json",
+        clock=lambda: state["t"],
+    )
+    a = FakeProvider("a", [reply("from-a")])
+    b = FakeProvider("b", [reply("1"), reply("2"), reply("3")])
+    chain = ProviderChain([a, b], ledger)
+    await chain.complete(MSGS, [], 512, "brain")  # spends a's only call
+
+    with caplog.at_level("WARNING"):
+        await chain.complete(MSGS, [], 512, "brain")
+        await chain.complete(MSGS, [], 512, "brain")
+
+    warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipping a" in r.message]
+    assert len(warned) == 1
+    assert "rpd" in warned[0].message
+
+
+async def test_a_key_that_recovers_can_warn_again(tmp_path, caplog):
+    state = {"t": T0}
+    ledger = Ledger(
+        {"a": Limits(rpm=10, tpm=100_000, rpd=1), "b": Limits(rpm=10, tpm=100_000, rpd=100)},
+        tmp_path / "ledger.json",
+        clock=lambda: state["t"],
+    )
+    a = FakeProvider("a", [reply("1"), reply("2")])
+    b = FakeProvider("b", [reply("b1"), reply("b2")])
+    chain = ProviderChain([a, b], ledger)
+    await chain.complete(MSGS, [], 512, "brain")
+
+    with caplog.at_level("WARNING"):
+        await chain.complete(MSGS, [], 512, "brain")  # warns: rpd
+        state["t"] += 60 * 60 * 24  # next day: the daily budget resets
+        await chain.complete(MSGS, [], 512, "brain")  # a answers again
+        await chain.complete(MSGS, [], 512, "brain")  # warns: rpd, freshly
+
+    warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipping a" in r.message]
+    assert len(warned) == 2

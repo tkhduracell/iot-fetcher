@@ -50,6 +50,12 @@ RETRYABLE: frozenset[str] = frozenset({"server", "timeout"})
 DEFAULT_CALL_TIMEOUT_S = 60
 TIMEOUT_CHARGE_TOKENS = 4000
 
+# Skip reasons that mean the chain is working, not failing: the expert floor
+# holding cloud quota back for the brain, and the per-minute windows. An
+# expert falling through to the LAN on every round is the design, so these
+# log at debug. See ``ProviderChain._log_skip``.
+_BY_DESIGN_SKIPS = frozenset({"priority", "rpm", "tpm"})
+
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
 # cycle, and so the two lists cannot drift apart.
@@ -204,6 +210,9 @@ class ProviderChain:
         # all of them on its own schedule; nothing else in the chain touches
         # this list.
         self.lan_finders: list[OllamaFinder] = []
+        # The last skip reason logged per key, so a condition that holds all
+        # day says so once instead of once per round. See ``_log_skip``.
+        self._skipped: dict[str, str] = {}
 
     @staticmethod
     def from_settings(
@@ -258,6 +267,30 @@ class ProviderChain:
         chain.lan_finders = lan_finders
         return chain
 
+    def _log_skip(self, key: str, reason: str) -> None:
+        """Say a key was skipped, at a level that matches what it means.
+
+        Two different things used to share one WARNING. ``priority`` (the
+        expert floor holding cloud quota back for the brain) and ``rpm``/
+        ``tpm`` are the chain doing exactly its job: an expert is *supposed*
+        to fall through to the LAN, on every round of every cycle, all day.
+        Warning about it buried the reasons that are actually worth reading.
+
+        The rest -- ``exhausted``, ``rpd``, ``disabled``, ``cooldown`` -- do
+        deserve a warning, but only when they change: a key exhausted at noon
+        is still exhausted at midnight, and it does not need to say so once
+        per round for twelve hours. Repeats drop to debug until the reason
+        changes or the key recovers.
+        """
+        if reason in _BY_DESIGN_SKIPS:
+            log.debug("skipping %s: %s", key, reason)
+            return
+        if self._skipped.get(key) == reason:
+            log.debug("still skipping %s: %s", key, reason)
+            return
+        self._skipped[key] = reason
+        log.warning("skipping %s: %s", key, reason)
+
     async def complete(
         self,
         messages: list[Message],
@@ -286,9 +319,12 @@ class ProviderChain:
                 continue
             decision = self.ledger.can_spend(key, priority)
             if not decision.allowed:
-                log.warning("skipping %s: %s", key, decision.reason)
+                self._log_skip(key, decision.reason)
                 remember(decision.retry_at)
                 continue
+            # Spendable again: forget what it was last refused for, so the
+            # next refusal is heard even if it is the same reason as before.
+            self._skipped.pop(key, None)
 
             reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
             if reply is not None:
