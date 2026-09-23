@@ -215,6 +215,10 @@ class RoundTrace:
     text: str
     tool_calls: list[dict] = field(default_factory=list)
     tool_results: list[dict] = field(default_factory=list)
+    # The model's own reasoning, when the provider hands it over: a summary
+    # from Gemini, the real thing from a thinking model on the LAN. Empty for
+    # every model that does not think out loud, which is most of them.
+    thinking: str = ""
 
 
 @dataclass
@@ -275,6 +279,7 @@ def _round_event(loop_name: str, round_: RoundTrace) -> dict:
         "round": {
             "at": round_.at,
             "text": round_.text,
+            "thinking": round_.thinking,
             "tool_calls": round_.tool_calls,
             "tool_results": round_.tool_results,
         },
@@ -395,6 +400,7 @@ class AgentLoop:
                     RoundTrace(
                         at=self.clock(),
                         text=_trunc(reply.text or "", TRACE_TEXT_CHARS),
+                        thinking=_trunc(reply.thinking or "", TRACE_TEXT_CHARS),
                         tool_calls=[
                             {"name": c.name, "args": _safe_args(c.args)} for c in reply.tool_calls
                         ],

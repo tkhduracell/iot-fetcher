@@ -165,7 +165,7 @@ async def test_request_body_mapping():
         "generationConfig": {
             "maxOutputTokens": 512,
             "temperature": 0.7,
-            "thinkingConfig": {"thinkingBudget": -1},
+            "thinkingConfig": {"thinkingBudget": -1, "includeThoughts": True},
         },
     }
 
@@ -613,11 +613,90 @@ async def test_thinking_budget_is_sent_and_can_be_switched_off():
     route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
     await provider(thinking_budget=2048).complete([Message(role="user", content="hi")], [], 64)
     assert json.loads(route.calls.last.request.content)["generationConfig"]["thinkingConfig"] == {
-        "thinkingBudget": 2048
+        "thinkingBudget": 2048,
+        "includeThoughts": True,
     }
 
     await provider(thinking_budget=0).complete([Message(role="user", content="hi")], [], 64)
     assert "thinkingConfig" not in json.loads(route.calls.last.request.content)["generationConfig"]
+
+
+@respx.mock
+async def test_thought_parts_are_split_out_of_the_answer():
+    body = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "First I check the pump.", "thought": True},
+                        {"text": "The pump is fine."},
+                    ],
+                }
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 7},
+    }
+    respx.post(URL).mock(return_value=httpx.Response(200, json=body))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 64)
+
+    assert reply.text == "The pump is fine."
+    assert reply.thinking == "First I check the pump."
+
+
+@respx.mock
+async def test_a_reply_with_no_thought_parts_has_no_thinking():
+    respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 64)
+
+    assert reply.text == "hello"
+    assert reply.thinking == ""
+
+
+@respx.mock
+async def test_the_answers_signature_is_preferred_over_a_thoughts():
+    body = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "thinking", "thought": True, "thoughtSignature": "sig-thought"},
+                        {"text": "answer", "thoughtSignature": "sig-answer"},
+                    ],
+                }
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
+    }
+    respx.post(URL).mock(return_value=httpx.Response(200, json=body))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 64)
+
+    assert reply.thought_signature == "sig-answer"
+
+
+@respx.mock
+async def test_a_thought_only_turn_still_keeps_its_signature():
+    """Dropping a signature the turn carried is what 400s the *next* call."""
+    body = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "thinking", "thought": True, "thoughtSignature": "sig-thought"},
+                    ],
+                }
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
+    }
+    respx.post(URL).mock(return_value=httpx.Response(200, json=body))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 64)
+
+    assert reply.text == ""
+    assert reply.thinking == "thinking"
+    assert reply.thought_signature == "sig-thought"
 
 
 @respx.mock

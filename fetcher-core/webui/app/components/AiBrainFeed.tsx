@@ -16,7 +16,7 @@ import {
   WALL,
   WallShell,
 } from './AiBrainWallTheme';
-import { CallView, Pre, ResultView } from './AiBrainAgentTrace';
+import { CallView, Pre, ResultView, ThinkingView } from './AiBrainAgentTrace';
 
 /** `/ai-brain/feed` — every loop's rounds, merged into one live stream.
  *
@@ -98,6 +98,7 @@ const FeedEntry: React.FC<{ entry: FeedRound }> = ({ entry }) => {
         <Pre className="opacity-60">väntar på modellen…</Pre>
       ) : (
         <>
+          {round.thinking && <ThinkingView thinking={round.thinking} />}
           {round.text && <Pre className="opacity-90">{round.text}</Pre>}
           {calls.map((call, j) => (
             <CallView key={`${call.name}-${j}`} call={call} />
@@ -105,7 +106,7 @@ const FeedEntry: React.FC<{ entry: FeedRound }> = ({ entry }) => {
           {results.map((res, j) => (
             <ResultView key={`${res.name}-${j}`} result={res} />
           ))}
-          {!round.text && calls.length === 0 && results.length === 0 && (
+          {!round.text && !round.thinking && calls.length === 0 && results.length === 0 && (
             <Pre className="opacity-60">…</Pre>
           )}
         </>

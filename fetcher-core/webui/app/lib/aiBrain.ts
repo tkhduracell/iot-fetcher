@@ -13,6 +13,11 @@ export type ToolResult = { name: string; result_preview: string };
 export type RoundTrace = {
   at: number;
   text: string;
+  /** The model's own reasoning, when it hands it over: a summary from Gemini,
+   *  the real thing from a thinking model on the LAN. "" for every model that
+   *  does not think out loud, and missing entirely from a round served by an
+   *  ai-brain older than the field — hence optional. */
+  thinking?: string;
   tool_calls: ToolCall[];
   tool_results: ToolResult[];
 };
