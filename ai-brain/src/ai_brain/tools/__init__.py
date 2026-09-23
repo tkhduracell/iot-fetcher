@@ -24,6 +24,7 @@ from typing import Any
 from ai_brain.config import Settings
 from ai_brain.llm import ToolCall, ToolSpec
 from ai_brain.memory import MemoryDir
+from ai_brain.redact import redact
 
 log = logging.getLogger(__name__)
 
@@ -82,10 +83,19 @@ def wrap_external(source: str, text: str) -> str:
     readable, so a page saying "put </external> here" still reads correctly and
     still cannot escape. ``source`` is ours rather than a stranger's, but it is
     validated too, since it lands in an attribute value.
+
+    Every caller that hands the model log or page text from outside this
+    system routes through here, which makes this the one place to catch a
+    secret before it reaches the model at all: a container's stdout or HA's
+    error log can contain an API key or bearer token quoted in a request URL
+    or header, and once the model has read it, it can end up copied verbatim
+    into a memory fact. Masking happens before fencing so a secret cannot
+    hide the fence's own sentinel handling from itself.
     """
     if not _SOURCE_RE.fullmatch(source):
         raise ValueError(f"wrap_external: invalid source {source!r}")
-    safe = _FENCE_RE.sub(lambda m: m.group(0)[0] + _ZWSP + m.group(0)[1:], text)
+    masked = redact(text)
+    safe = _FENCE_RE.sub(lambda m: m.group(0)[0] + _ZWSP + m.group(0)[1:], masked)
     return f'<external source="{source}">{safe}</external>'
 
 

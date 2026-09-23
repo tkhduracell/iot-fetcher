@@ -429,6 +429,21 @@ async def test_ha_error_log_clamps_the_line_count(registry, ctx):
 
 
 @respx.mock
+async def test_ha_error_log_redacts_a_bearer_token(registry, ctx):
+    leaky = (
+        "2026-09-16 10:03:00 ERROR (MainThread) [custom_components.cloud_api] "
+        "request failed, Authorization: Bearer abcDEF123456ghijklMNOPqr789 rejected\n"
+    )
+    respx.get("http://ha:8123/api/error_log").mock(
+        return_value=httpx.Response(200, text=LOG + leaky)
+    )
+    out = await call(registry, ctx, "ha_error_log", lines=1)
+
+    assert "abcDEF123456ghijklMNOPqr789" not in out["log"]
+    assert "[REDACTED]" in out["log"]
+
+
+@respx.mock
 async def test_ha_error_log_keeps_the_end_of_a_huge_log(registry, ctx, monkeypatch):
     monkeypatch.setattr("ai_brain.tools.ha.LOG_TAIL_BYTES", 200)
     filler = "".join(
@@ -836,6 +851,25 @@ async def test_docker_logs_is_off_limits_to_an_expert(registry, make_ctx):
     assert "policy" in out["error"]
 
 
+@respx.mock
+async def test_docker_logs_redacts_a_leaked_api_key(registry, ctx):
+    """A key logged in a request URL must never reach the model verbatim --
+    this is the actual incident that motivated redact.py: an expert agent
+    copied a Google API key straight out of a container's log line into a
+    persistent memory fact."""
+    leaky = (
+        "2026-09-16T10:00:03Z GET https://maps.googleapis.com/maps/api/geocode/json"
+        "?address=x&key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q 200\n"
+    )
+    respx.get("http://docker-proxy:2375/containers/iot-fetcher/logs").mock(
+        return_value=httpx.Response(200, text=DOCKER_LOG + leaky)
+    )
+    out = await call(registry, ctx, "docker_logs", container="iot-fetcher", lines=1)
+
+    assert "AIzaFAKE" not in out["log"]
+    assert "[REDACTED]" in out["log"]
+
+
 # --- drive_search ---------------------------------------------------------
 
 
@@ -1194,6 +1228,13 @@ def test_wrap_external_rejects_a_bad_source():
     for bad in ['web"onmouseover=x', "web source", "WEB", "", "<external>"]:
         with pytest.raises(ValueError):
             wrap_external(bad, "text")
+
+
+def test_wrap_external_redacts_a_secret_before_fencing():
+    wrapped = wrap_external("web", "leaked key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q here")
+    assert "AIzaFAKE" not in wrapped
+    assert "[REDACTED]" in wrapped
+    assert wrapped.startswith('<external source="web">')
 
 
 @respx.mock
