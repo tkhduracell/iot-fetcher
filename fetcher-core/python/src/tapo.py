@@ -18,17 +18,11 @@ def tapo():
     logger.info("[tapo] Running TAPO integration (cloud + local discovery)")
 
     # Run cloud-based discovery
-    try:
-        logger.debug("[tapo] Starting cloud discovery...")
-        tapo_cloud()
-    except Exception as e:
-        logger.error(f"[tapo] Cloud discovery failed: {e}")
+    logger.debug("[tapo] Starting cloud discovery...")
+    tapo_cloud()
 
     # Run local network discovery
-    try:
-        logger.debug("[tapo] Starting local discovery...")
-        tapo_local()
-    except Exception as e:
-        logger.error(f"[tapo] Local discovery failed: {e}")
+    logger.debug("[tapo] Starting local discovery...")
+    tapo_local()
 
     logger.info("[tapo] TAPO integration completed")
