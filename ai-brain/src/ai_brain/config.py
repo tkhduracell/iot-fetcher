@@ -131,11 +131,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         gemini_api_key=get("GEMINI_API_KEY"),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
         # 4096 is Ollama's own server default and far smaller than a cycle's
-        # persona+memory+tool-result prompt; the server truncates silently
-        # from the front when a prompt overflows it, which is why this has a
-        # bigger default. 8192 fits an rpi5 (8GB) without swapping -- raise it
-        # (up to ~16384) on a 16GB board. See ai_brain.llm.ollama.build_request.
-        ollama_num_ctx=get_int("OLLAMA_NUM_CTX", 8192),
+        # persona+memory+tool-result prompt (observed ~9.7k tokens in
+        # practice); the server truncates silently from the front when a
+        # prompt overflows it, which is why this has a bigger default. 16384
+        # clears that with headroom on an rpi5 (8GB). See
+        # ai_brain.llm.ollama.build_request.
+        ollama_num_ctx=get_int("OLLAMA_NUM_CTX", 16384),
         experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,

@@ -50,10 +50,11 @@ CALL_TIMEOUT_S = 600.0
 # server), which is far smaller than a cycle's persona+memory+tool-result
 # prompt -- the server silently truncates from the *front* of the prompt to
 # fit, dropping exactly the persona/system context a truncated prompt most
-# needs. 8192 is a working default for a Raspberry Pi 5 (8GB): enough for a
-# small model's context without swapping, still short of the 16GB board's
-# headroom. See ai-brain/README.md's Configuration section for the tradeoff.
-DEFAULT_NUM_CTX = 8192
+# needs. Observed prompts from a real cycle run ~9.7k tokens, so 16384 is the
+# default rather than a smaller number: it clears that with headroom on a
+# Raspberry Pi 5 (8GB), at the cost of more RAM per loaded model. See
+# ai-brain/README.md's Configuration section for the tradeoff.
+DEFAULT_NUM_CTX = 16384
 
 # Rough tokens-per-character used only to decide whether to warn/trim before
 # sending -- Ollama does the real tokenization server-side. English averages

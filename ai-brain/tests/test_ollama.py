@@ -251,7 +251,9 @@ async def test_provider_sends_its_configured_num_ctx():
 
 
 def test_provider_defaults_num_ctx_to_a_pi5_sized_value():
-    assert DEFAULT_NUM_CTX >= 8192
+    # Observed cycle prompts run ~9.7k tokens; the default must clear that.
+    assert DEFAULT_NUM_CTX == 16384
+    assert DEFAULT_NUM_CTX > 9700
     p = provider()
     assert p._num_ctx == DEFAULT_NUM_CTX
 

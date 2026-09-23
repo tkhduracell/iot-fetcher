@@ -143,8 +143,9 @@ def test_http_port_zero_disables_the_api():
 
 def test_ollama_num_ctx_defaults_to_a_pi5_sized_value():
     # Ollama's own server default (4096) is too small for a cycle's
-    # persona+memory+tool-result prompt; this is our own, larger default.
-    assert load_settings({}).ollama_num_ctx == 8192
+    # persona+memory+tool-result prompt (observed ~9.7k tokens); this is our
+    # own, larger default.
+    assert load_settings({}).ollama_num_ctx == 16384
 
 
 def test_ollama_num_ctx_is_read_from_the_environment():
