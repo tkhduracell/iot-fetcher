@@ -185,7 +185,16 @@ class GeminiProvider(Provider):
             )
 
         parts = candidates[0].get("content", {}).get("parts") or []
-        text = "".join(part["text"] for part in parts if "text" in part)
+        # With ``includeThoughts`` the reasoning comes back as ordinary text
+        # parts flagged ``thought: true``. They have to be split off here:
+        # folded into the answer they read as the model muttering to itself
+        # halfway through its own reply.
+        text = "".join(
+            part["text"] for part in parts if "text" in part and not part.get("thought")
+        )
+        thinking = "".join(
+            part["text"] for part in parts if "text" in part and part.get("thought")
+        )
         calls = tuple(
             ToolCall(
                 id=f"call_{n}",
@@ -200,13 +209,15 @@ class GeminiProvider(Provider):
         )
         # A thinking model may sign the text part instead of (or as well as)
         # the calls; that one belongs to the turn, so keep the first we see.
+        # Prefer the answer's own signature, but take a thought part's rather
+        # than none: dropping a signature the turn had is what earns a 400 on
+        # the *next* call, and an answer-less thinking turn only signs there.
+        signed_text = [
+            part for part in parts if "text" in part and part.get("thoughtSignature")
+        ]
         text_signature = next(
-            (
-                part["thoughtSignature"]
-                for part in parts
-                if "text" in part and part.get("thoughtSignature")
-            ),
-            "",
+            (part["thoughtSignature"] for part in signed_text if not part.get("thought")),
+            next((part["thoughtSignature"] for part in signed_text), ""),
         )
 
         usage = body.get("usageMetadata") or {}
@@ -226,6 +237,7 @@ class GeminiProvider(Provider):
             ),
             model=self.model,
             thought_signature=text_signature,
+            thinking=thinking,
         )
 
 
@@ -307,7 +319,14 @@ def build_request(
         ]
     generation: dict[str, Any] = {"maxOutputTokens": max_tokens, "temperature": TEMPERATURE}
     if thinking_budget != 0:
-        generation["thinkingConfig"] = {"thinkingBudget": thinking_budget}
+        # ``includeThoughts`` asks for a summary of reasoning the model does
+        # either way: the thinking tokens are spent (and billed, and counted in
+        # ``_reply``) whether or not it tells us about them, so this is free
+        # apart from response bytes. Not every 3.x turn returns one.
+        generation["thinkingConfig"] = {
+            "thinkingBudget": thinking_budget,
+            "includeThoughts": True,
+        }
     payload["generationConfig"] = generation
     return payload
 

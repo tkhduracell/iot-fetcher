@@ -101,6 +101,13 @@ class Reply:
     usage: Usage
     model: str
     thought_signature: str = ""
+    # What the model reasoned before answering, when it says so out loud.
+    # Gemini returns a *summary* of its thinking (only when asked with
+    # ``includeThoughts``, and not on every turn); Ollama's thinking models
+    # return the real thing in ``message.thinking``. Unlike
+    # ``thought_signature`` this is never echoed back to a provider -- it is
+    # for the reader, not the next request.
+    thinking: str = ""
 
 
 class ProviderError(Exception):

@@ -47,6 +47,25 @@ async def test_text_reply():
     assert reply.model == "llama3.2:3b"
 
 
+@respx.mock
+async def test_a_thinking_model_keeps_its_reasoning_out_of_the_answer():
+    body = text_response()
+    body["message"]["thinking"] = "The spa is the only thing drawing power."
+    respx.post(URL).mock(return_value=httpx.Response(200, json=body))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 256)
+
+    assert reply.text == "hello"
+    assert reply.thinking == "The spa is the only thing drawing power."
+
+
+@respx.mock
+async def test_a_model_that_does_not_think_has_no_thinking():
+    respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    reply = await provider().complete([Message(role="user", content="hi")], [], 256)
+
+    assert reply.thinking == ""
+
+
 async def test_key_is_derived_from_model():
     assert provider().key == "ollama:llama3.2:3b"
 

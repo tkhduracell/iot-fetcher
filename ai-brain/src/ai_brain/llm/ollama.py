@@ -126,6 +126,11 @@ class OllamaProvider(Provider):
     def _reply(self, body: dict) -> Reply:
         message = body.get("message") or {}
         text = message.get("content") or ""
+        # Thinking models (qwen3 and friends) keep their reasoning out of
+        # ``content`` and in its own field, so this costs nothing to read: the
+        # tokens were generated on our own machine either way. Absent on a
+        # model that does not think, which is why it defaults to "".
+        thinking = message.get("thinking") or ""
         calls = tuple(
             ToolCall(
                 id=f"call_{n}",
@@ -142,6 +147,7 @@ class OllamaProvider(Provider):
                 completion_tokens=body.get("eval_count", 0),
             ),
             model=self.model,
+            thinking=thinking,
         )
 
 

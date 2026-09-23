@@ -93,4 +93,5 @@ class LanOllamaProvider(Provider):
             tool_calls=reply.tool_calls,
             usage=reply.usage,
             model=f"{self.model} @ {host.base_url}",
+            thinking=reply.thinking,
         )

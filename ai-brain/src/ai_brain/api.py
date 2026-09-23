@@ -161,6 +161,7 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
             {
                 "at": round_.at,
                 "text": round_.text,
+                "thinking": round_.thinking,
                 "tool_calls": round_.tool_calls,
                 "tool_results": round_.tool_results,
             }

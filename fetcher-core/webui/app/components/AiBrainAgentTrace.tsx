@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type CycleTrace,
   type RoundTrace,
@@ -41,6 +41,85 @@ export const Pre: React.FC<{ children: React.ReactNode; className?: string }> = 
     {children}
   </pre>
 );
+
+/** Characters per second the thinking text types itself out at. Fast enough
+ *  that a long thought is not a wait, slow enough to read as thinking rather
+ *  than as a paint glitch. */
+const TYPE_CPS = 90;
+/** One tick per frame is wasted work for text this slow; 20/s is plenty. */
+const TYPE_TICK_MS = 50;
+
+/** How much of `text` to show right now, typing it out on mount.
+ *
+ *  Nothing here is really streaming: the round arrived complete, over SSE or a
+ *  poll. This replays it as if it were not, because watching the house think
+ *  is the point of the feed — a wall of finished text says the same thing
+ *  without ever looking alive.
+ *
+ *  Re-reveals only when the text itself changes, so a re-render (a sibling
+ *  round arriving, a poll landing) never restarts a thought mid-sentence.
+ *  Honours `prefers-reduced-motion` by showing everything at once. */
+export function useTypewriter(text: string): string {
+  const [shown, setShown] = useState(text.length);
+  const doneRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (doneRef.current === text) {
+      setShown(text.length);
+      return;
+    }
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || text.length === 0) {
+      doneRef.current = text;
+      setShown(text.length);
+      return;
+    }
+
+    setShown(0);
+    const step = Math.max(1, Math.round((TYPE_CPS * TYPE_TICK_MS) / 1000));
+    const id = setInterval(() => {
+      setShown((n) => {
+        const next = n + step;
+        if (next >= text.length) {
+          clearInterval(id);
+          doneRef.current = text;
+          return text.length;
+        }
+        return next;
+      });
+    }, TYPE_TICK_MS);
+    return () => clearInterval(id);
+  }, [text]);
+
+  return text.slice(0, shown);
+}
+
+/** What the model reasoned before it answered, typed out as it is read.
+ *
+ *  Dimmed and italic, above the answer: this is the model talking to itself,
+ *  and it must never read as something the house is telling you. */
+export const ThinkingView: React.FC<{ thinking: string }> = ({ thinking }) => {
+  const shown = useTypewriter(thinking);
+  return (
+    <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.inkFaint}` }}>
+      <div
+        className="text-[12px] uppercase tracking-[0.18em]"
+        style={{ fontFamily: SANS, color: WALL.inkFaint }}
+      >
+        tänker
+      </div>
+      <pre
+        className="text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0 italic"
+        style={{ fontFamily: MONO, color: WALL.inkFaint }}
+      >
+        {shown}
+        {shown.length < thinking.length && <span aria-hidden>▌</span>}
+      </pre>
+    </div>
+  );
+};
 
 /** One `key: value` argument. Long values are cut at 160 characters behind a
  *  toggle: a single `append_journal` body is taller than the viewport, which
@@ -119,6 +198,7 @@ const RoundView: React.FC<{ round: RoundTrace; index: number; defaultOpen: boole
       </summary>
 
       <div className="flex flex-col gap-2 min-w-0">
+        {round.thinking && <ThinkingView thinking={round.thinking} />}
         {round.text && <Pre className="opacity-90">{round.text}</Pre>}
         {calls.map((call, j) => (
           <CallView key={`${call.name}-${j}`} call={call} />
