@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -201,20 +202,53 @@ func (c *Config) fetchHourlyPrices(slots []time.Time) []float64 {
 	return out
 }
 
-// fetchWaterTempAt looks back up to 12h for the most recent pool temperature
-// reading. The sensor publishes only on change (often hourly), so VM's default
-// ~5m lookback regularly misses a valid-enough reading and drops the planner
-// into fallback mode.
+// waterTempMetrics are proxies for pool water temperature. The dedicated
+// Sonoff sensor (pool_temperature_value) is broken, so we use the IQ pump's
+// motor temperature and the heat pump's inlet temperature. Both read high
+// rather than low (motor self-heats; inlet pipe warms from the heat pump),
+// so the minimum is the best estimate.
+var waterTempMetrics = []string{
+	"pool_iqpump_motordata_temperature",
+	"aqua_temp_temp_incoming",
+}
+
+// fetchWaterTempAt averages each waterTempMetrics series into 1h buckets over
+// the last 12h, takes the latest bucket per series, and returns the minimum.
+// Averaging smooths single-sample spikes; the 12h window covers the hours-long
+// gaps while the pump sleeps. Zeros are excluded from the average (IQ pump
+// device "00" always reports 0, "17" reports 0 when idle); an all-zero bucket
+// is 0/0 = NaN, which VM drops. Each metric is queried separately; `or` would
+// drop same-labelled series.
 func (c *Config) fetchWaterTempAt(at time.Time) (float64, bool) {
-	result, err := c.queryPromInstantAt("pool_temperature_value", at, "12h")
-	if err != nil {
-		log.Printf("[planner] water temp query failed: %v", err)
+	var vals []float64
+	for _, m := range waterTempMetrics {
+		result, err := c.queryPromInstantAt(waterTempQuery(m), at, "")
+		if err != nil {
+			log.Printf("[planner] water temp query %s failed: %v", m, err)
+			continue
+		}
+		for _, r := range result {
+			for _, s := range r.Values {
+				vals = append(vals, s.Value)
+			}
+		}
+	}
+	return minTemp(vals)
+}
+
+func waterTempQuery(metric string) string {
+	return fmt.Sprintf("last_over_time((sum_gt_over_time(%[1]s[1h], 0) / count_gt_over_time(%[1]s[1h], 0))[12h:1h])", metric)
+}
+
+func minTemp(vals []float64) (float64, bool) {
+	if len(vals) == 0 {
 		return 0, false
 	}
-	if len(result) == 0 || len(result[0].Values) == 0 {
-		return 0, false
+	m := vals[0]
+	for _, v := range vals[1:] {
+		m = math.Min(m, v)
 	}
-	return result[0].Values[0].Value, true
+	return m, true
 }
 
 // deletePlanForDate removes any existing live-plan points tagged with the
