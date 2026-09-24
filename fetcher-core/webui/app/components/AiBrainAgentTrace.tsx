@@ -13,6 +13,7 @@ import {
   formatClock,
   parseResultPreview,
   shortModel,
+  splitLongFields,
   splitPreviewSuffix,
   statusTone,
   summarizeArgs,
@@ -104,15 +105,54 @@ export function useTypewriter(text: string): string {
 /** Text clamped to two lines by default, click to read the rest — the
  *  model's own words (a round's `thinking` or `text`) before its tool calls,
  *  or during a live typewriter reveal. */
+/** Cheap pre-check for whether `text` is even worth measuring: short,
+ *  newline-free text can never overflow a two-line clamp regardless of
+ *  container width, so this skips the layout read below for the common case
+ *  (a short tool-call arg summary, a one-line note) without waiting a frame.
+ *  ~160 chars is roughly two lines at this font size in the narrowest column
+ *  this renders in; a false positive here just costs one extra
+ *  scrollHeight/clientHeight comparison, never a wrong answer. */
+function likelyOverflows(text: string): boolean {
+  if (text.length > 160) return true;
+  return (text.match(/\n/g)?.length ?? 0) > 1;
+}
+
 export const ClampedText: React.FC<{ children: string; italic?: boolean; color?: string }> = ({
   children,
   italic = false,
   color = WALL.ink,
 }) => {
   const [expanded, setExpanded] = useState(false);
+  // null = not yet measured. Starts from the cheap pre-check so short text
+  // never shows a "mer" button it would immediately prove unnecessary; the
+  // layout effect below then confirms (or corrects) it against the real
+  // rendered height.
+  const [overflows, setOverflows] = useState(() => likelyOverflows(children));
+  const ref = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (expanded) return;
+    const el = ref.current;
+    if (!el) return;
+    // `-webkit-line-clamp` clips scrollHeight along with clientHeight in
+    // this engine -- once the clamp is active, both read the same 2-line
+    // height regardless of how much text is actually behind it, so
+    // comparing them here would always say "no overflow". Measuring instead
+    // against a fixed 2-line pixel threshold (line-height x 2, read from the
+    // element's own computed style so a font-size change elsewhere in this
+    // file cannot silently desync it) works because the *content* behind the
+    // clamp is still laid out at full height for line-height purposes; only
+    // the box's own reported height is clipped.
+    const lineHeight = parseFloat(getComputedStyle(el).lineHeight);
+    if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
+    const twoLines = lineHeight * 2;
+    setOverflows(el.scrollHeight > twoLines + 1); // +1: sub-pixel rounding
+  }, [children, expanded]);
+
   return (
     <div className="flex flex-col items-start gap-1 min-w-0">
       <pre
+        ref={ref}
         className={`text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0 w-full ${italic ? 'italic' : ''}`}
         style={{
           fontFamily: MONO,
@@ -129,15 +169,17 @@ export const ClampedText: React.FC<{ children: string; italic?: boolean; color?:
       >
         {children}
       </pre>
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-        className="cursor-pointer bg-transparent border-0 p-0 underline text-[11px]"
-        style={{ fontFamily: SANS, color: WALL.amber }}
-      >
-        {expanded ? 'mindre' : 'mer'}
-      </button>
+      {overflows && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          className="cursor-pointer bg-transparent border-0 p-0 underline text-[11px]"
+          style={{ fontFamily: SANS, color: WALL.amber }}
+        >
+          {expanded ? 'mindre' : 'mer'}
+        </button>
+      )}
     </div>
   );
 };
@@ -178,43 +220,46 @@ const KeyValueRow: React.FC<{ name: string; value: unknown }> = ({ name, value }
   );
 };
 
-/** Field names whose string value is rendered as a scrollable multi-line
- *  monospace block (tabs and newlines decoded) rather than an inline
- *  key/value row — `code_read`'s `body`, `ha_context`'s `context`, and their
- *  siblings across the other introspection tools. Any string field long
- *  enough to actually contain a newline gets this treatment regardless of
- *  name, so a tool added later needs no update here; this list only decides
- *  which *short* string fields (that happen to share a name with a long one
- *  elsewhere) are still worth checking. */
-const LONG_TEXT_FIELDS = new Set(['body', 'context', 'journal', 'persona', 'text']);
-
 /** ~20 lines of monospace before the box scrolls instead of growing — long
  *  enough to read a real body, short enough that one huge result cannot push
- *  the rest of the round off screen. */
-const ExpandedTextBlock: React.FC<{ text: string }> = ({ text }) => (
+ *  the rest of the round off screen.
+ *
+ *  `decode` controls whether `decodeEscapes` runs on `text` first: a string
+ *  that came out of `JSON.parse` (the parsed-result path) is *already*
+ *  unescaped — its `\n` is a real newline, not two characters — and running
+ *  `decodeEscapes` on it again would wrongly turn a literal `\n` that
+ *  appears in actual source code (e.g. a `code_read` body containing a
+ *  Python string literal `"\n"`) into a second real newline. Only the
+ *  raw-text fallback (a preview that never reached `JSON.parse` at all,
+ *  because a truncation cut it mid-token) is still escaped and needs it. */
+const ExpandedTextBlock: React.FC<{ text: string; decode?: boolean }> = ({
+  text,
+  decode = false,
+}) => (
   <div
     className="overflow-auto rounded px-2 py-1"
     style={{ background: WALL.ground, maxHeight: '20.5em' }}
   >
-    <Pre>{decodeEscapes(text)}</Pre>
+    <Pre>{decode ? decodeEscapes(text) : text}</Pre>
   </div>
 );
 
 /** The parsed, pretty-printed form of a tool result: long text fields as
- *  scrollable monospace blocks (tabs/newlines decoded), everything else as a
- *  small key/value list, and the `…[+N]` truncation note carried over
- *  verbatim rather than re-derived. Falls back to the raw text, monospace,
+ *  scrollable monospace blocks, everything else as a small key/value list,
+ *  and the `…[+N]` truncation note carried over verbatim rather than
+ *  re-derived. Falls back to the raw text, monospace and escape-decoded,
  *  when the body did not parse as JSON at all. */
 const ExpandedBody: React.FC<{ parsed: ParsedResult }> = ({ parsed }) => {
   if (!parsed.parsed || parsed.json === null || typeof parsed.json !== 'object') {
     // The suffix is stripped here even in the raw-text fallback: a `…[+N]`
     // cut landing mid-JSON-string still means "N characters were dropped",
     // and that is worth saying as the same note rather than left glued onto
-    // unparsed text as a stray trailer.
+    // unparsed text as a stray trailer. This text never reached JSON.parse,
+    // so it is still escaped -- decode=true is correct here.
     const { body, droppedChars } = splitPreviewSuffix(parsed.raw);
     return (
       <div className="flex flex-col gap-1">
-        <ExpandedTextBlock text={body} />
+        <ExpandedTextBlock text={body} decode />
         {droppedChars !== null && <TruncationNote droppedChars={droppedChars} />}
       </div>
     );
@@ -233,11 +278,11 @@ const ExpandedBody: React.FC<{ parsed: ParsedResult }> = ({ parsed }) => {
     );
   }
 
-  const entries = Object.entries(parsed.json as Record<string, unknown>);
-  const longFields = entries.filter(
-    ([k, v]) => typeof v === 'string' && (LONG_TEXT_FIELDS.has(k) || v.includes('\\n')),
+  // splitLongFields expects an already-JSON.parse'd object, which parsed.json
+  // is here -- see its own doc comment for why that matters.
+  const { long: longFields, short: shortFields } = splitLongFields(
+    parsed.json as Record<string, unknown>,
   );
-  const shortFields = entries.filter(([k]) => !longFields.some(([lk]) => lk === k));
 
   return (
     <div className="flex flex-col gap-2">
@@ -253,7 +298,7 @@ const ExpandedBody: React.FC<{ parsed: ParsedResult }> = ({ parsed }) => {
           <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
             {k}:
           </span>
-          <ExpandedTextBlock text={v as string} />
+          <ExpandedTextBlock text={v} />
         </div>
       ))}
       {parsed.droppedChars !== null && <TruncationNote droppedChars={parsed.droppedChars} />}
@@ -281,7 +326,10 @@ export const ToolCallLine: React.FC<{ call: ToolCall; result?: ToolResult }> = (
     ? summarizeResult(call.name, result)
     : { ok: true, status: '', size: '' };
   const parsed = result ? parseResultPreview(result.result_preview ?? '') : null;
-  const detailId = `tool-call-${call.name}-${argsSummary}`.replace(/[^a-zA-Z0-9_-]/g, '');
+  // A name+args-derived id collides whenever two calls in the same round
+  // share both (e.g. two code_read calls after a retry) -- useId is unique
+  // per mounted instance regardless of content.
+  const detailId = React.useId();
 
   return (
     <div className="flex flex-col gap-1 min-w-0">

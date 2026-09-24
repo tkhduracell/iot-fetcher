@@ -8,7 +8,19 @@ const BASE = '/api/ai-brain';
 
 export type ToolCall = { name: string; args: Record<string, string> };
 
-export type ToolResult = { name: string; result_preview: string };
+/** Pre-computed shape stats for a tool result, served by a newer ai-brain so
+ *  the UI does not have to re-derive them by parsing a (possibly truncated)
+ *  JSON preview. Optional: an ai-brain older than this field omits it, and
+ *  `summarizeResult` falls back to the preview-parsing path when absent. */
+export type ToolResultStats = {
+  ok: boolean;
+  lines?: number;
+  series?: number;
+  hits?: number;
+  chars?: number;
+};
+
+export type ToolResult = { name: string; result_preview: string; stats?: ToolResultStats };
 
 export type RoundTrace = {
   at: number;
@@ -583,6 +595,37 @@ export function parseResultPreview(preview: string): ParsedResult {
   }
 }
 
+/** Field names whose string value is rendered as a scrollable multi-line
+ *  monospace block rather than an inline key/value row — `code_read`'s
+ *  `body`, `ha_context`'s `context`, and their siblings across the other
+ *  introspection tools. Any string field long enough to actually contain a
+ *  newline gets this treatment regardless of name, so a tool added later
+ *  needs no update here; this only decides which *short* string fields
+ *  (that happen to share a name with a long one elsewhere) still qualify. */
+const LONG_TEXT_FIELDS = new Set(['body', 'context', 'journal', 'persona', 'text']);
+
+/** Splits a parsed result's top-level object fields into the ones worth a
+ *  scrollable multi-line block ("long") and everything else ("short"),
+ *  preserving each group's original key order.
+ *
+ *  `fields` must already be `JSON.parse`d — every string value's `\n` is a
+ *  real newline character at this point, not the two-character `\n`
+ *  sequence still present in an *unparsed* preview. Checking for the
+ *  two-character sequence here would never match (JSON.parse leaves no
+ *  backslash-n pairs behind) and silently drop every long field into the
+ *  short list instead — the bug this function exists to keep fixed. */
+export function splitLongFields(
+  fields: Record<string, unknown>,
+): { long: [string, string][]; short: [string, unknown][] } {
+  const entries = Object.entries(fields);
+  const long: [string, string][] = entries
+    .filter((e): e is [string, string] => typeof e[1] === 'string')
+    .filter(([k, v]) => LONG_TEXT_FIELDS.has(k) || v.includes('\n'));
+  const longKeys = new Set(long.map(([k]) => k));
+  const short = entries.filter(([k]) => !longKeys.has(k));
+  return { long, short };
+}
+
 /** A byte/row/series count rendered the way a reader wants it, not the way
  *  the API named it — "51 rader", "3 serier", "12 träffar", "1.5 kB". Falls
  *  back to a byte-size hint (`raw.length`, which is UTF-16 code units, close
@@ -619,11 +662,33 @@ function byteHint(chars: number): string {
   return `${(chars / 1000).toFixed(1).replace(/\.0$/, '')} kB`;
 }
 
+/** A `result_preview` that failed to parse (a truncation cut landing
+ *  mid-token) still starts with the same `{"error": "...` prefix `err()`
+ *  always writes when it is one — the object just never closes. Best-effort:
+ *  pulls the message out of the leading `"error": "..."` field with a regex
+ *  rather than requiring the JSON to be complete, so a cut-off error still
+ *  reads as ✗ instead of a false ✓. Only looks at the *start* of the string
+ *  (`^`), since a truncated `"error"` field appearing later would mean the
+ *  key is quoted inside a normal string value, not that the result is an
+ *  error. */
+function truncatedErrorMessage(raw: string): string | null {
+  const m = /^\s*\{\s*"error"\s*:\s*"((?:\\.|[^"\\])*)/.exec(raw);
+  if (!m) return null;
+  // The captured group is still JSON-string-escaped (it never reached
+  // JSON.parse) -- decodeEscapes turns its \n/\t/\" etc. into the real
+  // characters a reader expects in the one-line status.
+  return decodeEscapes(m[1]);
+}
+
 /** The `✓`/`✗` status and size hint shown after `←` on the collapsed line,
  *  e.g. `✓ 51 rader` or `✗ unknown tool: foo`. An `{"error": …}` result (see
- *  `err()` in `ai_brain/tools/__init__.py`) always reads as `✗`; anything
- *  else — including a result that failed to parse at all, since only a
- *  truncated *success* body is expected to do that — reads as `✓`. */
+ *  `err()` in `ai_brain/tools/__init__.py`) always reads as `✗` — including
+ *  one a truncation cut off mid-message, via `truncatedErrorMessage` — and
+ *  anything else reads as `✓`.
+ *
+ *  Prefers `result.stats` (a newer ai-brain's pre-computed shape) over
+ *  parsing the preview when present, since a 500-char preview can be cut
+ *  before the countable field (`hits`, `series`, …) even appears. */
 export function summarizeResult(
   name: string,
   result: ToolResult,
@@ -634,10 +699,41 @@ export function summarizeResult(
     const msg = String((json as Record<string, unknown>).error ?? '');
     return { ok: false, status: ellipsize(msg, 96), size: byteHint(raw.length) };
   }
+  if (!parsed) {
+    const msg = truncatedErrorMessage(raw);
+    if (msg !== null) {
+      return { ok: false, status: ellipsize(msg, 96), size: byteHint(raw.length) };
+    }
+  }
+
+  if (result.stats) {
+    const size = sizeHintFromStats(result.stats);
+    const withDrop = droppedChars ? `${size} (${droppedChars} tecken trunkerade)` : size;
+    return { ok: result.stats.ok, status: '', size: withDrop };
+  }
 
   const size = sizeHint(name, json, raw);
   const withDrop = droppedChars ? `${size} (${droppedChars} tecken trunkerade)` : size;
   return { ok: true, status: '', size: withDrop };
+}
+
+/** Same rendering as `sizeHint`, from a backend-computed `ToolResultStats`
+ *  instead of a parsed preview — whichever field the stats carry, in the
+ *  same "51 rader" / "3 serier" / "12 träffar" / "1.5 kB" language. */
+function sizeHintFromStats(stats: ToolResultStats): string {
+  if (typeof stats.lines === 'number') {
+    return `${stats.lines} ${stats.lines === 1 ? 'rad' : 'rader'}`;
+  }
+  if (typeof stats.series === 'number') {
+    return `${stats.series} ${stats.series === 1 ? 'serie' : 'serier'}`;
+  }
+  if (typeof stats.hits === 'number') {
+    return `${stats.hits} ${stats.hits === 1 ? 'träff' : 'träffar'}`;
+  }
+  if (typeof stats.chars === 'number') {
+    return byteHint(stats.chars);
+  }
+  return '';
 }
 
 // ------------------------------------------------- wall view (additive)

@@ -41,6 +41,7 @@ import {
   summarizeArgs,
   decodeEscapes,
   splitPreviewSuffix,
+  splitLongFields,
   parseResultPreview,
   summarizeResult,
   type AgentSummary,
@@ -1131,6 +1132,48 @@ describe('parseResultPreview', () => {
   });
 });
 
+// ------------------------------------------------------------ splitLongFields
+
+describe('splitLongFields', () => {
+  it('treats a real newline in a parsed string as long, not the two-char sequence', () => {
+    // This is the exact shape JSON.parse leaves behind: a genuine multi-line
+    // string, one real newline character, never a literal backslash-n pair.
+    const { long, short } = splitLongFields({ output: 'line1\nline2', name: 'ok' });
+    expect(long).toEqual([['output', 'line1\nline2']]);
+    expect(short).toEqual([['name', 'ok']]);
+  });
+
+  it('does not match a literal two-character \\n sequence as a newline', () => {
+    // A string that (unusually) contains the literal characters backslash
+    // and n, but no real newline -- must NOT be treated as long by name
+    // alone (it is not one of LONG_TEXT_FIELDS).
+    const { long, short } = splitLongFields({ note: 'a\\nb' });
+    expect(long).toEqual([]);
+    expect(short).toEqual([['note', 'a\\nb']]);
+  });
+
+  it('treats known long field names as long even without a newline', () => {
+    const { long, short } = splitLongFields({ body: 'short one-liner', start: 1 });
+    expect(long).toEqual([['body', 'short one-liner']]);
+    expect(short).toEqual([['start', 1]]);
+  });
+
+  it('keeps original key order within each group', () => {
+    const { short } = splitLongFields({ path: 'a.py', start: 1, end: 51, total_lines: 51 });
+    expect(short.map(([k]) => k)).toEqual(['path', 'start', 'end', 'total_lines']);
+  });
+
+  it('handles an object with no long fields', () => {
+    const { long, short } = splitLongFields({ written: 'pool.wattage' });
+    expect(long).toEqual([]);
+    expect(short).toEqual([['written', 'pool.wattage']]);
+  });
+
+  it('handles an empty object', () => {
+    expect(splitLongFields({})).toEqual({ long: [], short: [] });
+  });
+});
+
 // ----------------------------------------------------------- summarizeResult
 
 function result(name: string, previewObj: unknown, suffix = ''): ToolResult {
@@ -1184,5 +1227,64 @@ describe('summarizeResult', () => {
     const big = 'x'.repeat(2000);
     const r = summarizeResult('ha_context', result('ha_context', { context: big, truncated: false }));
     expect(r.size).toMatch(/kB$/);
+  });
+
+  it('reads a truncated error result as not ok, best-effort extracting the message', () => {
+    // A real err() result cut mid-message by the 500-char preview cap: the
+    // JSON never closes, so this does not JSON.parse, but it still starts
+    // with the same {"error": "..." prefix every err() writes.
+    const preview = '{"error": "code_read: ' + 'x'.repeat(500) + '…[+37]';
+    const r = summarizeResult('code_read', { name: 'code_read', result_preview: preview });
+    expect(r.ok).toBe(false);
+    expect(r.status).toContain('code_read:');
+  });
+
+  it('does not misread a normal truncated success body as an error', () => {
+    const preview = '{"ok":true,"body":"' + 'x'.repeat(500) + '…[+37]';
+    const r = summarizeResult('code_read', { name: 'code_read', result_preview: preview });
+    expect(r.ok).toBe(true);
+  });
+
+  it('prefers stats.lines over parsing the preview when present', () => {
+    const r = summarizeResult('code_read', {
+      name: 'code_read',
+      result_preview: result('code_read', { path: 'a.py', body: 'irrelevant' }).result_preview,
+      stats: { ok: true, lines: 999 },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.size).toBe('999 rader');
+  });
+
+  it('prefers stats.hits and stats.series the same way', () => {
+    const hitsResult = summarizeResult('code_grep', {
+      name: 'code_grep',
+      result_preview: '{}',
+      stats: { ok: true, hits: 12 },
+    });
+    expect(hitsResult.size).toBe('12 träffar');
+
+    const seriesResult = summarizeResult('vm_query', {
+      name: 'vm_query',
+      result_preview: '{}',
+      stats: { ok: true, series: 3 },
+    });
+    expect(seriesResult.size).toBe('3 serier');
+  });
+
+  it('reads stats.ok for the ✓/✗ status when stats are present', () => {
+    const r = summarizeResult('write_fact', {
+      name: 'write_fact',
+      result_preview: '{}',
+      stats: { ok: false, chars: 12 },
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('falls back to parsing the preview when stats are absent', () => {
+    const r = summarizeResult(
+      'code_read',
+      result('code_read', { path: 'a.py', start: 1, end: 51, total_lines: 51, body: Array(51).fill('x').join('\n') }),
+    );
+    expect(r.size).toBe('51 rader');
   });
 });
