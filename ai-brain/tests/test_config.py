@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from ai_brain.config import DEFAULT_LLM_CHAIN, DEFAULT_SEED_ROOT, load_settings
+import pytest
+
+from ai_brain.config import (
+    CYCLE_MAX_ROUNDS_HARD_CEILING,
+    DEFAULT_LLM_CHAIN,
+    DEFAULT_SEED_ROOT,
+    load_settings,
+)
 
 
 def test_defaults_from_empty_env():
@@ -27,6 +34,7 @@ def test_defaults_from_empty_env():
     assert (s.rpm, s.tpm, s.rpd) == (8, 200000, 200)
     assert s.call_timeout_s == 60
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
+    assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
     assert s.repo_slug == "tkhduracell/iot-fetcher"
     assert s.repo_ref == "main"
     assert s.repo_refresh_h == 6
@@ -75,6 +83,50 @@ def test_experts_none_is_the_opt_out():
 def test_effort_knobs_are_overridable():
     s = load_settings({"CYCLE_MAX_ROUNDS": "4", "CYCLE_MAX_TOKENS": "1000", "GEMINI_THINKING_BUDGET": "0"})
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
+
+
+# -- CYCLE_MAX_ROUNDS_BY_MODEL ------------------------------------------
+
+
+def test_max_rounds_by_model_default_is_unchanged_when_the_setting_is_empty():
+    """Blank/unset must fall back to the documented default, not an empty list --
+    otherwise every deployment silently loses the strong-model boost until it
+    copies the new line into its .env."""
+    for env in ({}, {"CYCLE_MAX_ROUNDS_BY_MODEL": ""}, {"CYCLE_MAX_ROUNDS_BY_MODEL": "   "}):
+        s = load_settings(env)
+        assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
+
+
+def test_max_rounds_by_model_parses_pattern_equals_n():
+    s = load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": "gemini:*=20, lan:qwen3-coder*=40"})
+    assert s.max_rounds_by_model == [("gemini:*", 20), ("lan:qwen3-coder*", 40)]
+
+
+def test_max_rounds_by_model_first_match_wins_order_is_preserved():
+    s = load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": "gemini:gemini-3.8-flash=10,gemini:*=20"})
+    assert s.max_rounds_by_model == [("gemini:gemini-3.8-flash", 10), ("gemini:*", 20)]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "gemini:*",  # missing =N
+        "gemini:*=",  # missing N
+        "=20",  # missing pattern
+        "gemini:*=abc",  # non-integer N
+        "gemini:*=0",  # below the 1..64 range
+        "gemini:*=65",  # above CYCLE_MAX_ROUNDS_HARD_CEILING
+        "gemini:*=-1",
+    ],
+)
+def test_max_rounds_by_model_malformed_entry_is_a_startup_error(raw):
+    with pytest.raises(ValueError):
+        load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": raw})
+
+
+def test_max_rounds_by_model_accepts_the_ceiling_itself():
+    s = load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": f"gemini:*={CYCLE_MAX_ROUNDS_HARD_CEILING}"})
+    assert s.max_rounds_by_model == [("gemini:*", CYCLE_MAX_ROUNDS_HARD_CEILING)]
 
 
 def test_lan_sweep_defaults_and_overrides():

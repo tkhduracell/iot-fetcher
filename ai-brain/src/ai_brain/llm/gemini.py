@@ -238,6 +238,7 @@ class GeminiProvider(Provider):
             model=self.model,
             thought_signature=text_signature,
             thinking=thinking,
+            key=self.key,
         )
 
 

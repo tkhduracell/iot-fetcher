@@ -116,6 +116,13 @@ class Reply:
     # ``thought_signature`` this is never echoed back to a provider -- it is
     # for the reader, not the next request.
     thinking: str = ""
+    # The chain key that answered (``provider.key``, e.g.
+    # ``gemini:gemini-3.8-flash`` or ``lan:qwen3-coder:30b``) -- the same
+    # shape as an LLM_CHAIN entry, unlike ``model`` which a provider is free
+    # to decorate (the lan: provider appends `` @ host``). This is what
+    # CYCLE_MAX_ROUNDS_BY_MODEL matches against. Empty means "not from a real
+    # provider", the same convention ``model`` on a hand-built Message uses.
+    key: str = ""
 
 
 class ProviderError(Exception):

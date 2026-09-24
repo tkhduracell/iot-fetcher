@@ -27,6 +27,7 @@ sleep, because a brain that stops thinking is worse than one that thinks badly.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
@@ -54,6 +55,22 @@ log = logging.getLogger(__name__)
 MAX_TOKENS = 8000
 MIN_BACKOFF_S = 60
 MAX_WAKE_S = 12 * 3600
+
+# No per-model cap (config.py's CYCLE_MAX_ROUNDS_BY_MODEL, validated at load
+# time) may push a cycle past this, whatever a generous env value says --
+# the belt to that config's braces.
+CYCLE_MAX_ROUNDS_HARD_CEILING = 64
+
+# Sent once per cycle, two rounds before the effective cap: a cycle that is
+# about to be cut off gets one chance to land what it found rather than
+# losing an unfinished thought to max_rounds. "2" rounds is deliberately
+# small -- a nudge much earlier would fire on ordinary cycles nowhere near
+# their cap, since the cap can be as low as CYCLE_MAX_ROUNDS itself (16).
+WRAP_UP_ROUNDS_BEFORE_CAP = 2
+WRAP_UP_NUDGE = (
+    "You have 2 rounds left: write what you found (append_journal / "
+    "write_fact) and call end_cycle now."
+)
 
 # Tools are expected to bound their own output, but a tool that forgets would
 # otherwise push an unbounded string into the conversation -- and the
@@ -237,6 +254,12 @@ class CycleResult:
     model: str
     rounds: int
     next_wake_s: int
+    # The rounds cap actually in force when the cycle stopped -- the limit of
+    # whichever model answered the most recent round, never above
+    # CYCLE_MAX_ROUNDS_HARD_CEILING. Defaults to CYCLE_MAX_ROUNDS's own
+    # default so a cycle that never reached a provider (paused, cancelled
+    # before the first round) still reports a sane cap.
+    cap: int = 16
 
 
 @dataclass
@@ -272,6 +295,9 @@ class CycleTrace:
     rounds: list[RoundTrace] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # See CycleResult.cap -- kept in step so a reader watching the live trace
+    # sees the same number the journal line reports once the cycle ends.
+    cap: int = 16
 
     @property
     def in_progress(self) -> bool:
@@ -334,6 +360,7 @@ class AgentLoop:
         clock: Callable[[], float],
         pause_file: Path,
         max_rounds: int = 16,
+        max_rounds_by_model: list[tuple[str, int]] | None = None,
         max_tokens: int = MAX_TOKENS,
         call_timeout_s: int = 60,
         events: EventBus | None = None,
@@ -349,6 +376,7 @@ class AgentLoop:
         self.clock = clock
         self.pause_file = Path(pause_file)
         self.max_rounds = max_rounds
+        self.max_rounds_by_model = list(max_rounds_by_model or [])
         self.max_tokens = max_tokens
         self.call_timeout_s = call_timeout_s
         self.events = events
@@ -409,6 +437,7 @@ class AgentLoop:
                     model=str(last.get("model") or ""),
                     rounds=int(last.get("rounds") or 0),
                     next_wake_s=int(last.get("next_wake_s") or 0),
+                    cap=int(last.get("cap") or 16),
                 )
             except (TypeError, ValueError):
                 self.last_cycle = None
@@ -436,6 +465,7 @@ class AgentLoop:
                     "status": self.last_cycle.status,
                     "model": self.last_cycle.model,
                     "rounds": self.last_cycle.rounds,
+                    "cap": self.last_cycle.cap,
                     "next_wake_s": self.last_cycle.next_wake_s,
                     # Not read back by _load_state (CycleResult has no summary
                     # field), but the API/UI's "last cycle" panel wants one
@@ -471,6 +501,16 @@ class AgentLoop:
         rounds = 0
         summary = ""
         next_wake_s = self.heartbeat_s
+        # The limit of whichever model answered the most recent round --
+        # starts at the plain default and only ever moves once a reply has
+        # actually come back, so a cycle that falls back to a weak model
+        # partway through is cut at the weak limit, not the strong one it
+        # started on. See _rounds_cap.
+        effective_cap = min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
+        trace.cap = effective_cap
+        # Fires once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP short of whatever
+        # effective_cap turns out to be at the time.
+        nudge_sent = False
 
         # Paused: no provider call at all, but the cycle still closes its books
         # so the pause shows up in the journal like any other outcome. The
@@ -478,7 +518,9 @@ class AgentLoop:
         # notes are still waiting; ``paused`` never marks them done.
         if self.pause_file.exists():
             notes = self.memory.unread_notes()
-            return await self._finish("paused", "", 0, "paused by PAUSE file", next_wake_s, notes)
+            return await self._finish(
+                "paused", "", 0, "paused by PAUSE file", next_wake_s, notes, effective_cap
+            )
 
         try:
             # Read the inbox once. Reading it again inside read_context would
@@ -489,7 +531,7 @@ class AgentLoop:
             self.ctx.extras["owed_replies"] = owed_replies(notes)
             messages = self._opening_messages(notes)
 
-            while rounds < self.max_rounds:
+            while rounds < effective_cap:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
                 # only takes effect at the next cycle boundary is no pause at
                 # all when a cycle is a dozen provider calls long.
@@ -518,6 +560,15 @@ class AgentLoop:
                 )
                 rounds += 1
                 model = reply.model
+                # Evaluated after every reply, not just once at the start: a
+                # cycle that opened on a strong model and fell back to a weak
+                # one partway through must be cut at the weak model's limit,
+                # even though it has already passed it -- so this can only
+                # ever make effective_cap *smaller* than a round already
+                # played past, never retroactively grant more rounds for
+                # rounds already spent.
+                effective_cap = self._rounds_cap(reply.key, reply.model)
+                trace.cap = effective_cap
                 self.token_counts["prompt"] += reply.usage.prompt_tokens
                 self.token_counts["completion"] += reply.usage.completion_tokens
                 trace.prompt_tokens += reply.usage.prompt_tokens
@@ -562,19 +613,27 @@ class AgentLoop:
                     self.events.publish(_round_event(self.name, trace.rounds[-1]))
                 if self.ctx.extras.get("end_cycle"):
                     break
+                if not nudge_sent and rounds >= effective_cap - WRAP_UP_ROUNDS_BEFORE_CAP:
+                    # Once per cycle: fires the round it first comes within
+                    # WRAP_UP_ROUNDS_BEFORE_CAP of the *current* effective_cap,
+                    # so a cap that later drops (a fallback to a weaker model)
+                    # can still trigger it even if the first check came too
+                    # early to.
+                    messages.append(Message("user", WRAP_UP_NUDGE))
+                    nudge_sent = True
 
             ended = self.ctx.extras.get("end_cycle")
             if ended:
                 minutes, summary = ended
                 next_wake_s = _clamp_wake(minutes, self.heartbeat_s)
-            elif status == "ok" and rounds >= self.max_rounds:
+            elif status == "ok" and rounds >= effective_cap:
                 # The model ran out of rounds without calling end_cycle. That
                 # is not a normal cycle: nothing summarised the work and
                 # nothing chose a wake, so reporting it as ``ok`` hides a loop
                 # that may be going in circles every heartbeat.
                 status = "max_rounds"
-                summary = f"hit max_rounds ({self.max_rounds}) without end_cycle"
-                log.warning("[%s] hit max_rounds without end_cycle", self.name)
+                summary = f"hit max_rounds ({effective_cap}) without end_cycle"
+                log.warning("[%s] hit max_rounds (%d) without end_cycle", self.name, effective_cap)
         except TimeoutError:
             status, summary = (
                 "timeout",
@@ -596,7 +655,9 @@ class AgentLoop:
             status, summary = "error", f"{type(exc).__name__}: {exc}"
             log.exception("[%s] cycle failed", self.name)
         finally:
-            result = await self._finish(status, model, rounds, summary, next_wake_s, notes)
+            result = await self._finish(
+                status, model, rounds, summary, next_wake_s, notes, effective_cap
+            )
 
         return result
 
@@ -631,6 +692,24 @@ class AgentLoop:
         self.wake.clear()
 
     # -- internals -----------------------------------------------------
+
+    def _rounds_cap(self, key: str, model: str) -> int:
+        """The rounds cap for whichever model just answered.
+
+        Matched against the chain key first (``gemini:gemini-3.8-flash``,
+        ``lan:qwen3-coder:30b``) since that is the shape both
+        CYCLE_MAX_ROUNDS_BY_MODEL's patterns and its documented examples use;
+        falls back to the bare ``model`` string for a caller that has none
+        (a Message a test built by hand, or a provider that predates the
+        ``key`` field). First pattern to match wins. No match at all is
+        ``self.max_rounds``, never the hard ceiling -- the ceiling only
+        clamps a match that is itself too generous.
+        """
+        candidate = key or model
+        for pattern, rounds in self.max_rounds_by_model:
+            if fnmatch.fnmatch(candidate, pattern):
+                return min(rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
+        return min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
 
     def _cap_tool_result(self, tool: str, result: str) -> str:
         """Keep one runaway tool result from swamping the conversation.
@@ -701,11 +780,12 @@ class AgentLoop:
         summary: str,
         next_wake_s: int,
         notes: list[Note],
+        cap: int = 16,
     ) -> CycleResult:
         """Close the books on a cycle, however it went."""
         consumed = status in CONSUMED_STATUSES
         try:
-            line = f"[{status}] model={model or '-'} rounds={rounds} {summary}"
+            line = f"[{status}] model={model or '-'} rounds={rounds}/{cap} {summary}"
             if not consumed and notes:
                 line += f" ({len(notes)} notes left unread)"
             self.memory.append_journal(line)
@@ -733,7 +813,7 @@ class AgentLoop:
                     log.exception("[%s] could not mark %s unanswered", self.name, topic)
 
         result = CycleResult(
-            status=status, model=model, rounds=rounds, next_wake_s=int(next_wake_s)
+            status=status, model=model, rounds=rounds, next_wake_s=int(next_wake_s), cap=cap
         )
         self.last_cycle = result
         self.last_cycle_at = self.clock()
@@ -741,16 +821,18 @@ class AgentLoop:
         self._save_state(summary)
         if self.trace is not None:
             log.info(
-                "[%s] cycle %s rounds=%d tokens prompt=%d completion=%d",
+                "[%s] cycle %s rounds=%d/%d tokens prompt=%d completion=%d",
                 self.name,
                 status,
                 rounds,
+                cap,
                 self.trace.prompt_tokens,
                 self.trace.completion_tokens,
             )
             self.trace.status = status
             self.trace.model = model
             self.trace.summary = summary
+            self.trace.cap = cap
             # Last, because ``finished_at`` is what tells a reader the rest of
             # the trace has stopped moving.
             self.trace.finished_at = self.last_cycle_at

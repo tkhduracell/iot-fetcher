@@ -141,6 +141,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `LAN_SCAN_MIN` | `10` | Minutes between sweeps. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. Not read by `lan:` providers, which set their own (below) -- a local model can legitimately need minutes, nothing like a cloud API's SLA. |
 | `CYCLE_MAX_ROUNDS` | `16` | Tool rounds one cycle may take before the loop stops waiting for `end_cycle`. |
+| `CYCLE_MAX_ROUNDS_BY_MODEL` | `gemini:*3.8*=32,lan:qwen3.8*=32` | Per-model override of `CYCLE_MAX_ROUNDS`: comma-separated `pattern=N` entries, matched fnmatch-style against the chain key of whichever model answered the cycle's most recent round -- the same `provider:model` shape as an `LLM_CHAIN` entry (`gemini:gemini-3.8-flash`, `lan:qwen3-coder:30b`). First match wins; no match falls back to `CYCLE_MAX_ROUNDS`. `N` must be 1-64 -- a malformed entry or an out-of-range `N` is a startup error, same as a bad `LLM_CHAIN`. See [Effort and per-model rounds](#effort-and-per-model-rounds). |
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
@@ -255,6 +256,49 @@ A quiet day stays quiet.
 > It backs up every file it replaces, and the next cycle picks the new text up
 > without a restart. The agent rewrites `identity.md` and `goals.md` itself over
 > time, so what you overwrite may be its own words rather than yours.
+
+## Effort and per-model rounds
+
+`CYCLE_MAX_ROUNDS` is one flat ceiling for every cycle, but the chain can
+answer the same cycle with different models round to round as it falls back
+(the free-tier flash model, then the LAN box, then the rpi5's own small one --
+see [Best model first](#what-it-is)). A weak fallback model spinning in circles
+for 16 rounds and a strong one that could have used 30 to actually finish an
+investigation are not the same problem, so `CYCLE_MAX_ROUNDS_BY_MODEL` lets the
+strong ones earn more room:
+
+```
+CYCLE_MAX_ROUNDS_BY_MODEL=gemini:*3.8*=32,lan:qwen3.8*=32
+```
+
+Each entry is `pattern=N`, matched fnmatch-style (`*`/`?`/`[...]`) against the
+chain key of whichever model answered the cycle's **most recent** round — the
+same `provider:model` shape an `LLM_CHAIN` entry uses, e.g.
+`gemini:gemini-3.8-flash` or `lan:qwen3-coder:30b` (the `lan:` provider's own
+`@ host` suffix on the human-readable model string is not part of the key it
+matches against). Patterns are tried in order and the first match wins; a
+model that matches nothing keeps `CYCLE_MAX_ROUNDS`. `N` must be between 1 and
+64 — a malformed entry (no `=`, a non-integer `N`, or `N` outside that range)
+is a startup error, the same way an unparseable `LLM_CHAIN` entry is.
+
+The cap in force is re-evaluated after every round, using whichever model just
+answered — not the model the cycle started on. That cuts both ways: a cycle
+that opens on a matched, strong model gets the higher cap immediately, but one
+that later falls back to an unmatched, weak model is cut at the weak model's
+limit from that round on, even if the strong model had already carried it past
+that number. No per-model entry can push a cycle past `CYCLE_MAX_ROUNDS_HARD_CEILING`
+(64) regardless of what the pattern says — a belt-and-braces ceiling on top of
+load-time validation.
+
+Two rounds before the effective cap, the loop appends one wrap-up nudge to the
+conversation ("You have 2 rounds left: write what you found ... and call
+`end_cycle` now"), once per cycle — enough runway for the model to write a
+fact or journal line and call `end_cycle` cleanly rather than being cut off by
+`max_rounds` mid-thought.
+
+The rounds actually used and the cap in force are both in the journal line
+(`rounds=12/32`) and the trace/API (`cap`), so `journal.md` and Grafana both
+show whether a cycle is running out of room or ending early.
 
 ## Approvals
 
@@ -466,7 +510,12 @@ every model key. Nothing calls a provider without asking it first.
   the ledger starves the experts first and the chain falls through to
   flash-lite and then to the local ollama model, so the brain keeps thinking on
   a drained budget. Lower `CYCLE_MAX_ROUNDS`, lengthen the heartbeats or shorten
-  `EXPERTS` if you would rather it stayed on the strong model all day.
+  `EXPERTS` if you would rather it stayed on the strong model all day. A round
+  on `gemini-3.8-flash` or the LAN `qwen3.8` model is one request regardless of
+  how generous its own `CYCLE_MAX_ROUNDS_BY_MODEL` cap is — see
+  [Effort and per-model rounds](#effort-and-per-model-rounds) — so a higher
+  per-model cap raises how much a *single* cycle can do on that model, not how
+  many requests the day's `RPD` allows.
 - **The day rolls at midnight US/Pacific**, which is when Google resets the
   free tier — not local midnight. The brain gets a `new day, budget restored`
   note in its inbox when it turns, so it can see the constraint lift. A corrupt ledger file is treated as "half

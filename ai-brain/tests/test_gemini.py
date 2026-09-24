@@ -37,6 +37,8 @@ async def test_text_reply():
     assert reply.usage.prompt_tokens == 11
     assert reply.usage.completion_tokens == 3
     assert reply.model == "gemini-2.0-flash"
+    # CYCLE_MAX_ROUNDS_BY_MODEL matches this, not the bare model -- see loop.py.
+    assert reply.key == "gemini:gemini-2.0-flash"
     assert route.calls.last.request.headers["x-goog-api-key"] == "secret-key"
 
 

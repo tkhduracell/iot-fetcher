@@ -44,6 +44,55 @@ DEFAULT_EXPERTS = "energy,health,house-ops,researcher,infra"
 # same statement as naming none.
 NO_EXPERTS = frozenset({"none", "brain"})
 
+# A cycle answered by a stronger model gets more rounds before the loop stops
+# waiting for end_cycle. Matched fnmatch-style against the model that answered
+# the most recent round -- ``gemini:gemini-3.8-flash`` or
+# ``lan:qwen3-coder:30b @ http://host:11434`` -- so a pattern like
+# ``gemini:*3.8*`` or ``lan:qwen3.8*`` matches the chain key regardless of the
+# exact model string a provider hands back. First match wins; no match falls
+# back to CYCLE_MAX_ROUNDS. See loop.py's _rounds_cap.
+DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32"
+
+# No cycle may run longer than this regardless of CYCLE_MAX_ROUNDS_BY_MODEL --
+# a typo'd env value is a startup error (see _parse_max_rounds_by_model), but
+# this is the belt-and-braces ceiling even a validated, generous entry cannot
+# cross.
+CYCLE_MAX_ROUNDS_HARD_CEILING = 64
+
+
+def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
+    """``pattern=N`` entries, in order, as ``(fnmatch pattern, rounds)``.
+
+    Validated here rather than left to blow up mid-cycle: a startup that
+    accepts a malformed entry only fails once some cycle happens to be
+    answered by a model matching it, hours or days later. ``N`` must be
+    between 1 and ``CYCLE_MAX_ROUNDS_HARD_CEILING`` -- a cap above the hard
+    ceiling can never bind (the ceiling always wins), so it is rejected as
+    the config mistake it is rather than silently clamped.
+    """
+    entries: list[tuple[str, int]] = []
+    for part in _csv(raw):
+        pattern, sep, value = part.partition("=")
+        pattern = pattern.strip()
+        value = value.strip()
+        if not sep or not pattern or not value:
+            raise ValueError(
+                f"CYCLE_MAX_ROUNDS_BY_MODEL entry {part!r} is not pattern=N"
+            )
+        try:
+            rounds = int(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"CYCLE_MAX_ROUNDS_BY_MODEL entry {part!r} has a non-integer N"
+            ) from exc
+        if not (1 <= rounds <= CYCLE_MAX_ROUNDS_HARD_CEILING):
+            raise ValueError(
+                f"CYCLE_MAX_ROUNDS_BY_MODEL entry {part!r} must have N between "
+                f"1 and {CYCLE_MAX_ROUNDS_HARD_CEILING}"
+            )
+        entries.append((pattern, rounds))
+    return entries
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -74,6 +123,7 @@ class Settings:
     lan_subnets: list[str]
     lan_scan_s: int
     max_rounds: int
+    max_rounds_by_model: list[tuple[str, int]]
     max_tokens: int
     thinking_budget: int
     rpm: int
@@ -168,6 +218,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         lan_subnets=_csv(get("LAN_SUBNETS")),
         lan_scan_s=get_int("LAN_SCAN_MIN", 10) * 60,
         max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
+        max_rounds_by_model=(
+            _parse_max_rounds_by_model(get("CYCLE_MAX_ROUNDS_BY_MODEL"))
+            or _parse_max_rounds_by_model(DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL)
+        ),
         max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),
         rpm=get_int("RPM", 8),
