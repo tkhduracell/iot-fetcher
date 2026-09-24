@@ -249,3 +249,91 @@ async def test_extraction_refuses_oversized_tarball(tmp_path, http, monkeypatch)
     with pytest.raises(ValueError, match="exceeds"):
         await snap.refresh()
     assert not (tmp_path / "_repo" / SHA).exists()
+
+
+# -- sensitive files are never extracted ---------------------------------
+
+
+@respx.mock
+async def test_dotenv_is_never_extracted(tmp_path, http):
+    _mock_commit()
+    _mock_commit_log([SHA])
+    _mock_tarball({".env": b"SECRET=do-not-write-me\n", "README.md": b"fine\n"})
+
+    snap = RepoSnapshot(tmp_path, SLUG, REF, http)
+    state = await snap.refresh()
+
+    assert not (state.root / ".env").exists()
+    assert (state.root / "README.md").read_text() == "fine\n"
+
+
+@respx.mock
+async def test_a_private_key_is_never_extracted(tmp_path, http):
+    _mock_commit()
+    _mock_commit_log([SHA])
+    _mock_tarball(
+        {"deploy/id_rsa": b"-----BEGIN OPENSSH PRIVATE KEY-----\n", "README.md": b"fine\n"}
+    )
+
+    snap = RepoSnapshot(tmp_path, SLUG, REF, http)
+    state = await snap.refresh()
+
+    assert not (state.root / "deploy" / "id_rsa").exists()
+
+
+@respx.mock
+async def test_env_template_is_still_extracted(tmp_path, http):
+    _mock_commit()
+    _mock_commit_log([SHA])
+    _mock_tarball({".env.example": b"SECRET=\n", "README.md": b"fine\n"})
+
+    snap = RepoSnapshot(tmp_path, SLUG, REF, http)
+    state = await snap.refresh()
+
+    assert (state.root / ".env.example").read_text() == "SECRET=\n"
+
+
+@respx.mock
+async def test_a_service_account_shaped_json_is_dropped_by_content(tmp_path, http):
+    _mock_commit()
+    _mock_commit_log([SHA])
+    key_body = (
+        b'{"type": "service_account", "project_id": "x", '
+        b'"private_key": "-----BEGIN PRIVATE KEY-----"}'
+    )
+    _mock_tarball({"gcp-creds.json": key_body, "package.json": b'{"name": "x"}', "README.md": b"fine\n"})
+
+    snap = RepoSnapshot(tmp_path, SLUG, REF, http)
+    state = await snap.refresh()
+
+    assert not (state.root / "gcp-creds.json").exists()
+    # An ordinary JSON file with no service-account markers is unaffected.
+    assert (state.root / "package.json").exists()
+
+
+@respx.mock
+async def test_a_path_under_volumes_is_never_extracted(tmp_path, http):
+    _mock_commit()
+    _mock_commit_log([SHA])
+    _mock_tarball({"volumes/ai-brain-memory/brain/identity.md": b"private\n", "README.md": b"fine\n"})
+
+    snap = RepoSnapshot(tmp_path, SLUG, REF, http)
+    state = await snap.refresh()
+
+    assert not (state.root / "volumes").exists()
+
+
+@respx.mock
+async def test_a_script_that_mentions_secrets_in_its_name_is_still_extracted(tmp_path, http):
+    """grafana/set-github-secrets.sh: a script is probably fine to show --
+    it is source code whose job is handling secrets, not a secret itself.
+    It still goes through repo.py's own redact() at read time (see
+    tools/introspect.py), same as any other source file."""
+    _mock_commit()
+    _mock_commit_log([SHA])
+    _mock_tarball({"grafana/set-github-secrets.sh": b"#!/bin/sh\necho hi\n"})
+
+    snap = RepoSnapshot(tmp_path, SLUG, REF, http)
+    state = await snap.refresh()
+
+    assert (state.root / "grafana" / "set-github-secrets.sh").exists()

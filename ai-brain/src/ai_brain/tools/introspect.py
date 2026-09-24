@@ -31,8 +31,10 @@ from ai_brain.introspection import proposal_loops, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
 from ai_brain.memory import MemoryDir
+from ai_brain import sensitive
 from ai_brain.redact import redact
 from ai_brain.repo import RepoSnapshot
+from ai_brain.sensitive import is_sensitive
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 
 BRAIN_ONLY = frozenset({"brain"})
@@ -64,10 +66,18 @@ SKIP_FILE_GLOBS = ("*.lock", "package-lock.json", "*.lockb", "uv.lock", "go.sum"
 TEXT_EXTENSIONS = frozenset(
     {
         ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".sh", ".yml", ".yaml",
-        ".json", ".md", ".toml", ".cfg", ".ini", ".txt", ".env.example",
+        ".json", ".md", ".toml", ".cfg", ".ini", ".txt",
         ".sql", ".html", ".css", ".dockerfile", ".mod", ".sum",
     }
 )
+
+# An env template's *whole* filename, since Path.suffix only ever returns the
+# last dotted component -- ".env.example".suffix is ".example", not
+# ".env.example", so this has to be a name check rather than folded into
+# TEXT_EXTENSIONS above. These are exactly the names is_sensitive's own
+# _ENV_ALLOW exempts from the denylist -- a template is safe to read by the
+# same reasoning that makes it safe to list.
+ENV_TEMPLATE_NAMES = frozenset({".env.example", ".env.template", ".env.sample"})
 
 
 _NO_ARGS: dict = {"type": "object", "properties": {}}
@@ -334,11 +344,28 @@ def _skip_file(name: str) -> bool:
 
 
 def _is_text_file(path: Path) -> bool:
-    return path.suffix.lower() in TEXT_EXTENSIONS or path.name in (
+    name = path.name
+    if name in ENV_TEMPLATE_NAMES:
+        return True
+    return path.suffix.lower() in TEXT_EXTENSIONS or name in (
         "Dockerfile",
         "Makefile",
         "CLAUDE.md",
     )
+
+
+def _sniff(path: Path) -> bytes | None:
+    """A small ``.json`` file's bytes, for ``is_sensitive``'s content check
+    -- ``None`` for anything else, so a caller never pays to read a file this
+    check would ignore anyway."""
+    if path.suffix.lower() != ".json":
+        return None
+    try:
+        if path.stat().st_size > sensitive.MAX_SNIFF_BYTES:
+            return None
+        return path.read_bytes()
+    except OSError:
+        return None
 
 
 async def _code_list(ctx: ToolContext, args: dict) -> str:
@@ -358,8 +385,19 @@ async def _code_list(ctx: ToolContext, args: dict) -> str:
             continue
         if child.is_file() and _skip_file(child.name):
             continue
-        suffix = "/" if child.is_dir() else ""
         rel = f"{resolved.relative}/{child.name}" if resolved.relative else child.name
+        # Second gate on top of extraction: a sensitive file is hidden from
+        # the listing entirely, not shown-but-unreadable. The snapshot
+        # should never contain one (repo.py's own is_sensitive check at
+        # extraction), but a listing is cheap insurance against a future
+        # reader of the snapshot directory that does not go through repo.py.
+        # A directory listing is one level deep, so sniffing each small
+        # .json child's content here (same as code_read/code_grep) is cheap
+        # enough to be worth catching a service-account key with an
+        # innocuous name before it even shows up in the list.
+        if child.is_file() and is_sensitive(rel, _sniff(child)):
+            continue
+        suffix = "/" if child.is_dir() else ""
         entries.append(rel + suffix)
     truncated = len(entries) > MAX_LIST_ENTRIES
     return ok(
@@ -380,6 +418,13 @@ async def _code_read(ctx: ToolContext, args: dict) -> str:
     resolved = _resolve_in_snapshot(repo.state.root, relative)
     if resolved is None or not resolved.absolute.is_file():
         return err(f"code_read: no such file: {relative}")
+    # A sensitive file reads as "no such file", the same as a path that
+    # genuinely does not exist -- never a distinct "denied", which would
+    # itself confirm the file is there. Name-only here; the content-shaped
+    # check (a service-account JSON with no sensitive-looking name) runs
+    # below once the bytes are already in hand for a small .json file.
+    if is_sensitive(resolved.relative):
+        return err(f"code_read: no such file: {relative}")
     if not _is_text_file(resolved.absolute) or _skip_file(resolved.absolute.name):
         return err(f"code_read: not a readable text file: {relative}")
 
@@ -390,7 +435,10 @@ async def _code_read(ctx: ToolContext, args: dict) -> str:
     if size > MAX_FILE_BYTES:
         return err(f"code_read: {relative} is {size} bytes, over the {MAX_FILE_BYTES} cap")
 
-    text = resolved.absolute.read_text(encoding="utf-8", errors="replace")
+    raw = resolved.absolute.read_bytes()
+    if is_sensitive(resolved.relative, raw):
+        return err(f"code_read: no such file: {relative}")
+    text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines()
     start = max(1, int(args.get("start") or 1))
     end = int(args.get("end") or len(lines))
@@ -405,7 +453,13 @@ async def _code_read(ctx: ToolContext, args: dict) -> str:
             "start": start,
             "end": start + len(selected) - 1 if selected else start,
             "total_lines": len(lines),
-            "body": "\n".join(selected),
+            # This is our own source, so it skips wrap_external's fence --
+            # the model already runs it, it is not data from a stranger.
+            # redact() still runs, defence in depth: a secret committed by
+            # mistake and missed by is_sensitive's name/content check above
+            # must not be handed to the model verbatim just because the file
+            # around it looked like ordinary code.
+            "body": redact("\n".join(selected)),
             "sha": repo.state.sha,
         }
     )
@@ -444,13 +498,27 @@ async def _code_grep(ctx: ToolContext, args: dict) -> str:
         if size > MAX_FILE_BYTES:
             continue
         rel = str(file_path.relative_to(snapshot_root))
+        # Same gate as code_read/code_list: a sensitive file is invisible to
+        # grep too -- never opened, never matched, never named in a hit.
+        # Name-only first (cheap, catches most of the denylist before a byte
+        # is read); the content-shaped check runs after the read, same as
+        # code_read, so a service-account JSON with an innocuous name is
+        # still caught before any of its lines can become a hit.
+        if is_sensitive(rel):
+            continue
         try:
-            text = file_path.read_text(encoding="utf-8", errors="replace")
+            raw = file_path.read_bytes()
         except OSError:
             continue
+        if is_sensitive(rel, raw):
+            continue
+        text = raw.decode("utf-8", errors="replace")
         for lineno, line in enumerate(text.splitlines(), start=1):
             if matcher.search(line):
-                hits.append({"path": rel, "line": lineno, "text": line[:MAX_LINE_PREVIEW]})
+                # Same defence-in-depth reasoning as code_read's body.
+                hits.append(
+                    {"path": rel, "line": lineno, "text": redact(line[:MAX_LINE_PREVIEW])}
+                )
                 if len(hits) >= MAX_GREP_HITS:
                     truncated = True
                     break

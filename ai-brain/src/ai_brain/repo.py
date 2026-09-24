@@ -22,6 +22,14 @@ only, no absolute or ``..`` names, no symlinks/hardlinks, and a total size
 cap. ``tarfile``'s own ``data_filter`` (Python 3.12+) rejects most of this
 already; the checks here are explicit anyway so the policy is readable in one
 place rather than trusted to a library default that could change.
+
+Defence in depth, not the only gate: a member matching ``ai_brain.sensitive``
+(an ``.env`` file, a private key, a service-account-shaped JSON, ...) is
+skipped here too, so it is never written to ``/memory/_repo`` at all. The
+snapshot already only contains what git tracked -- a real secret on rpi5 is
+never in codeload's tarball to begin with -- but a secret-shaped file can
+still be committed by mistake, in this repo or a fork, and the day that
+happens must not be the day it lands on disk for a tool to read back.
 """
 
 from __future__ import annotations
@@ -35,6 +43,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+
+from ai_brain import sensitive
+from ai_brain.sensitive import is_sensitive
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +268,11 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
     * the resolved path must stay under ``dest`` (``Path.resolve`` plus a
       prefix check), which is what actually catches a stripped name that
       still manages to traverse.
+    * not ``ai_brain.sensitive.is_sensitive`` -- an ``.env``, a key file, a
+      service-account-shaped JSON and the rest of that denylist never reach
+      disk at all. A small ``.json`` member (under ``MAX_SNIFF_BYTES``) is
+      read into memory to check its content too, since a service-account key
+      does not always have a name that says so.
     """
     dest = dest.resolve()
     with tarfile.open(tar_path, mode="r:gz") as tar:
@@ -286,6 +302,14 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
             if target != dest and dest not in target.parents:
                 log.warning("[repo] refusing tar member outside snapshot root: %s", name)
                 continue
+            if member.isfile():
+                sniff = None
+                if relative.endswith(".json") and member.size <= sensitive.MAX_SNIFF_BYTES:
+                    extracted = tar.extractfile(member)
+                    sniff = extracted.read() if extracted is not None else b""
+                if is_sensitive(relative, sniff):
+                    log.warning("[repo] excluding sensitive file from snapshot: %s", relative)
+                    continue
             member.name = relative
             safe_members.append(member)
 

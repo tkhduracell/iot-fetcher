@@ -438,6 +438,93 @@ async def test_code_list_root(registry, make_ctx, fake_repo):
     assert not any("node_modules" in e for e in out["entries"])
 
 
+# -- sensitive-file denylist, applied by every code_* tool -----------------
+
+
+@pytest.fixture
+def sensitive_repo(tmp_path):
+    """A snapshot carrying one of each denylisted shape, plus a template and
+    an ordinary source file that merely mentions a keyish word -- both of
+    which must stay visible."""
+    root = tmp_path / "sensitive-snapshot"
+    (root / "wud").mkdir(parents=True)
+    (root / "grafana").mkdir(parents=True)
+    (root / "deploy").mkdir(parents=True)
+    (root / ".env").write_text("SECRET=do-not-read-me\n", encoding="utf-8")
+    (root / "wud" / ".env.example").write_text("SECRET=\n", encoding="utf-8")
+    (root / "deploy" / "id_rsa").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n", encoding="utf-8")
+    (root / ".mcp.json").write_text('{"servers": {}}', encoding="utf-8")
+    (root / "gcp-creds.json").write_text(
+        '{"type": "service_account", "private_key": "-----BEGIN PRIVATE KEY-----"}',
+        encoding="utf-8",
+    )
+    (root / "grafana" / "set-github-secrets.sh").write_text(
+        "#!/bin/sh\ngh secret set X --body \"$X\"\n", encoding="utf-8"
+    )
+    (root / "README.md").write_text("# fake\n", encoding="utf-8")
+
+    repo = RepoSnapshot(tmp_path / "memory", "tkhduracell/iot-fetcher", "main", http=None)
+    repo._state = RepoState(sha="deadbeef1234", fetched_at=1_700_000_000.0, root=root)
+    return repo
+
+
+async def test_code_list_hides_sensitive_files_entirely(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_list")
+    assert ".env" not in out["entries"]
+    assert ".mcp.json" not in out["entries"]
+    assert "gcp-creds.json" not in out["entries"]
+    assert "README.md" in out["entries"]
+
+
+async def test_code_list_keeps_a_template_visible(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_list", path="wud")
+    assert "wud/.env.example" in out["entries"]
+
+
+async def test_code_read_denied_files_are_not_found_never_denied(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    for path in (".env", "deploy/id_rsa", ".mcp.json", "gcp-creds.json"):
+        out = await call(registry, ctx, "code_read", path=path)
+        assert "error" in out, path
+        # Same wording as a genuinely missing path -- never a distinct
+        # "denied" that would itself confirm the file exists.
+        assert "no such file" in out["error"], path
+        assert "denied" not in out["error"].lower(), path
+
+
+async def test_code_read_a_template_is_readable(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_read", path="wud/.env.example")
+    assert out["body"] == "SECRET="
+
+
+async def test_code_read_a_script_mentioning_secrets_in_its_name_is_readable(
+    registry, make_ctx, sensitive_repo
+):
+    """grafana/set-github-secrets.sh: a script is probably fine to show,
+    since it is source code that handles secrets rather than a secret
+    itself -- it still goes through redact() (see code_read's own body)."""
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_read", path="grafana/set-github-secrets.sh")
+    assert "gh secret set" in out["body"]
+
+
+async def test_code_grep_never_matches_inside_a_denied_file(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_grep", pattern="do-not-read-me")
+    assert out["hits"] == []
+
+
+async def test_code_grep_still_matches_a_template(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_grep", pattern="SECRET=")
+    paths = {h["path"] for h in out["hits"]}
+    assert "wud/.env.example" in paths
+    assert ".env" not in paths
+
+
 async def test_code_list_traversal_is_refused(registry, make_ctx, fake_repo):
     ctx = make_ctx(extras={"repo": fake_repo})
     out = await call(registry, ctx, "code_list", path="../../etc")
