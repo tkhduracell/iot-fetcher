@@ -139,3 +139,29 @@ def test_http_port_is_read_from_the_environment():
 
 def test_http_port_zero_disables_the_api():
     assert load_settings({"HTTP_PORT": "0"}).http_port == 0
+
+
+def test_ollama_num_ctx_defaults_to_a_pi5_sized_value():
+    # Ollama's own server default (4096) is too small for a cycle's
+    # persona+memory+tool-result prompt (observed ~9.7k tokens); this is our
+    # own, larger default.
+    assert load_settings({}).ollama_num_ctx == 16384
+
+
+def test_ollama_num_ctx_is_read_from_the_environment():
+    assert load_settings({"OLLAMA_NUM_CTX": "8192"}).ollama_num_ctx == 8192
+
+
+def test_lan_ollama_num_ctx_defaults_larger_than_the_local_ollama_default():
+    # The lan: host is a desktop machine, not the RAM-constrained rpi5
+    # running the in-compose ollama: service, so it gets its own, larger,
+    # default rather than sharing OLLAMA_NUM_CTX.
+    s = load_settings({})
+    assert s.lan_ollama_num_ctx == 32768
+    assert s.lan_ollama_num_ctx > s.ollama_num_ctx
+
+
+def test_lan_ollama_num_ctx_is_read_from_the_environment():
+    assert (
+        load_settings({"LAN_OLLAMA_NUM_CTX": "65536"}).lan_ollama_num_ctx == 65536
+    )

@@ -237,7 +237,9 @@ class ProviderChain:
                     model, subnets_for(settings.lan_subnets, settings.ha_url)
                 )
                 lan_finders.append(lan_finder)
-                providers.append(LanOllamaProvider(lan_finder))
+                providers.append(
+                    LanOllamaProvider(lan_finder, num_ctx=settings.lan_ollama_num_ctx)
+                )
             elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
                 # the concrete provider module or its API client.
@@ -254,7 +256,11 @@ class ProviderChain:
                 # Imported lazily to match the gemini branch above.
                 from ai_brain.llm.ollama import OllamaProvider
 
-                providers.append(OllamaProvider(model, settings.ollama_url))
+                providers.append(
+                    OllamaProvider(
+                        model, settings.ollama_url, num_ctx=settings.ollama_num_ctx
+                    )
+                )
             elif name == "fake":
                 from ai_brain.llm.fake import FakeProvider
 

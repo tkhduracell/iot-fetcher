@@ -35,9 +35,17 @@ LAN_ATTEMPTS = 3
 # A local model can be genuinely slow -- 900s is generous on purpose, since
 # the alternative is falling back to a metered cloud key over a model that was
 # still thinking. The connect phase gets its own, far tighter bound: if the
-# host is not answering the port right now, no amount of patience helps.
+# host is not answering the port at all, no amount of patience helps.
 LAN_CONNECT_TIMEOUT_S = 3.0
 LAN_REQUEST_TIMEOUT_S = 900.0
+
+# The lan: host is a desktop machine discovered on the network, not the rpi5
+# running the rest of this stack -- its own hardware, not the constrained
+# in-compose ollama service, so its own num_ctx default is larger than
+# ai_brain.llm.ollama.DEFAULT_NUM_CTX. 32768 matches what this deployment's
+# LAN Ollama servers are themselves configured for. Overridable via
+# LAN_OLLAMA_NUM_CTX -- see ai_brain.config.
+LAN_DEFAULT_NUM_CTX = 32768
 
 
 class LanOllamaProvider(Provider):
@@ -49,6 +57,7 @@ class LanOllamaProvider(Provider):
         finder: OllamaFinder,
         client: httpx.AsyncClient | None = None,
         timeout_s: httpx.Timeout | None = None,
+        num_ctx: int = LAN_DEFAULT_NUM_CTX,
     ) -> None:
         self.finder = finder
         self.model = finder.model
@@ -57,6 +66,7 @@ class LanOllamaProvider(Provider):
         self._timeout_s = timeout_s or httpx.Timeout(
             LAN_REQUEST_TIMEOUT_S, connect=LAN_CONNECT_TIMEOUT_S
         )
+        self._num_ctx = num_ctx
         self._attempts_left = LAN_ATTEMPTS
 
     def available(self) -> bool:
@@ -70,7 +80,11 @@ class LanOllamaProvider(Provider):
             raise ProviderError(f"{self.key}: no host on the network", kind="server")
 
         provider = OllamaProvider(
-            self.model, host.base_url, client=self._client, timeout_s=self._timeout_s
+            self.model,
+            host.base_url,
+            client=self._client,
+            timeout_s=self._timeout_s,
+            num_ctx=self._num_ctx,
         )
         try:
             reply = await provider.complete(messages, tools, max_tokens)
