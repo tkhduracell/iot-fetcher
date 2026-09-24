@@ -31,6 +31,40 @@ _NAME_TOKENS = re.compile(r"[-_.]+")
 # (2 of 3 tokens shared each way).
 _SIMILAR_THRESHOLD = 0.5
 
+# On the weak local fallback model, write_fact sometimes gets called with a
+# body that says nothing the title didn't already: title "normal readings are
+# worth a look precisely once", body the same sentence again. A fact like that
+# is not evidence, it is a restated observation with nowhere for anyone to
+# check it against -- so it is refused rather than silently taking up a slot.
+#
+# Deliberately low: a real, precise fact can be short ("Heater draws 2.7 kW
+# on phase 2." is 31 chars), so this is a floor against near-nothing bodies
+# ("28C", "up"), not a length requirement on genuine evidence. The
+# equals/contained-in-title check above is what actually catches restatement.
+_MIN_FACT_BODY_CHARS = 20
+
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalise(text: str) -> str:
+    return _WS_RE.sub(" ", text).strip().lower()
+
+
+def junk_fact_reason(title: str, body: str) -> str | None:
+    """None if ``body`` looks like real evidence for ``title``; else why not.
+
+    Pure and side-effect free so it can be unit tested directly.
+    """
+    norm_title = _normalise(title)
+    norm_body = _normalise(body)
+    if not norm_body:
+        return "body is empty -- write the evidence, not just a label"
+    if len(norm_body) < _MIN_FACT_BODY_CHARS:
+        return f"body is only {len(norm_body)} chars -- write the evidence, not just a label"
+    if norm_body == norm_title or norm_body in norm_title:
+        return "body just repeats the title -- write what you actually observed, with numbers or specifics"
+    return None
+
 
 def _tokens(name: str) -> frozenset[str]:
     return frozenset(t for t in _NAME_TOKENS.split(name.lower()) if t)
@@ -78,10 +112,15 @@ async def _append_journal(ctx: ToolContext, args: dict) -> str:
 
 async def _write_fact(ctx: ToolContext, args: dict) -> str:
     name = str(args["name"])
+    title = str(args["title"])
+    body = str(args["body"])
+    junk_reason = junk_fact_reason(title, body)
+    if junk_reason is not None:
+        return err(f"refused: {junk_reason}")
     # Read before writing: once written, name is its own exact match and
     # would never show up as a "similar" existing name against itself.
     similar = _similar_fact_names(name, ctx.memory.list_facts())
-    ctx.memory.write_fact(name, str(args["title"]), str(args["body"]))
+    ctx.memory.write_fact(name, title, body)
     result: dict = {"written": name}
     if similar:
         result["similar_existing_facts"] = similar

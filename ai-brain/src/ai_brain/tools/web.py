@@ -34,6 +34,7 @@ import re
 import socket
 from urllib.parse import urljoin, urlsplit
 
+from ai_brain.config import Settings
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 from ai_brain.tools.http import decode_json, request, stream
@@ -135,6 +136,10 @@ async def validate_public_url(url: str) -> str | None:
     return None
 
 
+def _brave_configured(settings: Settings) -> bool:
+    return bool(settings.brave_api_key)
+
+
 async def _web_search(ctx: ToolContext, args: dict) -> str:
     key = ctx.settings.brave_api_key
     if not key:
@@ -225,6 +230,7 @@ def register_web_tools(registry: ToolRegistry) -> None:
             ),
             fn=_web_search,
             loops=WEB_LOOPS,
+            available=_brave_configured,
         )
     )
     registry.register(

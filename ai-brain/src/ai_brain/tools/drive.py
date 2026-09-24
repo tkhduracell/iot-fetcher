@@ -8,6 +8,7 @@ they are short and structural, and the wrapper is reserved for the body.
 
 from __future__ import annotations
 
+from ai_brain.config import Settings
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 from ai_brain.tools.http import decode_json, request
@@ -15,6 +16,10 @@ from ai_brain.tools.http import decode_json, request
 DRIVE_LOOPS = frozenset({"brain", "researcher"})
 
 SOURCE = "google-drive"
+
+
+def _gdrive_configured(settings: Settings) -> bool:
+    return bool(settings.gdrive_rag_url)
 
 
 async def _drive_search(ctx: ToolContext, args: dict) -> str:
@@ -67,5 +72,6 @@ def register_drive_tools(registry: ToolRegistry) -> None:
             ),
             fn=_drive_search,
             loops=DRIVE_LOOPS,
+            available=_gdrive_configured,
         )
     )

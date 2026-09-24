@@ -27,7 +27,9 @@ sleep, because a brain that stops thinking is worse than one that thinks badly.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -70,6 +72,18 @@ TRACE_TEXT_CHARS = 2000
 TRACE_PREVIEW_CHARS = 500
 
 Status = Literal["ok", "no_budget", "error", "timeout", "paused", "cancelled", "max_rounds"]
+
+# Valid Status values, for validating what _load_state reads back off disk --
+# a hand-edited or truncated file could otherwise hand a bogus string
+# straight into CycleResult.status.
+_STATUSES: frozenset[str] = frozenset(
+    {"ok", "no_budget", "error", "timeout", "paused", "cancelled", "max_rounds"}
+)
+
+# Written next to the rest of a loop's memory (journal, facts, inbox) rather
+# than in a shared location: each loop persists only its own last cycle and
+# counts, the same way each loop's memory is its own directory.
+STATE_FILENAME = "_state.json"
 
 CYCLE_INSTRUCTIONS = """\
 # This cycle
@@ -356,6 +370,91 @@ class AgentLoop:
         # counts per provider key, which cannot say which loop is expensive.
         self.token_counts: dict[str, int] = {"prompt": 0, "completion": 0}
         self.trace: CycleTrace | None = None
+        # memory is None only in tests that do not exercise a real cycle
+        # (they stub out everything up to the chain call); a real loop always
+        # has one, since run_cycle reads and writes it constantly.
+        self._state_path = self.memory.root / STATE_FILENAME if self.memory is not None else None
+        self._load_state()
+
+    # -- state persistence ----------------------------------------------
+    #
+    # last_cycle/last_cycle_at/cycle_counts only ever live in memory, so a
+    # restart used to lose them outright: the API/UI would report "no model
+    # · never ran" for a loop that has been thinking for weeks, right up
+    # until its first post-restart cycle finished. This mirrors Ledger's own
+    # pattern (see ledger.py's module docstring) -- JSON on disk, rewritten
+    # through a temp file plus os.replace after every cycle, tolerant of a
+    # missing or corrupt file rather than raising out of __init__.
+
+    def _load_state(self) -> None:
+        if self._state_path is None:
+            return
+        try:
+            raw = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError):
+            log.warning("[%s] could not read %s; starting with no cycle history", self.name, self._state_path)
+            return
+
+        if not isinstance(raw, dict):
+            return
+
+        last = raw.get("last_cycle")
+        if isinstance(last, dict) and last.get("status") in _STATUSES:
+            try:
+                self.last_cycle = CycleResult(
+                    status=last["status"],
+                    model=str(last.get("model") or ""),
+                    rounds=int(last.get("rounds") or 0),
+                    next_wake_s=int(last.get("next_wake_s") or 0),
+                )
+            except (TypeError, ValueError):
+                self.last_cycle = None
+
+        last_at = raw.get("last_cycle_at")
+        if isinstance(last_at, (int, float)):
+            self.last_cycle_at = float(last_at)
+
+        counts = raw.get("cycle_counts")
+        if isinstance(counts, dict):
+            self.cycle_counts = {
+                str(status): int(n)
+                for status, n in counts.items()
+                if status in _STATUSES and isinstance(n, (int, float))
+            }
+
+    def _save_state(self, summary: str = "") -> None:
+        if self._state_path is None:
+            return
+        body = {
+            "last_cycle": (
+                None
+                if self.last_cycle is None
+                else {
+                    "status": self.last_cycle.status,
+                    "model": self.last_cycle.model,
+                    "rounds": self.last_cycle.rounds,
+                    "next_wake_s": self.last_cycle.next_wake_s,
+                    # Not read back by _load_state (CycleResult has no summary
+                    # field), but the API/UI's "last cycle" panel wants one
+                    # after a restart the same as it does mid-process -- the
+                    # caller passes it explicitly since self.trace's own copy
+                    # is cleared before the next cycle starts.
+                    "summary": summary,
+                    "ended_at": self.last_cycle_at,
+                }
+            ),
+            "last_cycle_at": self.last_cycle_at,
+            "cycle_counts": dict(self.cycle_counts),
+        }
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._state_path.with_name(self._state_path.name + ".tmp")
+            tmp.write_text(json.dumps(body), encoding="utf-8")
+            os.replace(tmp, self._state_path)
+        except OSError:
+            log.warning("[%s] could not write %s", self.name, self._state_path, exc_info=True)
 
     # -- one cycle -----------------------------------------------------
 
@@ -409,7 +508,7 @@ class AgentLoop:
                 reply = await asyncio.wait_for(
                     self.chain.complete(
                         messages,
-                        self.registry.specs_for(self.name),
+                        self.registry.specs_for(self.name, self.ctx.settings),
                         self.max_tokens,
                         self.priority,
                         agent=self.name,
@@ -611,6 +710,7 @@ class AgentLoop:
         self.last_cycle = result
         self.last_cycle_at = self.clock()
         self.cycle_counts[status] = self.cycle_counts.get(status, 0) + 1
+        self._save_state(summary)
         if self.trace is not None:
             log.info(
                 "[%s] cycle %s rounds=%d tokens prompt=%d completion=%d",

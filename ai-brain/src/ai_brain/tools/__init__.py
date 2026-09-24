@@ -40,6 +40,12 @@ class ToolContext:
 
 
 ToolFn = Callable[[ToolContext, dict], Awaitable[str]]
+# A predicate over settings: false means the tool cannot work right now (a
+# missing API key, an unset URL) rather than that the loop may not call it.
+# Takes ``Settings`` rather than the full ``ToolContext`` because availability
+# is a fact about how the process is configured, not about who is asking --
+# every loop that is even offered the tool sees the same answer.
+AvailableFn = Callable[[Settings], bool]
 
 
 @dataclass
@@ -47,6 +53,13 @@ class Tool:
     spec: ToolSpec
     fn: ToolFn
     loops: frozenset[str] | None = None  # None = every loop
+    # None = always available. A tool whose function would just return an
+    # error string for a missing config (see e.g. web_search's "disabled:
+    # BRAVE_API_KEY unset") should not be offered to the model at all --
+    # spending a whole round to discover a tool cannot work is a round the
+    # model does not get back, and a weak fallback model is the one least
+    # able to shrug that off and try something else.
+    available: AvailableFn | None = None
 
 
 def ok(data: Any) -> str:
@@ -106,14 +119,37 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.spec.name] = tool
 
-    def specs_for(self, loop: str) -> list[ToolSpec]:
-        return [t.spec for t in self._tools.values() if t.loops is None or loop in t.loops]
+    def specs_for(self, loop: str, settings: Settings | None = None) -> list[ToolSpec]:
+        """What ``loop`` is offered: on its allowlist and, if it declares one,
+        passing its own ``available`` check against ``settings``.
+
+        ``settings`` is optional only so existing call sites and tests that do
+        not care about availability (every tool without a predicate) keep
+        working unchanged; a tool that *does* declare ``available`` and is
+        asked for without settings is treated as available, since there is
+        nothing to check it against.
+        """
+        return [
+            t.spec
+            for t in self._tools.values()
+            if (t.loops is None or loop in t.loops)
+            and (t.available is None or settings is None or t.available(settings))
+        ]
 
     async def dispatch(self, ctx: ToolContext, call: ToolCall) -> str:
         tool = self._tools.get(call.name)
         if tool is None:
             return err(f"unknown tool: {call.name}")
 
+        # No ``available`` re-check here, unlike ``loops`` below: ``available``
+        # only controls what a loop is *offered* in specs_for, as a courtesy so
+        # a round is not wasted discovering a tool cannot work. A call that
+        # arrives anyway (a stale tool list, a model that remembers a tool from
+        # an earlier round before config changed) still reaches the real
+        # function, whose own check already returns the same clear error
+        # (e.g. web_search's "disabled: BRAVE_API_KEY unset") -- so this must
+        # stay a soft filter, not a second hard refusal path to keep in sync
+        # with the tool's own error message.
         if tool.loops is not None and ctx.loop not in tool.loops:
             log.warning("[policy] %s called %s, not on its allowlist", ctx.loop, call.name)
             return err(f"policy: tool {call.name} not allowed for loop {ctx.loop}")

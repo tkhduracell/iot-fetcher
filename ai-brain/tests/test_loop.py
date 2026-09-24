@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from ai_brain.loop import (
     CYCLE_INSTRUCTIONS,
     EXPERT_ANGLES,
     MAX_TOOL_RESULT_CHARS,
+    STATE_FILENAME,
     AgentLoop,
     CycleResult,
     _angle_for,
@@ -306,7 +308,9 @@ async def test_system_and_user_messages_frame_the_cycle(make_loop, brain_dir):
     assert "end_cycle" in messages[0].content
     assert messages[1].role == "user"
     assert "Begin your think cycle" in messages[1].content
-    assert {t.name for t in tools} == {s.name for s in loop.registry.specs_for("brain")}
+    assert {t.name for t in tools} == {
+        s.name for s in loop.registry.specs_for("brain", loop.ctx.settings)
+    }
 
 
 async def test_tool_results_are_fed_back_as_tool_messages(make_loop):
@@ -1410,3 +1414,177 @@ async def test_a_scripted_cycle_reviews_an_expert_and_the_note_lands_in_its_inbo
     assert "stale" in notes[0].body
     assert woken == ["energy"]
     assert brain_dir.recent_reviews("energy", 1)[0]["verdict"] == "wrong"
+
+
+# -- cycle-state persistence (_state.json) ------------------------------
+
+
+async def test_last_cycle_and_counts_persist_to_state_json(make_loop, brain_dir):
+    loop, _provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="all quiet"))]
+    )
+
+    await loop.run_cycle()
+
+    state_path = brain_dir.root / STATE_FILENAME
+    assert state_path.exists()
+    body = json.loads(state_path.read_text(encoding="utf-8"))
+    assert body["last_cycle"]["status"] == "ok"
+    assert body["last_cycle"]["rounds"] == 1
+    assert body["last_cycle"]["summary"] == "all quiet"
+    assert body["cycle_counts"] == {"ok": 1}
+    assert body["last_cycle_at"] == loop.last_cycle_at
+
+
+async def test_a_fresh_loop_loads_last_cycle_from_state_json(
+    make_loop, brain_dir, registry, wall, tmp_path
+):
+    loop, _provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="all quiet"))]
+    )
+    await loop.run_cycle()
+
+    # Simulate a restart: a brand new AgentLoop built over the very same
+    # memory directory, the way supervisor.py builds one from settings.
+    # last_cycle/cycle_counts must come back from disk even though nothing
+    # in this new object has run a cycle yet.
+    provider = FakeProvider("fake:1", script=[])
+    ledger = Ledger(
+        {"fake:1": Limits(rpm=100, tpm=1_000_000, rpd=1000)},
+        tmp_path / "ledger2.json",
+        clock=wall,
+    )
+    chain = ProviderChain([provider], ledger)
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories={"brain": brain_dir},
+        settings=load_settings({}),
+        wake=lambda name: None,
+    )
+    restarted = AgentLoop(
+        name="brain",
+        memory=brain_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="brain",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+
+    assert restarted.last_cycle is not None
+    assert restarted.last_cycle.status == "ok"
+    assert restarted.last_cycle.rounds == 1
+    assert restarted.cycle_counts == {"ok": 1}
+    assert restarted.last_cycle_at == loop.last_cycle_at
+
+
+async def test_cycle_counts_accumulate_across_cycles_in_state_json(make_loop, brain_dir):
+    loop, _provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="one"))],
+    )
+    await loop.run_cycle()
+    loop.chain.providers[0].script.append(
+        reply("done", call("end_cycle", "c2", next_wake_minutes=30, summary="two"))
+    )
+    await loop.run_cycle()
+
+    body = json.loads((brain_dir.root / STATE_FILENAME).read_text(encoding="utf-8"))
+    assert body["cycle_counts"] == {"ok": 2}
+    assert body["last_cycle"]["summary"] == "two"
+
+
+async def test_missing_state_file_is_not_an_error(make_loop, brain_dir):
+    """No prior state (first-ever run) must not raise -- last_cycle stays
+    None and cycle_counts stays empty until the first cycle finishes."""
+    assert not (brain_dir.root / STATE_FILENAME).exists()
+    loop, _provider = make_loop([])
+    assert loop.last_cycle is None
+    assert loop.cycle_counts == {}
+
+
+async def test_corrupt_state_file_is_tolerated(brain_dir, expert_dir, registry, wall, tmp_path):
+    (brain_dir.root / STATE_FILENAME).write_text("{not json", encoding="utf-8")
+
+    provider = FakeProvider("fake:1", script=[])
+    ledger = Ledger(
+        {"fake:1": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "ledger.json", clock=wall
+    )
+    chain = ProviderChain([provider], ledger)
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories={"brain": brain_dir, "energy": expert_dir},
+        settings=load_settings({}),
+        wake=lambda name: None,
+    )
+    loop = AgentLoop(
+        name="brain",
+        memory=brain_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="brain",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+
+    assert loop.last_cycle is None
+    assert loop.cycle_counts == {}
+
+
+async def test_state_file_with_unknown_status_is_ignored(
+    brain_dir, expert_dir, registry, wall, tmp_path
+):
+    (brain_dir.root / STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "last_cycle": {
+                    "status": "not_a_real_status",
+                    "model": "x",
+                    "rounds": 1,
+                    "next_wake_s": 1,
+                },
+                "last_cycle_at": 123.0,
+                "cycle_counts": {"ok": 3, "not_a_real_status": 5},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    provider = FakeProvider("fake:1", script=[])
+    ledger = Ledger(
+        {"fake:1": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "ledger.json", clock=wall
+    )
+    chain = ProviderChain([provider], ledger)
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories={"brain": brain_dir, "energy": expert_dir},
+        settings=load_settings({}),
+        wake=lambda name: None,
+    )
+    loop = AgentLoop(
+        name="brain",
+        memory=brain_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="brain",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+
+    # The bogus last_cycle is dropped rather than handed to CycleResult as-is.
+    assert loop.last_cycle is None
+    # last_cycle_at is a plain float, so it survives regardless.
+    assert loop.last_cycle_at == 123.0
+    # Only the recognised status in cycle_counts survives.
+    assert loop.cycle_counts == {"ok": 3}
