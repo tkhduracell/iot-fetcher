@@ -34,6 +34,7 @@ happens must not be the day it lands on disk for a tool to read back.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -298,7 +299,10 @@ class RepoSnapshot:
                                 f"tarball for {self.slug}@{sha} exceeds {MAX_TOTAL_BYTES} bytes"
                             )
                         fh.write(chunk)
-                _safe_extract(tmp_tar, target)
+                # Off the event loop: decompressing and writing a few hundred
+                # files takes seconds on the Pi, and every agent loop shares
+                # this one event loop.
+                await asyncio.to_thread(_safe_extract, tmp_tar, target)
             finally:
                 tmp_tar.unlink(missing_ok=True)
 
