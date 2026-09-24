@@ -381,6 +381,14 @@ def test_junk_fact_reason_rejects_a_too_short_body():
     assert "chars" in reason
 
 
+def test_junk_fact_reason_accepts_a_short_but_precise_fact():
+    # 31 chars -- would have been refused under the old 40-char floor, but a
+    # short, specific, numeric fact like this is exactly what write_fact is
+    # for and must not be punished for being concise.
+    reason = junk_fact_reason("heater power draw", "Heater draws 2.7 kW on phase 2.")
+    assert reason is None
+
+
 def test_junk_fact_reason_rejects_an_empty_body():
     reason = junk_fact_reason("pool baseline", "   ")
     assert reason is not None

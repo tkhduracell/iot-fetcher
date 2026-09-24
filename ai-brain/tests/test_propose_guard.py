@@ -38,6 +38,34 @@ def test_rejects_the_models_own_angle_as_the_item():
     assert "restates your own instructions" in reason
 
 
+@pytest.mark.parametrize(
+    "item",
+    [
+        "Water the plants in the living room",
+        "Replace the dehumidifier filter",
+        "Turn off the garage light",
+    ],
+)
+def test_stopwords_do_not_make_a_real_item_look_like_an_echo(item):
+    """Before excluding stopwords, overlap/min(len) over every word -- 'the',
+    'in', 'of' included -- could push a short real item over the threshold
+    against an unrelated prompt sentence just because both are short and
+    both use common English function words. This must not happen."""
+    reason = junk_proposal_reason("ha_todo_add", {"item": item}, "chores")
+    assert reason is None
+
+
+def test_known_junk_still_refused_after_excluding_stopwords():
+    # Sanity check that dropping stopwords didn't gut the echo check itself:
+    # the actual junk example from production must still be caught.
+    reason = junk_proposal_reason(
+        "ha_todo_add",
+        {"item": "Pick up an open thread. Read your recent journal…"},
+        "unfinished",
+    )
+    assert reason is not None
+
+
 def test_rejects_a_paraphrased_angle():
     # Same content, reworded -- the token-overlap check should still catch a
     # close paraphrase, not just an exact quote.
@@ -65,14 +93,44 @@ def test_rejects_unfinished_thought_style_item():
 
 @pytest.mark.parametrize(
     "topic",
-    ["think", "think-cycle", "Think Cycle", "cycle", "wake_up", "next_wake", "greetings"],
+    [
+        "think",
+        "think-cycle",
+        "Think Cycle",
+        "cycle",
+        "wake_up",
+        "next_wake",
+        "greetings",
+        "think-cycle-2026-09-24",
+        "unfinished-thought",
+        "thread-to-pick-up",
+    ],
 )
 def test_rejects_meta_topics(topic):
+    """Refused only when the *whole* topic is meta words (plus filler like a
+    date suffix) -- never when a real subject just happens to contain one."""
     reason = junk_proposal_reason(
         "ha_todo_add", {"item": "replace the pool filter cartridge"}, topic
     )
     assert reason is not None
     assert "thinking process" in reason
+
+
+@pytest.mark.parametrize(
+    "topic",
+    [
+        "dishwasher-cycle",
+        "washing-machine-cycle",
+        "wake-up-light",
+        "thread-network",  # Thread/Matter is a real smart-home protocol
+        "sunrise-wake",
+    ],
+)
+def test_does_not_reject_real_subjects_that_contain_a_meta_word(topic):
+    reason = junk_proposal_reason(
+        "ha_todo_add", {"item": "replace the pool filter cartridge"}, topic
+    )
+    assert reason is None
 
 
 def test_does_not_reject_chat_topic_its_approvals_own_job():
@@ -84,9 +142,17 @@ def test_does_not_reject_chat_topic_its_approvals_own_job():
     assert reason is None
 
 
-def test_rejects_an_item_under_three_words():
-    assert junk_proposal_reason("ha_todo_add", {"item": "check pool"}, "pool") is not None
+def test_rejects_a_single_word_item():
     assert junk_proposal_reason("ha_todo_add", {"item": "pool"}, "pool") is not None
+
+
+@pytest.mark.parametrize("item", ["Buy milk", "Dinner ready", "Good morning"])
+def test_allows_short_real_todos_and_speech(item):
+    # MIN_ITEM_WORDS is 2, not 3: real to-dos and things Filip actually says
+    # are often this short. The echo and meta-topic checks, not a length
+    # floor, are what are supposed to catch scaffolding text.
+    assert junk_proposal_reason("ha_todo_add", {"item": item}, "reminder") is None
+    assert junk_proposal_reason("sonos_say", {"text": item}, "reminder") is None
 
 
 def test_rejects_an_item_that_is_just_the_topic_repeated():

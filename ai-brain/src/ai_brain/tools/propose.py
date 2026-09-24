@@ -37,17 +37,20 @@ RECENT_TERMINAL_LIMIT = 20
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
-# Topics that name the *mechanism* of thinking rather than a subject a human
+# Words that name the *mechanism* of thinking rather than a subject a human
 # would recognise -- the giveaway that the model proposed its own scaffolding
 # instead of a request. "chat" is deliberately not included here: it is
 # Filip's own reserved topic name, already refused by approvals.propose with
 # a more specific reason ("is reserved; pick a topic naming this proposal"),
 # and that error must not be shadowed by this more generic one.
 #
-# Checked two ways: word-for-word (catches "think", "cycle" appearing amongst
-# other words) and as whole compounds joined by "_"/"-" (catches "wake_up",
-# "next-wake" as units, where splitting on underscore would otherwise turn
-# "wake_up" into the words "wake" and "up" and "up" alone means nothing).
+# This must NOT be a "does any word appear" check: "dishwasher-cycle",
+# "washing-machine-cycle", "wake-up-light", "thread-network" (Thread/Matter is
+# a real smart-home protocol) and "sunrise-wake" are all real subjects that
+# happen to contain a meta word next to a real one. What actually
+# distinguishes junk is that the *whole* topic is built only from meta words
+# plus filler -- "think-cycle-2026-09-24" has nothing else in it, an actual
+# subject always does.
 _META_TOPIC_WORDS = frozenset(
     {
         "think",
@@ -55,22 +58,88 @@ _META_TOPIC_WORDS = frozenset(
         "cycle",
         "wake",
         "unfinished",
+        "thought",
+        "thoughts",
         "thread",
         "greeting",
         "greetings",
+        "next",
+        "pick",
+        "up",
+        "to",
     }
 )
-_META_TOPIC_COMPOUNDS = frozenset({"wake_up", "wake-up", "next_wake", "next-wake"})
 
-# A title/body must share at least this fraction of its tokens with a known
-# prompt sentence to count as a restatement of it rather than a coincidence.
+# Digits (a date/timestamp suffix like "-2026-09-24") do not make a topic any
+# less meta -- they are filler, not a subject -- so they are stripped before
+# checking whether every remaining word is a meta word.
+_DIGIT_RE = re.compile(r"^[0-9]+$")
+
+# A title/body must share at least this fraction of its *content* words with
+# a known prompt sentence to count as a restatement of it rather than a
+# coincidence. Stopwords are excluded from both sides before this is computed
+# (see _content_words) -- otherwise a short real item like "Water the plants
+# in the living room" shares "the"/"in" with half of CYCLE_INSTRUCTIONS and
+# nothing else, which is not what "restates your own instructions" means.
 _ANGLE_OVERLAP_THRESHOLD = 0.6
 
-MIN_ITEM_WORDS = 3
+# However high the overlap fraction, a couple of shared stopword-free words is
+# still coincidence, not a restatement -- "check it" vs. "check it later"
+# would otherwise be 100% overlap on one real word. Requiring a handful of
+# shared content words is what actually distinguishes "this is the model's
+# own prompt back at it" from "these two sentences both happen to be short".
+MIN_SHARED_CONTENT_WORDS = 3
+
+# Real to-dos and things Filip actually says are often this short ("Buy
+# milk", "Dinner ready", "Good morning") -- the echo and meta-topic checks
+# are what catch scaffolding text, not a floor on ordinary human brevity.
+MIN_ITEM_WORDS = 2
+
+# Ordinary English function words: excluded before computing token overlap
+# for the echo check, so two unrelated sentences that both happen to use
+# "the"/"a"/"to" do not register as one restating the other. Deliberately
+# small and closed-class rather than a general stopword list off the shelf --
+# this only needs to cover the words that show up in both prompt sentences
+# and everyday requests.
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "to",
+        "in",
+        "on",
+        "of",
+        "and",
+        "or",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "it",
+        "its",
+        "your",
+        "you",
+        "this",
+        "that",
+        "for",
+        "with",
+        "at",
+        "as",
+        "so",
+        "not",
+    }
+)
 
 
 def _words(text: str) -> frozenset[str]:
     return frozenset(_WORD_RE.findall(text.lower()))
+
+
+def _content_words(text: str) -> frozenset[str]:
+    return _words(text) - _STOPWORDS
 
 
 def _prompt_sentences() -> tuple[str, ...]:
@@ -91,14 +160,12 @@ def _prompt_sentences() -> tuple[str, ...]:
 
 def _echoes_a_prompt(text: str) -> str | None:
     """The prompt sentence ``text`` most looks like a restatement of, if any."""
-    text_words = _words(text)
-    if len(text_words) < MIN_ITEM_WORDS:
-        return None
+    text_words = _content_words(text)
     for sentence in _prompt_sentences():
-        sentence_words = _words(sentence)
-        if len(sentence_words) < MIN_ITEM_WORDS:
-            continue
+        sentence_words = _content_words(sentence)
         overlap = len(text_words & sentence_words)
+        if overlap < MIN_SHARED_CONTENT_WORDS:
+            continue
         smaller = min(len(text_words), len(sentence_words))
         if smaller and overlap / smaller >= _ANGLE_OVERLAP_THRESHOLD:
             return sentence
@@ -128,8 +195,13 @@ def junk_proposal_reason(kind: str, payload: dict, topic: str) -> str | None:
     ]
     topic_norm = topic.strip().lower()
     topic_words = _words(topic)
+    # Filler that carries no subject of its own: a date/timestamp suffix, or
+    # one of the tiny connector words a meta phrase like "thread to pick up"
+    # is built from. Once these are removed, whatever is left is either
+    # nothing (the whole topic was meta + filler) or an actual subject.
+    meaningful_words = {w for w in topic_words if not _DIGIT_RE.match(w)}
 
-    if (topic_words and topic_words & _META_TOPIC_WORDS) or topic_norm in _META_TOPIC_COMPOUNDS:
+    if meaningful_words and meaningful_words <= _META_TOPIC_WORDS:
         return f"topic {topic!r} names the thinking process, not a subject -- pick what this is actually about"
 
     for field_text in text_fields:

@@ -36,7 +36,12 @@ _SIMILAR_THRESHOLD = 0.5
 # worth a look precisely once", body the same sentence again. A fact like that
 # is not evidence, it is a restated observation with nowhere for anyone to
 # check it against -- so it is refused rather than silently taking up a slot.
-_MIN_FACT_BODY_CHARS = 40
+#
+# Deliberately low: a real, precise fact can be short ("Heater draws 2.7 kW
+# on phase 2." is 31 chars), so this is a floor against near-nothing bodies
+# ("28C", "up"), not a length requirement on genuine evidence. The
+# equals/contained-in-title check above is what actually catches restatement.
+_MIN_FACT_BODY_CHARS = 20
 
 _WS_RE = re.compile(r"\s+")
 

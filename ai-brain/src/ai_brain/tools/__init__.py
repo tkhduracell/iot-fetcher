@@ -141,6 +141,15 @@ class ToolRegistry:
         if tool is None:
             return err(f"unknown tool: {call.name}")
 
+        # No ``available`` re-check here, unlike ``loops`` below: ``available``
+        # only controls what a loop is *offered* in specs_for, as a courtesy so
+        # a round is not wasted discovering a tool cannot work. A call that
+        # arrives anyway (a stale tool list, a model that remembers a tool from
+        # an earlier round before config changed) still reaches the real
+        # function, whose own check already returns the same clear error
+        # (e.g. web_search's "disabled: BRAVE_API_KEY unset") -- so this must
+        # stay a soft filter, not a second hard refusal path to keep in sync
+        # with the tool's own error message.
         if tool.loops is not None and ctx.loop not in tool.loops:
             log.warning("[policy] %s called %s, not on its allowlist", ctx.loop, call.name)
             return err(f"policy: tool {call.name} not allowed for loop {ctx.loop}")
