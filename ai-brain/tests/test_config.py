@@ -34,6 +34,7 @@ def test_defaults_from_empty_env():
     assert (s.rpm, s.tpm, s.rpd) == (8, 200000, 200)
     assert s.call_timeout_s == 60
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
+    assert s.max_prompt_tokens == 400_000
     assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
     assert s.repo_slug == "tkhduracell/iot-fetcher"
     assert s.repo_ref == "main"
@@ -85,6 +86,18 @@ def test_effort_knobs_are_overridable():
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (4, 1000, 0)
 
 
+def test_max_prompt_tokens_defaults_to_400000():
+    assert load_settings({}).max_prompt_tokens == 400_000
+
+
+def test_max_prompt_tokens_is_overridable():
+    assert load_settings({"CYCLE_MAX_PROMPT_TOKENS": "100000"}).max_prompt_tokens == 100_000
+
+
+def test_max_prompt_tokens_zero_is_the_documented_off_switch():
+    assert load_settings({"CYCLE_MAX_PROMPT_TOKENS": "0"}).max_prompt_tokens == 0
+
+
 # -- CYCLE_MAX_ROUNDS_BY_MODEL ------------------------------------------
 
 
@@ -127,6 +140,37 @@ def test_max_rounds_by_model_malformed_entry_is_a_startup_error(raw):
 def test_max_rounds_by_model_accepts_the_ceiling_itself():
     s = load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": f"gemini:*={CYCLE_MAX_ROUNDS_HARD_CEILING}"})
     assert s.max_rounds_by_model == [("gemini:*", CYCLE_MAX_ROUNDS_HARD_CEILING)]
+
+
+def test_max_rounds_by_model_unset_key_uses_the_default():
+    """Absent from the environment entirely -- the key not in ``env`` at
+    all -- is exactly the same as not setting it: the documented default
+    boost. This is also what test_max_rounds_by_model_default_is_unchanged_...
+    already covers via {}, so this test is really about distinguishing that
+    case (unset) from the "none"/"off" opt-out just below, which requires the
+    same default-vs-absent handling in _max_rounds_by_model to tell apart."""
+    s = load_settings({})
+    assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
+
+
+def test_max_rounds_by_model_none_is_the_explicit_opt_out():
+    """Unlike a blank/whitespace value (which falls back to the default, same
+    as EXPERTS's own blank handling), "none" or "off" is read as "no per-model
+    caps at all" -- every cycle just gets the flat CYCLE_MAX_ROUNDS."""
+    assert load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": "none"}).max_rounds_by_model == []
+    assert load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": "NONE"}).max_rounds_by_model == []
+    assert load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": "off"}).max_rounds_by_model == []
+    assert load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": " Off "}).max_rounds_by_model == []
+
+
+def test_max_rounds_by_model_none_still_lets_max_rounds_apply():
+    """With the per-model table off, every cycle is governed purely by
+    CYCLE_MAX_ROUNDS -- _rounds_cap's own no-match fallback in loop.py, not
+    anything new to this parsing layer, but worth pinning that opting out
+    doesn't also touch the flat cap."""
+    s = load_settings({"CYCLE_MAX_ROUNDS_BY_MODEL": "none", "CYCLE_MAX_ROUNDS": "10"})
+    assert s.max_rounds_by_model == []
+    assert s.max_rounds == 10
 
 
 def test_lan_sweep_defaults_and_overrides():

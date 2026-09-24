@@ -44,6 +44,12 @@ DEFAULT_EXPERTS = "energy,health,house-ops,researcher,infra"
 # same statement as naming none.
 NO_EXPERTS = frozenset({"none", "brain"})
 
+# The explicit opt-out for CYCLE_MAX_ROUNDS_BY_MODEL, distinct from "unset"
+# (which falls back to DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL below). Same spelling
+# as NO_EXPERTS's opt-out, minus "brain" -- there is no per-loop reading of
+# this one to make "brain" a meaningful synonym for "none" here.
+NO_MAX_ROUNDS_BY_MODEL = frozenset({"none", "off"})
+
 # A cycle answered by a stronger model gets more rounds before the loop stops
 # waiting for end_cycle. Matched fnmatch-style against the model that answered
 # the most recent round -- ``gemini:gemini-3.8-flash`` or
@@ -125,6 +131,7 @@ class Settings:
     max_rounds: int
     max_rounds_by_model: list[tuple[str, int]]
     max_tokens: int
+    max_prompt_tokens: int
     thinking_budget: int
     rpm: int
     tpm: int
@@ -164,6 +171,31 @@ def _experts(raw: str) -> list[str]:
     if len(names) == 1 and names[0].lower() in NO_EXPERTS:
         return []
     return names
+
+
+def _max_rounds_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
+    """``CYCLE_MAX_ROUNDS_BY_MODEL``, distinguishing unset from opted out.
+
+    Three cases, and ``env.get`` alone cannot tell the first two apart:
+
+    * **Key absent from ``env`` entirely** -- nobody has an opinion, so this
+      falls back to ``DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL`` (the shipped
+      gemini-3.8/qwen3.8 boost). This is also what a blank or whitespace-only
+      value does, same as ``EXPERTS`` -- a deployment that copied
+      ``.env.example`` during a rollout has a literal blank line, and that
+      must not silently disable the boost either.
+    * **``none`` or ``off`` (case-insensitive)** -- the explicit opt-out: no
+      per-model caps at all, every cycle just gets ``CYCLE_MAX_ROUNDS``.
+    * **Anything else** -- parsed as ``pattern=N`` entries, same as always.
+    """
+    if "CYCLE_MAX_ROUNDS_BY_MODEL" not in env:
+        return _parse_max_rounds_by_model(DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL)
+    raw = env["CYCLE_MAX_ROUNDS_BY_MODEL"].strip()
+    if raw.lower() in NO_MAX_ROUNDS_BY_MODEL:
+        return []
+    return _parse_max_rounds_by_model(raw) or _parse_max_rounds_by_model(
+        DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL
+    )
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -218,11 +250,14 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         lan_subnets=_csv(get("LAN_SUBNETS")),
         lan_scan_s=get_int("LAN_SCAN_MIN", 10) * 60,
         max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
-        max_rounds_by_model=(
-            _parse_max_rounds_by_model(get("CYCLE_MAX_ROUNDS_BY_MODEL"))
-            or _parse_max_rounds_by_model(DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL)
-        ),
+        max_rounds_by_model=_max_rounds_by_model(env),
         max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
+        # 0 disables the budget outright. 400000 is generous headroom below
+        # the flash models' ~1M context window -- big enough that an ordinary
+        # cycle never gets near it, there specifically for the pathological
+        # one that keeps pulling in large tool results round after round
+        # without ever calling end_cycle.
+        max_prompt_tokens=get_int("CYCLE_MAX_PROMPT_TOKENS", 400_000),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),
         rpm=get_int("RPM", 8),
         tpm=get_int("TPM", 200000),

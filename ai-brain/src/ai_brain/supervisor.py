@@ -232,6 +232,7 @@ def build(
             max_rounds=settings.max_rounds,
             max_rounds_by_model=settings.max_rounds_by_model,
             max_tokens=settings.max_tokens,
+            max_prompt_tokens=settings.max_prompt_tokens,
             call_timeout_s=settings.call_timeout_s,
             events=events,
         )

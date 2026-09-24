@@ -11,7 +11,11 @@ Two details of Gemini's format drive the shape of the request builder:
 * There is no ``tool`` role. A tool result is a ``user`` turn carrying a
   ``functionResponse`` part, and Gemini expects *all* the responses to one
   model turn in a single ``user`` content -- so consecutive tool messages are
-  merged rather than emitted one content each.
+  merged rather than emitted one content each. A plain user message that
+  follows tool results (the loop's wrap-up nudge, chiefly) is the same
+  ``user`` role as what precedes it, so it is folded into that content as an
+  extra text part too, rather than opened as a second, adjacent ``user``
+  turn -- see ``_append_user_text``.
 * The system prompt is not a turn at all; it lives beside ``contents`` in
   ``systemInstruction``.
 * Gemini 3.x thinking models sign their parts with a ``thoughtSignature``, and
@@ -299,7 +303,18 @@ def build_request(
                 _attach_orphan_signature(parts, message.thought_signature)
             contents.append({"role": "model", "parts": parts})
         else:
-            contents.append({"role": "user", "parts": [{"text": message.content}]})
+            # A plain user turn (the loop's wrap-up nudge, chiefly) right
+            # after tool results is still the same ``user`` role Gemini
+            # already sees on the preceding content -- two consecutive
+            # ``user`` contents is not how Gemini's strict turn-taking wants
+            # a back-and-forth, so this folds into the existing
+            # functionResponse content as one more part rather than opening a
+            # second, adjacent ``user`` turn. Ordinary text-follows-text still
+            # goes through _append_user_text's own merge.
+            if contents and contents[-1].get("role") == "user" and _is_tool_content(contents[-1]):
+                contents[-1]["parts"].append({"text": message.content})
+            else:
+                _append_user_text(contents, message.content)
 
     payload: dict[str, Any] = {}
     if system:
@@ -394,7 +409,18 @@ def _as_transcript(message: Message) -> str:
 
 
 def _append_user_text(contents: list[dict[str, Any]], text: str) -> None:
-    """Add a user text part, merging into the previous user turn if it is text."""
+    """Add a user text part, merging into the previous user turn if it is text.
+
+    Deliberately does *not* merge into a preceding tool-result content (one
+    that is all ``functionResponse`` parts): this is also how a replayed
+    foreign turn's tool results are appended (the ``tool``/``replaying``
+    branch in ``build_request``), and folding that synthetic text into a
+    *real* functionResponse content would blur two things that ought to stay
+    visually distinct in the payload. A plain user message that needs to
+    merge into a real tool-result content instead -- the wrap-up nudge,
+    chiefly -- is handled at its own call site in ``build_request``, which
+    merges into a tool content on purpose.
+    """
     if contents and contents[-1].get("role") == "user" and not _is_tool_content(contents[-1]):
         contents[-1]["parts"].append({"text": text})
         return

@@ -156,6 +156,10 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
                 "text": round_.text,
                 "thinking": round_.thinking,
                 "tool_calls": round_.tool_calls,
+                # Each entry already carries "stats" (loop.py's
+                # _tool_result_stats) alongside "name"/"result_preview" --
+                # RoundTrace.tool_results is serialised as-is, so nothing here
+                # needs to single that field out.
                 "tool_results": round_.tool_results,
             }
             for round_ in trace.rounds

@@ -146,9 +146,12 @@ async def test_request_body_mapping():
                             "response": {"result": "not json"},
                         }
                     },
+                    # A plain user turn right after tool results merges into
+                    # that same content rather than opening a second, adjacent
+                    # ``user`` one -- see test_a_plain_user_message_merges_....
+                    {"text": "thanks"},
                 ],
             },
-            {"role": "user", "parts": [{"text": "thanks"}]},
         ],
         "tools": [
             {
@@ -218,12 +221,13 @@ async def test_json_tool_content_that_is_not_a_dict_is_wrapped():
 
 @respx.mock
 async def test_tool_result_does_not_merge_into_a_preceding_text_turn():
+    """The tool branch's own merge (all-functionResponse contents folding
+    together) never reaches backwards into a plain text content -- only a
+    content that is itself already all tool results qualifies."""
     route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
     messages = [
         Message(role="user", content="hi"),
         Message(role="tool", name="a", content="1"),
-        Message(role="user", content="u"),
-        Message(role="tool", name="b", content="2"),
     ]
     await provider().complete(messages, [], 64)
 
@@ -234,7 +238,35 @@ async def test_tool_result_does_not_merge_into_a_preceding_text_turn():
             "role": "user",
             "parts": [{"functionResponse": {"name": "a", "response": {"result": "1"}}}],
         },
-        {"role": "user", "parts": [{"text": "u"}]},
+    ]
+
+
+@respx.mock
+async def test_a_plain_user_message_merges_forward_into_a_preceding_tool_result():
+    """The other direction: a plain user turn (the loop's wrap-up nudge,
+    chiefly) right after tool results is the same ``user`` role Gemini
+    already sees on that content, so it folds in as an extra text part
+    instead of opening a second, adjacent ``user`` content -- Gemini's strict
+    turn-taking does not want two ``user`` contents back to back. A further
+    tool result after that still starts its own content: functionResponse
+    parts and free text are not merged together in either direction."""
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    messages = [
+        Message(role="tool", name="a", content="1"),
+        Message(role="user", content="nudge"),
+        Message(role="tool", name="b", content="2"),
+    ]
+    await provider().complete(messages, [], 64)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["contents"] == [
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"name": "a", "response": {"result": "1"}}},
+                {"text": "nudge"},
+            ],
+        },
         {
             "role": "user",
             "parts": [{"functionResponse": {"name": "b", "response": {"result": "2"}}}],
@@ -842,3 +874,41 @@ async def test_an_unattributed_turn_keeps_the_old_behaviour():
 
     parts = json.loads(route.calls.last.request.content)["contents"][1]["parts"]
     assert parts == [{"functionCall": {"name": "get_weather", "args": {"city": "Lund"}}}]
+
+
+# -- wrap-up nudge after tool results ------------------------------------
+
+
+def test_a_nudge_after_tool_results_keeps_roles_alternating():
+    """The exact shape loop.py produces when the wrap-up nudge lands right
+    after a round's tool results: assistant(tool_calls), the tool replies,
+    then a plain user nudge with nothing in between. Gemini's contents must
+    alternate model/user turn by turn -- two ``user`` entries back to back is
+    not a shape its strict turn-taking accepts -- so the nudge has to fold
+    into the tool-result content rather than open a second one.
+    """
+    messages = [
+        Message(role="user", content="Begin your think cycle."),
+        Message(
+            role="assistant",
+            content="checking the pool",
+            tool_calls=(ToolCall(id="call_1", name="vm_query", args={"q": "pool_power"}),),
+            model="gemini-3.8-flash",
+        ),
+        Message(role="tool", name="vm_query", tool_call_id="call_1", content='{"w": 203}'),
+        Message(role="user", content="You have 2 rounds left: write what you found and call end_cycle now."),
+    ]
+
+    body = build_request(messages, [WEATHER], 256, model="gemini-3.8-flash")
+
+    roles = [content["role"] for content in body["contents"]]
+    # No two consecutive entries share a role -- the actual property Gemini's
+    # turn-taking requires, not just "the nudge landed somewhere sane".
+    assert all(a != b for a, b in zip(roles, roles[1:]))
+    assert roles == ["user", "model", "user"]
+    # The nudge is a part of the same tool-result content, not a fourth,
+    # adjacent ``user`` turn.
+    assert body["contents"][-1]["parts"] == [
+        {"functionResponse": {"name": "vm_query", "response": {"w": 203}}},
+        {"text": "You have 2 rounds left: write what you found and call end_cycle now."},
+    ]

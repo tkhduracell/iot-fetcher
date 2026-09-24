@@ -557,7 +557,13 @@ async def test_trace_renders_the_live_cycle(client, system):
                 at=NOW - 9,
                 text="looking",
                 tool_calls=[{"name": "list_facts", "args": {}}],
-                tool_results=[{"name": "list_facts", "result_preview": "[]"}],
+                tool_results=[
+                    {
+                        "name": "list_facts",
+                        "result_preview": "[]",
+                        "stats": {"chars": 2, "ok": True},
+                    }
+                ],
             )
         ],
     )
@@ -570,8 +576,10 @@ async def test_trace_renders_the_live_cycle(client, system):
     assert trace["status"] is None
     assert trace["rounds"][0]["text"] == "looking"
     assert trace["rounds"][0]["tool_calls"] == [{"name": "list_facts", "args": {}}]
+    # stats rides along with result_preview -- loop.py's _tool_result_stats
+    # output, passed through as-is rather than picked apart field by field.
     assert trace["rounds"][0]["tool_results"] == [
-        {"name": "list_facts", "result_preview": "[]"}
+        {"name": "list_facts", "result_preview": "[]", "stats": {"chars": 2, "ok": True}}
     ]
 
 

@@ -124,12 +124,21 @@ def test_build_allows_a_gemini_entry_with_a_key(tmp_path):
 
 def test_build_passes_the_effort_knobs_to_every_loop(tmp_path):
     settings = load_settings(
-        env(tmp_path, EXPERTS="energy", CYCLE_MAX_ROUNDS="21", CYCLE_MAX_TOKENS="1234")
+        env(
+            tmp_path,
+            EXPERTS="energy",
+            CYCLE_MAX_ROUNDS="21",
+            CYCLE_MAX_TOKENS="1234",
+            CYCLE_MAX_PROMPT_TOKENS="55555",
+        )
     )
     system = build(settings, chain_factory=fake_chain)
-    assert [(loop.max_rounds, loop.max_tokens) for loop in system.loops.values()] == [
-        (21, 1234),
-        (21, 1234),
+    assert [
+        (loop.max_rounds, loop.max_tokens, loop.max_prompt_tokens)
+        for loop in system.loops.values()
+    ] == [
+        (21, 1234, 55555),
+        (21, 1234, 55555),
     ]
 
 
