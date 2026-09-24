@@ -31,16 +31,22 @@ class FakeSlackOut:
         return ts
 
     def resolve_topic(self, topic: str) -> str:
+        # Delegates to the real implementation rather than reimplementing the
+        # matching rules a second time, which would drift from SlackOut's own
+        # the moment either changed.
+        from ai_brain.slack_io import _is_new_variant_of, normalize_topic
+
         if topic in self._sessions:
             return topic
-        from ai_brain.slack_io import _shares_dash_prefix, normalize_topic
-
         normalized = normalize_topic(topic)
-        for existing in self._sessions:
-            if normalize_topic(existing) == normalized or _shares_dash_prefix(
-                normalized, normalize_topic(existing)
-            ):
-                return existing
+        exact = [t for t in self._sessions if normalize_topic(t) == normalized]
+        if exact:
+            return min(exact, key=len)
+        variant_of = [
+            t for t in self._sessions if _is_new_variant_of(normalized, normalize_topic(t))
+        ]
+        if variant_of:
+            return min(variant_of, key=len)
         return topic
 
     def recent_topics(self, limit: int = 15) -> list[str]:

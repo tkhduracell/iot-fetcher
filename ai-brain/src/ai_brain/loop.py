@@ -672,12 +672,19 @@ class AgentLoop:
     def _rejection_memory_section(self) -> str:
         """"Filip has said no to" -- rendered fresh every cycle, from the outbox.
 
+        Brain only: ``propose`` itself is brain-only (the registry's allowlist
+        refuses it to experts), so an expert cannot act on this section at
+        all -- it would be pure prompt budget spent on nothing, and reading
+        every proposal file (``approvals.all()``) every expert cycle besides.
+
         Not stored anywhere: the outbox is already the source of truth, and a
         cached copy would drift the moment a proposal is rejected mid-cycle by
         another loop. Missing entirely (no approvals configured, e.g. a test
         harness) is silence, not an error -- the same posture ``propose``
         itself takes when Slack is unreachable.
         """
+        if self.priority != "brain" and self.name != "brain":
+            return ""
         approvals = self.ctx.extras.get("approvals")
         if approvals is None:
             return ""

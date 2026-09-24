@@ -62,15 +62,37 @@ KINDS: dict[str, tuple[str, ...]] = {
 }
 
 # Which payload key names *what a proposal is about*, for a given kind -- the
-# thing rejection memory groups on. ``ha_service`` and ``docker_restart`` name
-# a concrete target (an entity, a container); ``ha_todo_add`` and ``sonos_say``
-# have no such field, so the free text itself is the closest thing to one.
+# thing rejection memory groups on. ``docker_restart`` names a concrete
+# target (a container); ``ha_todo_add`` and ``sonos_say`` have no such field,
+# so the free text itself is the closest thing to one. ``ha_service`` is
+# handled separately (see ``proposal_target``): the entity alone is too
+# coarse, since it would treat "turn off the living room light" and "turn on
+# the living room light" as the same rejected ask.
 TARGET_KEY: dict[str, str] = {
     "sonos_say": "text",
     "ha_todo_add": "item",
-    "ha_service": "entity_id",
     "docker_restart": "container",
 }
+
+# ha_service payload data keys whose *value* is excluded from the target, so
+# rejection memory groups on "this service on this entity" rather than "this
+# exact setpoint" -- a different brightness_pct on a rejected light.turn_on is
+# still the same ask, and should still be refused. Anything else in the data
+# dict (currently only hvac_mode -- see HA_ALLOWED_DATA_KEYS in executors.py)
+# is not a bare number and is part of what makes the ask what it is, so it
+# stays in the target: "set climate to heat" and "set climate to off" are
+# different asks even on the same entity.
+HA_SERVICE_TARGET_IGNORED_DATA_KEYS = frozenset(
+    {
+        "brightness_pct",
+        "color_temp_kelvin",
+        "transition",
+        "temperature",
+        "position",
+        "percentage",
+        "volume_level",
+    }
+)
 
 # The only status ``pending()`` reports and the only one a reaction may act on.
 # Everything else -- including the transient ``executing`` -- is terminal as far
@@ -468,7 +490,26 @@ def proposal_target(kind: str, payload: dict) -> str:
     wording around it. Falls back to the whole payload, stringified, for a
     kind ``TARGET_KEY`` does not know about (future-proofing, not reachable
     for any kind in ``KINDS`` today) or a payload missing its target key.
+
+    ``ha_service`` is not in ``TARGET_KEY``: the entity alone is too coarse,
+    since it would make "turn the light off" and "turn the light on" the same
+    rejected ask on the same entity. Its target is the service plus the
+    entity, plus any data value that is not a bare number (see
+    ``HA_SERVICE_TARGET_IGNORED_DATA_KEYS``) -- a different brightness_pct or
+    setpoint on an otherwise-identical call is still the same ask and should
+    still be refused, but a different ``hvac_mode`` is a different one.
     """
+    if kind == "ha_service" and isinstance(payload, dict):
+        service = payload.get("service", "")
+        entity_id = payload.get("entity_id", "")
+        data = payload.get("data")
+        kept = {}
+        if isinstance(data, dict):
+            kept = {k: v for k, v in data.items() if k not in HA_SERVICE_TARGET_IGNORED_DATA_KEYS}
+        target = f"{service} {entity_id}"
+        if kept:
+            target += " " + json.dumps(kept, sort_keys=True)
+        return target
     key = TARGET_KEY.get(kind)
     if key is None:
         return json.dumps(payload, sort_keys=True)
@@ -539,17 +580,35 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
     Empty when there is nothing to say -- a heading with no rows under it
     would cost prompt budget for zero information, the same reasoning
     ``read_context`` uses for an empty gaps list.
+
+    The char cap drops whole trailing lines rather than cutting mid-line: a
+    line sliced in half reads as a truncated, possibly misleading claim about
+    a rejection ("rejected 2x, last 2026-09-1" -- 9th? 19th?), where a whole
+    line dropped is simply not there, and the "…and N more" line that
+    replaces it says so honestly instead of pretending the cut never
+    happened.
     """
     if not groups:
         return ""
+    entries = groups[:REJECTION_MEMORY_MAX_ENTRIES]
     lines = ["# Filip has said no to"]
-    for group in groups[:REJECTION_MEMORY_MAX_ENTRIES]:
+    for group in entries:
         line = f"- {group.kind} / {group.target} (topic: {group.topic}): "
         line += f"rejected {group.count}x, last {group.last_at}"
         if group.reason:
             line += f" -- {group.reason}"
         lines.append(line)
-    text = "\n".join(lines)
-    if len(text) > REJECTION_MEMORY_MAX_CHARS:
-        text = text[: REJECTION_MEMORY_MAX_CHARS - 1] + "…"
+
+    def _render(kept: list[str], omitted: int) -> str:
+        body = list(kept)
+        if omitted:
+            body.append(f"…and {omitted} more")
+        return "\n".join(body)
+
+    text = _render(lines, 0)
+    dropped = 0
+    while len(text) > REJECTION_MEMORY_MAX_CHARS and len(lines) > 1:
+        lines.pop()
+        dropped += 1
+        text = _render(lines, dropped)
     return text

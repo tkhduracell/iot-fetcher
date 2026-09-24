@@ -100,41 +100,79 @@ class SlackRateCapped(Exception):
     """Raised when a post would exceed the hourly cap. Never swallowed here."""
 
 
-# How many trailing "-2026-09-24"-style or bare "-2" suffixes normalize_topic
-# strips. One pass handles the observed sprawl (``think-cycle-2026-09-24``,
-# ``pool-pump-2``); a topic is never chained deep enough to need more, and an
-# unbounded loop would risk eating a topic that is legitimately all digits.
-_TRAILING_DATE_OR_INDEX = re.compile(
-    r"(-\d{4}-\d{2}-\d{2}|-\d{1,2})+$"
-)
+# A trailing "-2026-09-24"-style date, stripped repeatedly (a topic is never
+# chained deep enough to need more than one, but an unbounded loop costs
+# nothing extra and is simpler than justifying a count).
+_TRAILING_DATE = re.compile(r"(-\d{4}-\d{2}-\d{2})+$")
+# A single trailing bare index, e.g. the "-2" in "pool-pump-2". Applied at
+# most once and only when the slug has a segment left over afterwards -- see
+# _strip_trailing_index -- so "floor-1" and "floor-2" (two segments each,
+# nothing left after stripping) are never conflated into plain "floor".
+_TRAILING_INDEX = re.compile(r"-\d{1,2}$")
 _SEPARATORS = re.compile(r"[\s_]+")
 _REPEATED_DASHES = re.compile(r"-{2,}")
+
+
+def _strip_trailing_index(slug: str) -> str:
+    """Remove a single trailing "-N" index, but only if a real name is left.
+
+    "pool-pump-2" (three segments) strips to "pool-pump" -- a genuine index
+    suffix on a real topic. "floor-1" (two segments) does not strip at all:
+    stripping it would leave the single segment "floor", which is indistinguishable
+    from a topic that was always just called "floor", and would merge "floor-1"
+    and "floor-2" into the same session. The rule is the same either way: an
+    index suffix only counts as one once at least two segments remain under it.
+    """
+    stripped = _TRAILING_INDEX.sub("", slug)
+    if stripped == slug:
+        return slug
+    return stripped if stripped.count("-") >= 1 else slug
 
 
 def normalize_topic(topic: str) -> str:
     """A topic's canonical form, for matching -- never for display or storage.
 
     Lowercases, turns whitespace/underscores into ``-``, strips a trailing
-    date (``-2026-09-24``) or index (``-2``) suffix, and collapses repeated
-    dashes left behind by any of that. ``think-cycle-2026-09-24`` and
-    ``Think Cycle`` both normalize to ``think-cycle``; ``pool-pump-bug``
-    normalizes to itself, since ``bug`` is not a date or a bare index -- the
-    prefix match in ``SlackOut.resolve_topic`` is what folds that one in.
+    date (``-2026-09-24``) suffix and (see ``_strip_trailing_index``) a
+    trailing bare index, and collapses repeated dashes left behind by any of
+    that. ``think-cycle-2026-09-24`` and ``Think Cycle`` both normalize to
+    ``think-cycle``; ``pool-pump-bug`` normalizes to itself, since ``bug`` is
+    not a date or a bare index -- the prefix match in
+    ``SlackOut.resolve_topic`` is what folds that one in.
     """
     slug = _SEPARATORS.sub("-", topic.strip().lower())
-    slug = _TRAILING_DATE_OR_INDEX.sub("", slug)
+    slug = _TRAILING_DATE.sub("", slug)
+    slug = _strip_trailing_index(slug)
     slug = _REPEATED_DASHES.sub("-", slug).strip("-")
     return slug
 
 
-def _shares_dash_prefix(a: str, b: str) -> bool:
-    """Whether one of two normalized topics is a '-'-boundary prefix of the
-    other -- ``pool-pump`` of ``pool-pump-bug``, but not ``pool`` of
-    ``pool-pump`` (a whole segment must match, not a partial word)."""
-    if not a or not b:
+# A topic must have at least this many '-'-separated segments to be eligible
+# as the *shorter* side of a prefix match -- see _is_new_variant_of. Without
+# this, a generic single-word topic like "house" or "energy" would silently
+# swallow "house-ops-findings" or "energy-prices" the first time either was
+# posted, which is worse than the sprawl this was meant to fix.
+MIN_PREFIX_SEGMENTS = 2
+
+
+def _is_new_variant_of(new: str, existing: str) -> bool:
+    """Whether normalized ``new`` is a longer '-'-boundary variant of an
+    existing, already-normalized topic ``existing`` -- e.g. ``new`` is
+    "pool-pump-bug" and ``existing`` is "pool-pump".
+
+    Deliberately one-directional: routing "pool-pump-bug" into an existing
+    "pool-pump" thread is the sprawl this exists to fix, but routing a new,
+    short "pool" into an existing, longer "pool-pump-bug" is not -- "pool" is
+    plausibly its own subject, and folding every future short name into
+    whatever long-tailed topic happened to be created first would make topics
+    increasingly impossible to predict. ``existing`` also has to clear
+    ``MIN_PREFIX_SEGMENTS``, so a single generic word is never a match target.
+    """
+    if not new or not existing or new == existing:
         return False
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    return longer == shorter or longer.startswith(shorter + "-")
+    if existing.count("-") + 1 < MIN_PREFIX_SEGMENTS:
+        return False
+    return new.startswith(existing + "-")
 
 
 class SlackOut:
@@ -382,17 +420,19 @@ class SlackOut:
     def resolve_topic(self, topic: str) -> str:
         """The existing session topic ``topic`` should post into, or itself.
 
-        Three tries, in order: an exact match (the common case -- nothing to
-        do); a match on ``normalize_topic`` (``Think Cycle`` finds
-        ``think-cycle``); and a '-'-boundary prefix match either direction
-        (``pool-pump-bug`` finds an existing ``pool-pump``, and a first-ever
-        ``pool-pump`` post later finds an existing longer ``pool-pump-bug`` if
-        that happened to be created first) -- picking the existing topic whose
-        normalized form is shortest, on the reasoning that the shorter one is
-        the more likely "real" subject a longer variant sprawled off of. No
-        match creates a new session under ``topic`` unchanged, exactly like
-        before this existed. ``CHAT_TOPIC`` is never a match target or a
-        candidate: it is not a subject, it is Filip's own reserved thread.
+        Two tries, in order: an exact match on ``normalize_topic`` (the common
+        case -- ``Think Cycle`` finds ``think-cycle``, and covers a literal
+        exact match too since a topic normalizes to itself); and a
+        '-'-boundary prefix match, one direction only -- a new, longer
+        ``pool-pump-bug`` folds into an existing, shorter ``pool-pump``, never
+        the reverse (see ``_is_new_variant_of``: a new short topic must not be
+        swallowed by whatever long-tailed existing topic it happens to prefix,
+        and the existing side must have at least ``MIN_PREFIX_SEGMENTS``
+        segments, so a single generic word like "house" is never a match
+        target). No match creates a new session under ``topic`` unchanged,
+        exactly like before this existed. ``CHAT_TOPIC`` is never a match
+        target or a candidate: it is not a subject, it is Filip's own
+        reserved thread.
         """
         if topic == CHAT_TOPIC:
             return topic
@@ -406,13 +446,11 @@ class SlackOut:
         exact = [t for t in candidates if normalize_topic(t) == normalized]
         if exact:
             return min(exact, key=len)
-        prefixed = [
-            t
-            for t in candidates
-            if _shares_dash_prefix(normalized, normalize_topic(t))
+        variant_of = [
+            t for t in candidates if _is_new_variant_of(normalized, normalize_topic(t))
         ]
-        if prefixed:
-            return min(prefixed, key=len)
+        if variant_of:
+            return min(variant_of, key=len)
         return topic
 
     def recent_topics(self, limit: int = 15) -> list[str]:

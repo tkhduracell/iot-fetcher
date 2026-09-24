@@ -1673,11 +1673,13 @@ async def test_an_old_rejection_outside_the_window_is_not_shown(make_loop, brain
     assert "Filip has said no to" not in system
 
 
-async def test_an_expert_loop_also_sees_rejection_memory(
+async def test_an_expert_loop_does_not_see_rejection_memory(
     registry, wall, tmp_path, brain_dir, expert_dir
 ):
-    """"the brain and experts don't see rejection history" -- both loops share
-    the same outbox, so an expert cycle renders the same section."""
+    """propose is brain-only -- an expert can act on nothing this section
+    would tell it, so it costs prompt budget (and an outbox read every
+    cycle) for zero benefit. Confirmed the other way in
+    test_a_rejected_target_appears_in_the_opening_context."""
     approvals = Approvals(brain_dir, executors=None, clock=_dt_clock(wall), on_message=_always_ts)
     await _reject_one(approvals, "ha_todo_add", {"item": "buy filters"}, "house-ops")
 
@@ -1713,7 +1715,57 @@ async def test_an_expert_loop_also_sees_rejection_memory(
     await loop.run_cycle()
 
     system = provider.calls[0][0][0].content
-    assert "Filip has said no to" in system
+    assert "Filip has said no to" not in system
+
+
+async def test_an_expert_loop_never_calls_approvals_all(
+    registry, wall, tmp_path, brain_dir, expert_dir
+):
+    """Not just "hidden from the prompt" -- skipped outright, so an outbox
+    that has grown large over weeks costs an expert cycle nothing extra."""
+    approvals = Approvals(brain_dir, executors=None, clock=_dt_clock(wall), on_message=_always_ts)
+    await _reject_one(approvals, "ha_todo_add", {"item": "buy filters"}, "house-ops")
+    calls = []
+    original_all = approvals.all
+
+    def _spy():
+        calls.append(1)
+        return original_all()
+
+    approvals.all = _spy
+
+    provider = FakeProvider(
+        "fake:1",
+        script=[reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))],
+    )
+    ledger = Ledger(
+        {"fake:1": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "ledger.json", clock=wall
+    )
+    chain = ProviderChain([provider], ledger)
+    ctx = ToolContext(
+        loop="energy",
+        memory=expert_dir,
+        memories={"brain": brain_dir, "energy": expert_dir},
+        settings=load_settings({}),
+        wake=lambda _name: None,
+        extras={"approvals": approvals},
+    )
+    loop = AgentLoop(
+        name="energy",
+        memory=expert_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="expert",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+
+    await loop.run_cycle()
+
+    assert calls == []
 
 
 async def _always_ts(topic: str, text: str, blocks=None) -> str:
