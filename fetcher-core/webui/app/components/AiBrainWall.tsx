@@ -18,12 +18,12 @@ import {
   isExecuted,
   isPending,
   naggingLoops,
-  quotaCounts,
   shortModel,
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import AiBrainWallBeliefs from './AiBrainWallBeliefs';
 import { ExecutedProposals, NaggingLoops, PendingProposals } from './AiBrainWallActions';
+import { LedgerChipRow } from './AiBrainSystemLedger';
 import {
   CloseButton,
   ConditionStrip,
@@ -136,16 +136,15 @@ const AiBrainWall: React.FC = () => {
   /** The single machine line. Everything here is deliberately unreadable from
    *  across the room: it is for the person standing at the tablet. */
   const machineBits: string[] = [];
+  // Only keys that have actually been called today, plus a count of the
+  // silent ones. The deployed line printed two never-called keys at
+  // `0/1000000` each and wrapped to three lines because of them. The active
+  // keys themselves render as chips below, not as text in this line.
+  const { active: activeLedger, silent: silentLedger } = activeLedgerKeys(ledger?.keys);
   if (ledger) {
-    // Only keys that have actually been called today, plus a count of the
-    // silent ones. The deployed line printed two never-called keys at
-    // `0/1000000` each and wrapped to three lines because of them.
-    const { active, silent } = activeLedgerKeys(ledger.keys);
-    const keys = active
-      .map((k) => `${shortModel(k.key)} ${quotaCounts(k.requests_day, k.requests_limit)}`)
-      .join('  ');
-    const parts = [keys, silent > 0 ? `+${silent} tysta` : ''].filter(Boolean).join('  ');
-    machineBits.push(`ledger ${ledger.day}${parts ? ` · ${parts}` : ''}`);
+    machineBits.push(
+      `ledger ${ledger.day}${silentLedger > 0 ? ` · +${silentLedger} tysta` : ''}`,
+    );
   }
   if (settings?.llm_chain?.length) {
     machineBits.push(`kedja ${settings.llm_chain.map(shortModel).join(' → ')}`);
@@ -181,6 +180,7 @@ const AiBrainWall: React.FC = () => {
       footer={
         <>
           <ConditionStrip conditions={conditions(status.data, agentList, offline)} />
+          <LedgerChipRow keys={activeLedger} />
           <MachineLine bits={machineBits} />
         </>
       }

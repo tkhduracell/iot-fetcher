@@ -123,7 +123,9 @@ export const LedgerKeyRow: React.FC<{ entry: LedgerKey; now: number }> = ({ entr
             style={{ fontFamily: MONO, color: WALL.inkDim }}
             title={unmetered ? 'Ingen dygnsbudget för lan: — ohindrad' : 'Tokens förbrukade av dygnets budget'}
           >
-            {compactTokens(entry.tokens_day)}/{unmetered ? '∞' : tokLimit > 0 ? compactTokens(tokLimit) : '–'} tok
+            {unmetered
+              ? `${compactTokens(entry.tokens_day)} tok`
+              : `${compactTokens(entry.tokens_day)}/${tokLimit > 0 ? compactTokens(tokLimit) : '–'} tok`}
           </span>
         </div>
       </div>
@@ -137,5 +139,34 @@ export const LedgerLegend: React.FC = () => (
     staplarna visar förbrukat av dygnets budget
   </span>
 );
+
+/** One compact chip per model, for the footer machine line.
+ *
+ *  The deployed footer printed the whole ledger as one run-on text line —
+ *  `gemini-2.5-flash 224/1000000  qwen3-coder 0/1000000` — which both wrapped
+ *  to three lines and, for an unmetered `lan:` key, showed a denominator that
+ *  looked like a real budget. Here each key is its own small pill: metered
+ *  keys show the spent share as a fraction, unmetered ones show only the
+ *  count, and the row wraps as pills instead of overflowing as text. */
+export const LedgerChipRow: React.FC<{ keys: LedgerKey[]; className?: string }> = ({
+  keys,
+  className = '',
+}) => {
+  if (keys.length === 0) return null;
+  return (
+    <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
+      {keys.map((k) => {
+        const unmetered = k.key.startsWith('lan:');
+        const unusable = Boolean(k.blocked_until || k.disabled_until);
+        const tone = unusable ? 'error' : unmetered ? 'idle' : quotaTone(k.requests_remaining);
+        return (
+          <Pill key={k.key} tone={tone} title={`${k.key} · ${quotaCounts(k.requests_day, k.requests_limit, unmetered)} anrop`}>
+            {shortModel(k.key)} {quotaCounts(k.requests_day, k.requests_limit, unmetered)}
+          </Pill>
+        );
+      })}
+    </div>
+  );
+};
 
 export default LedgerKeyRow;

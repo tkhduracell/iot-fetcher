@@ -377,16 +377,17 @@ export function modelAvailability(
   return blocked ? 'blocked' : 'available';
 }
 
-/** "11/200" — the compact counts beside a single quota bar.
+/** "11/200" — the compact counts beside a single quota bar, or a bare "11"
+ *  for a key with no real budget to be counted against.
  *
  *  `unmetered` is for a `lan:` key: it still carries a real (huge) `Limits`
  *  value -- the ledger needs some bucket to record against -- so `limit` here
- *  is never 0 or missing, and without this flag the count would print a
- *  denominator like "2/1000000" that looks like a real, nearly-empty budget
- *  rather than what it is: no budget at all. */
+ *  is never 0 or missing. Printing it anyway, even as "2/∞", still reads as a
+ *  budget with a denominator; an unlimited local model has no budget at all,
+ *  so this drops the slash and shows the count on its own. */
 export function quotaCounts(used: number, limit: number, unmetered = false): string {
   const u = Number.isFinite(used) ? used : 0;
-  if (unmetered) return `${u}/∞`;
+  if (unmetered) return `${u}`;
   if (!Number.isFinite(limit) || limit <= 0) return `${u}/–`;
   return `${u}/${limit}`;
 }
@@ -466,6 +467,18 @@ export type Revision = {
   truncated?: boolean;
 };
 
+/** The brain's own verdict on one expert (`review_expert` in
+ *  `ai_brain/tools/introspect.py`), from `brain/reviews/<name>.jsonl`. Served
+ *  as `last_review` on `/api/agents/{name}` for an expert; absent for the
+ *  brain itself, since it has no standing to review its own memory. */
+export type ReviewVerdict = 'good' | 'stale' | 'wrong' | 'repetitive' | 'off_goal';
+
+export type Review = {
+  ts: number;
+  verdict: ReviewVerdict;
+  findings: string;
+};
+
 /** Agent detail once the backend carries the memory-introspection fields.
  *  Every added field is optional: today's API omits them all. */
 export type AgentDetailPlus = AgentDetail & {
@@ -473,6 +486,10 @@ export type AgentDetailPlus = AgentDetail & {
   gaps?: Gap[];
   identity_history?: Revision[];
   goals_history?: Revision[];
+  /** Only present for an expert; `undefined` for the brain and for an
+   *  ai-brain older than this field. `null` means the expert has never been
+   *  reviewed — distinct from "not served at all". */
+  last_review?: Review | null;
 };
 
 export type LoopProposal = {
@@ -1011,7 +1028,136 @@ export function activeLedgerKeys(keys: LedgerKey[] | null | undefined): {
   return { active, silent: all.length - active.length };
 }
 
+/** The header's "what has this loop last done" line, honest about a cycle
+ *  that is running right now and about a model that a restart forgot.
+ *
+ *  The deployed agent page said "ingen modell · aldrig kört" in two cases that
+ *  are not that: a cycle genuinely in progress (there is a model, it just has
+ *  not finished long enough to land in `last_cycle` yet), and a brain that was
+ *  restarted after running for weeks (`last_cycle` is gone, but the journal
+ *  remembers it ran). Neither is "never ran" and one of them is "running right
+ *  now", so both get their own words instead of the same false claim.
+ *
+ *  `hasJournalHistory` is whether the journal has any entries at all — the
+ *  signal this function has no other way to get, since `last_cycle` is silent
+ *  about pre-restart history by construction. */
+export function modelStateLabel(
+  lastCycleModel: string | null | undefined,
+  inProgress: boolean,
+  traceModel: string | null | undefined,
+  hasJournalHistory: boolean,
+): string {
+  if (lastCycleModel) return shortModel(lastCycleModel);
+  if (inProgress) return traceModel ? `pågår · ${shortModel(traceModel)}` : 'pågår';
+  if (hasJournalHistory) return 'okänt sedan omstart';
+  return 'ingen modell';
+}
+
+/** The header's "when did this loop last run" line, honest about the same two
+ *  cases `modelStateLabel` is. A cycle in progress has not finished, so
+ *  "senast …" would be about the *previous* cycle at best; a restart erases
+ *  `last_cycle_at` along with `last_cycle`, so "aldrig kört" would claim a
+ *  loop with weeks of journal history had never run once. */
+export function lastRunLabel(
+  lastCycleAt: number | null | undefined,
+  now: number,
+  inProgress: boolean,
+  hasJournalHistory: boolean,
+): string {
+  if (typeof lastCycleAt === 'number' && Number.isFinite(lastCycleAt)) {
+    return `senast ${formatAgo(lastCycleAt, now)}`;
+  }
+  if (inProgress) return 'pågår nu';
+  if (hasJournalHistory) return 'okänt sedan omstart';
+  return 'aldrig kört';
+}
+
+// ------------------------------------------------- review verdicts
+
+/** Swedish label for a review verdict, short enough for a badge. */
+const VERDICT_LABEL: Record<ReviewVerdict, string> = {
+  good: 'bra',
+  stale: 'inaktuell',
+  wrong: 'fel',
+  repetitive: 'upprepar sig',
+  off_goal: 'fel spår',
+};
+
+export function verdictLabel(verdict: ReviewVerdict | null | undefined): string {
+  if (!verdict) return 'ogranskad';
+  return VERDICT_LABEL[verdict] ?? verdict;
+}
+
+/** Colour family for a verdict badge: only `good` reads as healthy, and a
+ *  missing review is neutral rather than a silent failure. */
+export function verdictTone(verdict: ReviewVerdict | null | undefined): Tone {
+  switch (verdict) {
+    case 'good':
+      return 'ok';
+    case 'stale':
+    case 'repetitive':
+    case 'off_goal':
+      return 'warn';
+    case 'wrong':
+      return 'error';
+    default:
+      return 'idle';
+  }
+}
+
+/** Verdicts bad enough that the expert's facts should be hidden or
+ *  de-emphasised on the wall — the review said the memory is actively
+ *  unreliable, not merely due for a look. */
+const DISTRUSTED_VERDICTS = new Set<ReviewVerdict>(['wrong', 'stale']);
+
+export function isDistrustedReview(review: Review | null | undefined): boolean {
+  return Boolean(review && DISTRUSTED_VERDICTS.has(review.verdict));
+}
+
 // ------------------------------------------------- facts
+
+/** A fact whose body is just its own title restated — `write_fact` with
+ *  nothing underneath. Compares case- and whitespace-insensitively so
+ *  "Pooltemp" / "pooltemp." are still recognised as the same non-statement. */
+export function bodyEqualsTitle(title: string, body: string | undefined): boolean {
+  if (!body) return false;
+  const norm = (s: string) => s.trim().toLowerCase().replace(/[.!?\s]+$/, '');
+  return norm(title) === norm(body);
+}
+
+/** How much a fact is worth showing on the wall's "Vet om huset" section,
+ *  highest first.
+ *
+ *  Recency alone let a fact written seconds ago outrank one the brain has
+ *  confirmed a dozen times over weeks — "fresh junk outranks solid facts".
+ *  This scores three things instead: how many times it has been reaffirmed
+ *  (`writes`, log-scaled so the 2nd write matters more than the 20th), how
+ *  fresh it still is (a soft decay over a week, not a cliff), and whether the
+ *  owning expert's last review can be trusted at all. A `wrong`/`stale`
+ *  verdict does not zero a fact out — a demoted fact can still be the least
+ *  bad thing on a thin wall — but it costs enough that a trusted expert's
+ *  facts win whenever there is a real choice. */
+export function factQualityScore(
+  stat: Pick<FactStat, 'writes' | 'written_at'> | null | undefined,
+  now: number,
+  review: Review | null | undefined,
+): number {
+  const writes = Math.max(1, stat?.writes ?? 1);
+  const writeScore = Math.log2(writes + 1); // 1 write -> 1, 3 writes -> 2, 7 -> 3, ...
+
+  const writtenAt = stat?.written_at;
+  const ageDays =
+    typeof writtenAt === 'number' && Number.isFinite(writtenAt) && now
+      ? Math.max(0, (now - writtenAt) / 86_400)
+      : 0;
+  // 1.0 fresh, decaying to ~0.13 by day 14 — old but confirmed facts still
+  // place, they just no longer win over something newer.
+  const freshness = 1 / (1 + ageDays / 3);
+
+  const trust = isDistrustedReview(review) ? 0.35 : 1;
+
+  return writeScore * (0.5 + 0.5 * freshness) * trust;
+}
 
 /** Fact stats newest write first — the order the knowledge screens read in. */
 export function sortFactStats(stats: FactStat[] | null | undefined): FactStat[] {
@@ -1038,4 +1184,59 @@ export function formatDay(value: string | number | null | undefined): string {
   const ms = typeof value === 'number' ? value * 1000 : Date.parse(value);
   if (!Number.isFinite(ms)) return String(value);
   return new Date(ms).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' });
+}
+
+// ------------------------------------------------- slack sessions
+
+/** "pool-pump-schedule-2026-09-20" → "pool-pump-schedule" — the topic with a
+ *  trailing date stripped, lowercased and `-`-separated.
+ *
+ *  `/api/slack/sessions` served 42 raw sessions on the deployed system page,
+ *  each carrying its own channel ID and thread timestamp baked into nothing
+ *  the reader can use to see they are the same conversation continued daily.
+ *  Normalising the topic is what makes the grouping in `groupSlackSessions`
+ *  possible; exported on its own so the same rule can be tested and reused. */
+export function normaliseSessionTopic(topic: string): string {
+  const s = String(topic ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    // A trailing ISO-ish date ("-2026-09-20" or "-20260920"), possibly more
+    // than one in a row (a topic re-dated on consecutive days).
+    .replace(/(?:-\d{4}-\d{2}-\d{2}|-\d{8})+$/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || 'okänt-ämne';
+}
+
+/** One normalised topic, with every raw session folded into it. */
+export type SlackSessionGroup = {
+  /** The normalised topic — the group's identity. */
+  topic: string;
+  sessions: SlackSession[];
+  /** Any member with status 'open' makes the whole group open — a topic that
+   *  is still being talked about should not read as settled. */
+  open: boolean;
+};
+
+/** Group raw Slack sessions by normalised topic, most sessions first.
+ *
+ *  Within a group, channel IDs and thread timestamps stay on each member —
+ *  they are not thrown away, just not the thing shown by default (see the
+ *  System screen's raw-id toggle). */
+export function groupSlackSessions(sessions: SlackSession[] | null | undefined): SlackSessionGroup[] {
+  const byTopic = new Map<string, SlackSession[]>();
+  for (const s of sessions ?? []) {
+    const key = normaliseSessionTopic(s?.topic ?? '');
+    const list = byTopic.get(key) ?? [];
+    list.push(s);
+    byTopic.set(key, list);
+  }
+  return [...byTopic.entries()]
+    .map(([topic, members]) => ({
+      topic,
+      sessions: members,
+      open: members.some((m) => m.status === 'open'),
+    }))
+    .sort((a, b) => b.sessions.length - a.sessions.length || a.topic.localeCompare(b.topic, 'sv'));
 }

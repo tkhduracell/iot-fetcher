@@ -4,12 +4,16 @@ import React, { useCallback, useMemo } from 'react';
 import {
   type AgentDetailPlus,
   type FactStat,
+  bodyEqualsTitle,
   cutAtBoundary,
+  factQualityScore,
   fetchAgentPlus,
   fetchFactBodies,
+  isDistrustedReview,
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import { Age, BeliefRow, EmptyState, MONO, SANS, WALL } from './AiBrainWallTheme';
+import { ReviewBadge } from './AiBrainReviewBadge';
 
 /** The beliefs columns: one per agent, each fact shown as title, slug, body
  *  excerpt and age.
@@ -22,11 +26,27 @@ import { Age, BeliefRow, EmptyState, MONO, SANS, WALL } from './AiBrainWallTheme
  *  ``fact_stats`` (already in hand from ``fetchAgentPlus``) carries every
  *  fact's title — that alone used to need a guess at a sentence from the raw
  *  body, or the fact's own slug as a last resort. The body is fetched only
- *  for the excerpt underneath the title, which nothing else already has. */
+ *  for the excerpt underneath the title, which nothing else already has.
+ *
+ *  Facts are ranked by `factQualityScore` (writes, freshness, review trust),
+ *  not by recency alone — a fact written seconds ago used to outrank one the
+ *  brain had confirmed a dozen times over weeks. A fact whose body is just its
+ *  title restated (`write_fact` with nothing underneath) is dropped outright;
+ *  it says nothing a reader could not already see from the title. */
 
 /** Facts per column. A layout decision and a budget at once: each one costs an
  *  HTTP round trip for its body. */
 const FACTS_PER_COLUMN = 4;
+
+/** Candidates whose bodies get fetched before the column is trimmed to
+ *  `FACTS_PER_COLUMN`.
+ *
+ *  A body-equals-title fact can only be recognised once its body is in hand —
+ *  but the body budget is real (one request per fact), so this over-fetches
+ *  a little rather than a lot: enough that a column with one or two junk
+ *  facts at the top of the ranking still fills up, not so much that a quiet
+ *  loop costs eight round trips to show four facts. */
+const CANDIDATES_PER_COLUMN = FACTS_PER_COLUMN + 3;
 
 const DETAIL_POLL_MS = 30_000;
 /** Fact bodies change on the order of cycles, not seconds. */
@@ -53,38 +73,62 @@ const BeliefColumn: React.FC<{ agent: string; facts: number; now: number }> = ({
 
   const stats = statsByName(detail.data?.fact_stats);
   const names = detail.data?.fact_names ?? [];
+  const review = detail.data?.last_review;
+  const distrusted = isDistrustedReview(review);
 
-  const shown = useMemo(() => {
+  // Ranked by quality (writes, freshness, review trust) — not recency alone,
+  // which let a fact written seconds ago outrank one confirmed a dozen times
+  // over weeks. A freshly deployed brain has no fact_stats at all, in which
+  // case every score ties and the API's own order stands.
+  const candidates = useMemo(() => {
     const list = [...names];
-    // Newest write first when fact_stats is populated; a freshly deployed brain
-    // has writes=1 on everything, in which case the API's own order stands.
-    if (stats.size > 0) {
-      list.sort((a, b) => (stats.get(b)?.written_at ?? 0) - (stats.get(a)?.written_at ?? 0));
-    }
-    return list.slice(0, FACTS_PER_COLUMN);
+    list.sort(
+      (a, b) =>
+        factQualityScore(stats.get(b), now, review) - factQualityScore(stats.get(a), now, review),
+    );
+    return list.slice(0, CANDIDATES_PER_COLUMN);
     // `names` is a fresh array each poll; its contents are the real dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [names.join('\u0000'), stats.size]);
+  }, [names.join('\u0000'), stats.size, now, review?.verdict]);
 
-  const key = shown.join('\u0000');
+  const candidatesKey = candidates.join('\u0000');
   const bodiesFetcher = useCallback(
-    (signal: AbortSignal) => fetchFactBodies(agent, shown, signal),
+    (signal: AbortSignal) => fetchFactBodies(agent, candidates, signal),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agent, key],
+    [agent, candidatesKey],
   );
   const bodies = useAiBrain<Record<string, string>>(
     bodiesFetcher,
-    [agent, key],
+    [agent, candidatesKey],
     BODY_POLL_MS,
-    shown.length > 0,
+    candidates.length > 0,
   );
+
+  // A fact whose body is just its title restated says nothing a reader could
+  // not already see from the title, so it is dropped once its body is in
+  // hand rather than shown as a blank excerpt. Before the body arrives it is
+  // kept (nothing to judge it by yet) so the column is not empty mid-poll.
+  const shown = useMemo(() => {
+    return candidates
+      .filter((name) => {
+        const body = bodies.data?.[name];
+        if (body === undefined) return true;
+        const title = stats.get(name)?.title || name;
+        return !bodyEqualsTitle(title, body);
+      })
+      .slice(0, FACTS_PER_COLUMN);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidatesKey, bodies.data]);
 
   const loading = detail.initialLoading;
 
   return (
-    <div className="flex flex-col gap-2 min-w-0 overflow-hidden">
+    <div
+      className="flex flex-col gap-2 min-w-0 overflow-hidden"
+      style={{ opacity: distrusted ? 0.55 : 1 }}
+    >
       <div
-        className="flex items-baseline gap-2 pb-1 shrink-0"
+        className="flex items-baseline gap-2 pb-1 shrink-0 flex-wrap"
         style={{ borderBottom: `1px solid ${WALL.rule}` }}
       >
         <span className="text-[14px] tracking-[0.06em] truncate" style={{ fontFamily: MONO, color: WALL.ink }}>
@@ -97,6 +141,7 @@ const BeliefColumn: React.FC<{ agent: string; facts: number; now: number }> = ({
         >
           {facts} fakta
         </span>
+        <ReviewBadge review={review} now={now} />
       </div>
 
       <ul className="flex flex-col gap-3 list-none m-0 p-0 min-h-0 overflow-hidden">

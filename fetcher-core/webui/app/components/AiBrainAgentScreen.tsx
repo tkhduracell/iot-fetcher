@@ -5,14 +5,16 @@ import Link from 'next/link';
 import {
   type AgentDetailPlus,
   type AgentSummary,
+  type Review,
   type Status,
   fetchAgentPlus,
   fetchAgents,
   fetchStatus,
-  formatAgo,
   formatIn,
-  shortModel,
+  lastRunLabel,
+  modelStateLabel,
   statusTone,
+  verdictTone,
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import {
@@ -29,6 +31,7 @@ import {
 } from './AiBrainWallTheme';
 import AiBrainAgentTrace from './AiBrainAgentTrace';
 import { AgentCharterDocs, AgentFacts, AgentInbox, AgentJournal } from './AiBrainAgentPanels';
+import { ReviewBadge } from './AiBrainReviewBadge';
 
 /** `/ai-brain/agent/[name]` — one loop, read up close.
  *
@@ -80,18 +83,34 @@ const TabButton: React.FC<{
 );
 
 /** The card's state line, now the screen's header: what the loop is doing,
- *  when it last ran, when it wakes next, and what it is carrying. */
-const AgentHeader: React.FC<{ summary: AgentSummary; now: number }> = ({ summary, now }) => {
+ *  when it last ran, when it wakes next, and what it is carrying.
+ *
+ *  `summary` is `AgentDetailPlus` whenever detail has loaded (the only time
+ *  this renders — see the call site) so `journal_days`, `trace` and
+ *  `last_review` are all really there; the wider `AgentSummary` type is kept
+ *  because the same shape briefly stands in from the agent list before detail
+ *  lands, and this header must not crash on a value one poll behind. */
+const AgentHeader: React.FC<{ summary: AgentSummary | AgentDetailPlus; now: number }> = ({
+  summary,
+  now,
+}) => {
   const tone = summary.in_progress ? 'busy' : statusTone(summary.last_cycle?.status);
   const state = summary.in_progress ? 'kör' : (summary.last_cycle?.status ?? 'okänd');
   const counts = Object.entries(summary.cycle_counts ?? {});
 
+  const detail = summary as Partial<AgentDetailPlus>;
+  // A restart erases last_cycle but not the journal -- and a cycle that is
+  // still running has not written a last_cycle at all yet -- so "never ran"
+  // and "no model" only get said when the journal backs them up.
+  const hasJournalHistory = (detail.journal_days?.length ?? 0) > 0;
+  const traceModel = detail.trace?.model || null;
+
   // One "·"-joined run so a loop that has never run leaves no dangling
   // separator behind.
   const line = [
-    summary.last_cycle?.model ? shortModel(summary.last_cycle.model) : 'ingen modell',
+    modelStateLabel(summary.last_cycle?.model, summary.in_progress, traceModel, hasJournalHistory),
     summary.last_cycle ? `${summary.last_cycle.rounds} rundor` : null,
-    summary.last_cycle_at ? `senast ${formatAgo(summary.last_cycle_at, now)}` : 'aldrig kört',
+    lastRunLabel(summary.last_cycle_at, now, summary.in_progress, hasJournalHistory),
     summary.in_progress ? null : `nästa ${formatIn(summary.next_wake_at, now)}`,
     `hjärtslag ${summary.heartbeat_s} s`,
   ].filter(Boolean);
@@ -118,6 +137,7 @@ const AgentHeader: React.FC<{ summary: AgentSummary; now: number }> = ({ summary
             vill kompaktera
           </Pill>
         )}
+        <ReviewBadge review={detail.last_review} now={now} expandable />
       </div>
 
       <p className="text-[12px] m-0 tabular-nums" style={{ fontFamily: MONO, color: WALL.inkDim }}>
@@ -183,7 +203,7 @@ const AiBrainAgentScreen: React.FC<{ name: string }> = ({ name }) => {
   const now = useServerClock(status.data?.now);
 
   const agentList = useMemo(() => agents.data?.agents ?? [], [agents.data]);
-  const summary: AgentSummary | null =
+  const summary: AgentSummary | AgentDetailPlus | null =
     detail.data ?? agentList.find((a) => a.name === name) ?? null;
 
   // A name is only "unknown" once the loop list has actually been read. Before
@@ -192,6 +212,32 @@ const AiBrainAgentScreen: React.FC<{ name: string }> = ({ name }) => {
     Boolean(agents.data) && !agentList.some((a) => a.name === name) && !detail.data;
 
   const others = agentList.filter((a) => a.name !== name);
+  const othersKey = others.map((a) => a.name).join('\u0000');
+
+  /** Just enough of each sibling loop's detail to badge its nav chip with a
+   *  review verdict — `/api/agents` (already in hand as `others`) does not
+   *  carry `last_review`, only the per-agent detail endpoint does. Settled
+   *  rather than all: one unreachable sibling costs its own missing badge,
+   *  not the whole nav. */
+  const othersReviewsFetcher = useCallback(
+    async (signal: AbortSignal): Promise<Record<string, Review | null | undefined>> => {
+      const names = othersKey ? othersKey.split('\u0000') : [];
+      const settled = await Promise.allSettled(names.map((n) => fetchAgentPlus(n, signal)));
+      const out: Record<string, Review | null | undefined> = {};
+      settled.forEach((r, i) => {
+        out[names[i]] = r.status === 'fulfilled' ? r.value.last_review : undefined;
+      });
+      return out;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [othersKey],
+  );
+  const othersReviews = useAiBrain<Record<string, Review | null | undefined>>(
+    othersReviewsFetcher,
+    [othersKey],
+    DETAIL_POLL_MS,
+    others.length > 0,
+  );
 
   const machineBits: string[] = [`loop ${name}`];
   if (detail.data) {
@@ -242,22 +288,33 @@ const AiBrainAgentScreen: React.FC<{ name: string }> = ({ name }) => {
         others.length > 0 ? (
           <nav
             aria-label="Andra loopar"
-            className="hidden sm:flex items-baseline gap-3 min-w-0 shrink-0"
+            className="hidden sm:flex items-baseline gap-3 flex-wrap min-w-0"
           >
-            {others.map((a) => (
-              <Link
-                key={a.name}
-                href={`/ai-brain/agent/${encodeURIComponent(a.name)}`}
-                className="text-[12px] no-underline hover:underline whitespace-nowrap"
-                style={{
-                  fontFamily: MONO,
-                  color: a.in_progress ? toneColor('busy') : WALL.inkFaint,
-                }}
-              >
-                {a.emoji ? `${a.emoji} ` : ''}
-                {a.name}
-              </Link>
-            ))}
+            {others.map((a) => {
+              const review = othersReviews.data?.[a.name];
+              return (
+                <Link
+                  key={a.name}
+                  href={`/ai-brain/agent/${encodeURIComponent(a.name)}`}
+                  className="inline-flex items-baseline gap-1 text-[12px] no-underline hover:underline whitespace-nowrap"
+                  style={{
+                    fontFamily: MONO,
+                    color: a.in_progress ? toneColor('busy') : WALL.inkFaint,
+                  }}
+                  title={review ? `${a.name} · senaste granskning: ${review.verdict}` : undefined}
+                >
+                  {a.emoji ? `${a.emoji} ` : ''}
+                  {a.name}
+                  {review && (
+                    <span
+                      aria-hidden
+                      className="inline-block w-[6px] h-[6px] rounded-full shrink-0"
+                      style={{ background: toneColor(verdictTone(review.verdict)) }}
+                    />
+                  )}
+                </Link>
+              );
+            })}
           </nav>
         ) : undefined
       }
