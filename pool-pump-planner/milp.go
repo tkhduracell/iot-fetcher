@@ -30,6 +30,10 @@ type lpResult struct {
 // solveMILP writes a CBC LP file, invokes cbc, and reads the solution back.
 // Mirrors the Python PuLP/CBC formulation in pool_pump_planner.py.
 func solveMILP(in lpInput) (*lpResult, error) {
+	if err := validateLPInput(in); err != nil {
+		return nil, fmt.Errorf("invalid MILP input: %w", err)
+	}
+
 	dir, err := os.MkdirTemp("", "pool-pump-*")
 	if err != nil {
 		return nil, err
@@ -57,15 +61,61 @@ func solveMILP(in lpInput) (*lpResult, error) {
 	return res, nil
 }
 
+// validateLPInput checks the shape of the problem before any LP text is
+// generated, so a degenerate day (no slots, non-finite costs throughout,
+// nonsensical bounds) fails fast with a clear error instead of producing an
+// LP file that CBC's parser may reject with an opaque
+// "CoinLpIO::read_monom_obj" / "Unable to read objective function" error.
+func validateLPInput(in lpInput) error {
+	T := len(in.costs)
+	if T == 0 {
+		return fmt.Errorf("no slots (empty costs)")
+	}
+	if in.minSlots < 0 || in.targetSlots < 0 || in.maxSlots < 0 {
+		return fmt.Errorf("negative bound: min=%d target=%d max=%d", in.minSlots, in.targetSlots, in.maxSlots)
+	}
+	if in.minSlots > in.maxSlots {
+		return fmt.Errorf("minSlots (%d) > maxSlots (%d)", in.minSlots, in.maxSlots)
+	}
+	if in.maxStarts < 0 {
+		return fmt.Errorf("negative maxStarts: %d", in.maxStarts)
+	}
+	finite := 0
+	for _, c := range in.costs {
+		if !math.IsNaN(c) && !math.IsInf(c, 0) {
+			finite++
+		}
+	}
+	if finite == 0 {
+		return fmt.Errorf("no finite cost coefficients across %d slots", T)
+	}
+	return nil
+}
+
+// finiteCoeff reports whether c is safe to write as an LP coefficient. NaN
+// and +/-Inf format as literal "NaN"/"+Inf"/"-Inf" tokens under %g, which
+// CBC's LP reader does not accept as numbers — it either silently drops the
+// term, misreads it as a variable name, or (on some CBC/Cbc builds) aborts
+// objective parsing outright. Zero coefficients are also skipped, purely to
+// keep the generated LP compact (a zero-coefficient term is a no-op).
+func finiteCoeff(c float64) bool {
+	return !math.IsNaN(c) && !math.IsInf(c, 0) && c != 0
+}
+
 func writeLP(path string, in lpInput) error {
 	T := len(in.costs)
 	bigM := 100.0
 	for _, c := range in.costs {
-		if c > bigM {
+		if finiteCoeff(c) && c > bigM {
 			bigM = c
 		}
 	}
 	bigM = bigM*10 + 100
+	if math.IsNaN(bigM) || math.IsInf(bigM, 0) {
+		// Should be unreachable given the finiteCoeff guard above, but keep
+		// the objective well-formed under any future change to this loop.
+		bigM = 100.0
+	}
 
 	var b strings.Builder
 	b.WriteString("\\* pool pump MILP *\\\n")
@@ -73,7 +123,7 @@ func writeLP(path string, in lpInput) error {
 	first := true
 	for t := 0; t < T; t++ {
 		c := in.costs[t]
-		if math.IsNaN(c) || c == 0 {
+		if !finiteCoeff(c) {
 			continue
 		}
 		if !first {
@@ -85,6 +135,9 @@ func writeLP(path string, in lpInput) error {
 	if !first {
 		b.WriteString(" + ")
 	}
+	// The slack term's bigM coefficient is always present and always finite
+	// (checked above), so the objective can never end up empty even when
+	// every slot cost is zero, NaN, or +/-Inf.
 	fmt.Fprintf(&b, "%g slack\n", bigM)
 
 	b.WriteString("Subject To\n")

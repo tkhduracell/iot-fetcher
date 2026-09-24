@@ -282,7 +282,20 @@ func solve(cfg *Config, slots []time.Time, prices, solar []float64, targetHours 
 			blocked[t] = true
 			continue
 		}
-		costs[t] = slotCost(cfg, slotEnergy, p, solar[t])
+		s := 0.0
+		if t < len(solar) && !math.IsNaN(solar[t]) && !math.IsInf(solar[t], 0) {
+			s = solar[t]
+		}
+		c := slotCost(cfg, slotEnergy, p, s)
+		if math.IsNaN(c) || math.IsInf(c, 0) {
+			// Defensive: a non-finite cost (e.g. from a bad price/config
+			// combination) must never reach the LP generator — block the
+			// slot instead of writing an unsolvable/unparseable objective.
+			costs[t] = 0
+			blocked[t] = true
+			continue
+		}
+		costs[t] = c
 
 		if blockedHourSet[slots[t].In(cfg.Timezone).Hour()] {
 			blocked[t] = true
