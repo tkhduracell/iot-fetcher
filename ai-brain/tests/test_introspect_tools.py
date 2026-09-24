@@ -38,6 +38,8 @@ class FakeLoop:
     last_cycle_at: float = 0.0
     trace: object = None
     last_cycle: object = None
+    token_counts: dict[str, int] = field(default_factory=lambda: {"prompt": 0, "completion": 0})
+    heartbeat_s: int = 7200
 
 
 @dataclass
@@ -123,8 +125,10 @@ async def test_system_status_reports_cycles_usefulness_and_ledger(registry, make
             last_cycle_at=100.0,
             trace=FakeTrace(in_progress=True),
             last_cycle=FakeCycleResult(status="ok", rounds=4, model="fake:1"),
+            token_counts={"prompt": 2800, "completion": 200},
+            heartbeat_s=1800,
         ),
-        "energy": FakeLoop(cycle_counts={"ok": 1}),
+        "energy": FakeLoop(cycle_counts={"ok": 1}, token_counts={"prompt": 900, "completion": 100}),
     }
     ledger = Ledger({"fake:1": Limits(rpm=10, tpm=1000, rpd=100)}, tmp_path / "ledger.json")
     approvals = FakeApprovals(
@@ -149,6 +153,18 @@ async def test_system_status_reports_cycles_usefulness_and_ledger(registry, make
     assert out["proposal_loops"][0]["laps"] == 2
     assert out["ledger"]["day"] == ledger.day
     assert any("ai_brain_cycle_total" in m for m in out["metrics"])
+    assert out["tokens"]["total"] == 4000
+    brain_tokens, energy_tokens = out["tokens"]["loops"]
+    assert brain_tokens == {
+        "name": "brain",
+        "prompt": 2800,
+        "completion": 200,
+        "share": 0.75,
+        "per_cycle": 750,
+        "heartbeat_s": 1800,
+    }
+    assert energy_tokens["share"] == 0.25
+    assert any("ai_brain_loop_tokens_total" in m for m in out["metrics"])
 
 
 async def test_system_status_without_runtime_state_is_an_error(registry, make_ctx):

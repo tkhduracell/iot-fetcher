@@ -60,6 +60,34 @@ def usefulness_rows(loops: dict[str, AgentLoop]) -> dict:
     return {"loops": rows, "totals": totals}
 
 
+def token_rows(loops: dict[str, AgentLoop]) -> dict:
+    """Tokens each loop has spent since the process started, and its share.
+
+    Same order as ``usefulness_rows``. ``per_cycle`` divides by every finished
+    cycle, including ones that never reached the model, so it reads as "what a
+    cycle of this loop costs on average", heartbeat included.
+    """
+    rows = []
+    grand = sum(sum(loop.token_counts.values()) for loop in loops.values())
+    for name in ["brain"] + sorted(n for n in loops if n != "brain"):
+        loop = loops[name]
+        prompt = loop.token_counts.get("prompt", 0)
+        completion = loop.token_counts.get("completion", 0)
+        total = prompt + completion
+        cycles = sum(loop.cycle_counts.values())
+        rows.append(
+            {
+                "name": name,
+                "prompt": prompt,
+                "completion": completion,
+                "share": round(total / grand, 3) if grand else 0.0,
+                "per_cycle": round(total / cycles) if cycles else 0,
+                "heartbeat_s": loop.heartbeat_s,
+            }
+        )
+    return {"loops": rows, "total": grand}
+
+
 def proposal_loops(approvals: Approvals) -> dict:
     """Proposals grouped by topic -- the same subject, proposed again and again.
 

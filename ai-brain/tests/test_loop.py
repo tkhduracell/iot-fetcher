@@ -175,6 +175,25 @@ async def test_two_tool_rounds_then_end_cycle(make_loop, brain_dir):
     assert "checked the pool" in journal
     assert loop.last_cycle is result
     assert loop.cycle_counts["ok"] == 1
+    # Three replies at 10 prompt / 5 completion each.
+    assert loop.token_counts == {"prompt": 30, "completion": 15}
+    assert (loop.trace.prompt_tokens, loop.trace.completion_tokens) == (30, 15)
+
+
+async def test_token_counts_accumulate_across_cycles(make_loop):
+    loop, _ = make_loop(
+        [
+            reply("done", call("end_cycle", "a", next_wake_minutes=30, summary="one")),
+            reply("done", call("end_cycle", "b", next_wake_minutes=30, summary="two")),
+        ]
+    )
+
+    await loop.run_cycle()
+    await loop.run_cycle()
+
+    assert loop.token_counts == {"prompt": 20, "completion": 10}
+    # The trace is per cycle; the counter is per process.
+    assert (loop.trace.prompt_tokens, loop.trace.completion_tokens) == (10, 5)
 
 
 # -- events -------------------------------------------------------------
@@ -1212,13 +1231,29 @@ async def test_the_trace_is_visible_from_inside_a_tool_while_the_cycle_runs(make
 # -- the cycle's angle -------------------------------------------------
 
 
-def test_angle_rotates_with_the_clock():
-    """Two cycles an hour apart get different angles; the same hour repeats."""
-    seen = {_angle_for("brain", "brain", 1_000_000.0 + h * 3600) for h in range(len(BRAIN_ANGLES))}
-    assert len(seen) == len(BRAIN_ANGLES), "a full rotation must cover every angle"
+def test_angle_rotates_once_per_heartbeat_slot():
+    """Every heartbeat slot gets a new angle; a full rotation covers them all."""
+    for name, priority, heartbeat_s, angles in (
+        ("brain", "brain", 1800, BRAIN_ANGLES),
+        ("energy", "expert", 7200, EXPERT_ANGLES),
+    ):
+        seen = [
+            _angle_for(name, priority, 1_000_000.0 + i * heartbeat_s, heartbeat_s)
+            for i in range(len(angles))
+        ]
+        assert set(seen) == set(angles), f"{name}: a full rotation must cover every angle"
 
-    same_hour = _angle_for("brain", "brain", 1_000_000.0)
-    assert _angle_for("brain", "brain", 1_000_100.0) == same_hour
+
+def test_consecutive_brain_heartbeats_never_repeat_an_angle():
+    """Hourly rotation on a 30-minute heartbeat handed the brain each angle twice."""
+    seen = [_angle_for("brain", "brain", 1_000_000.0 + i * 1800, 1800) for i in range(40)]
+    assert all(a != b for a, b in zip(seen, seen[1:], strict=False))
+
+
+def test_a_wake_inside_one_slot_keeps_its_angle():
+    slot_start = 1800.0 * 600
+    angle = _angle_for("brain", "brain", slot_start, 1800)
+    assert _angle_for("brain", "brain", slot_start + 1799, 1800) == angle
 
 
 def test_loops_waking_together_do_not_share_an_angle():
@@ -1253,7 +1288,7 @@ async def test_the_user_turn_carries_the_angle(make_loop, wall):
     user = provider.calls[0][0][1]
     assert user.role == "user"
     assert "Angle for this cycle:" in user.content
-    assert _angle_for("brain", "brain", wall()) in user.content
+    assert _angle_for("brain", "brain", wall(), HEARTBEAT) in user.content
 
 
 def test_cycle_instructions_set_the_bar_for_a_cycle():

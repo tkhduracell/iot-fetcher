@@ -478,6 +478,7 @@ outage never stops the brain thinking):
 | Metric | Labels | Meaning |
 | --- | --- | --- |
 | `ai_brain_cycle_total` | `loop`, `status` | Counter of cycle outcomes (`ok`, `paused`, `error`, …). Flat `ok` means the brain has stopped thinking. |
+| `ai_brain_loop_tokens_total` | `loop`, `kind` | Tokens each loop has spent since start (`prompt`, `completion`). Resets on restart; use `increase()`. The ledger counts per key; this is what says which loop is expensive. |
 | `ai_brain_ledger_remaining` | `model`, `kind` | Fraction of today's requests/tokens left, 0–1. |
 | `ai_brain_loop_last_cycle_seconds` | `loop` | Age of the last completed cycle. Absent until a loop has finished one — a zero would read as "just ran", which is the opposite of the truth. |
 

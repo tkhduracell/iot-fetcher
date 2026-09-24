@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from ai_brain.introspection import proposal_loops, usefulness_rows
+from ai_brain.introspection import proposal_loops, token_rows, usefulness_rows
 from ai_brain.memory import safe_name
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -246,6 +246,11 @@ def _loops_json(system: System) -> dict:
 def _usefulness_json(system: System) -> dict:
     """Every loop's cycles, rolled into the four buckets above."""
     return usefulness_rows(system.loops)
+
+
+def _tokens_json(system: System) -> dict:
+    """Tokens each loop has spent since start, and its share of the total."""
+    return token_rows(system.loops)
 
 
 def _ledger_json(system: System) -> dict:
@@ -493,6 +498,9 @@ def build_app(
     async def usefulness(_request: web.Request) -> web.Response:
         return _json(_usefulness_json(system))
 
+    async def tokens(_request: web.Request) -> web.Response:
+        return _json(_tokens_json(system))
+
     async def feed(request: web.Request) -> web.StreamResponse:
         """Every loop's ``round_started``/``round_complete``/``cycle_ended``
         events, live, merged across all loops.
@@ -569,6 +577,7 @@ def build_app(
     app.router.add_get("/api/proposals", proposals)
     app.router.add_get("/api/loops", loops)
     app.router.add_get("/api/usefulness", usefulness)
+    app.router.add_get("/api/tokens", tokens)
     app.router.add_get("/api/slack/sessions", slack_sessions)
     app.router.add_get("/api/feed", feed)
     return app

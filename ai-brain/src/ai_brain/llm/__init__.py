@@ -98,6 +98,8 @@ class Message:
 class Usage:
     prompt_tokens: int
     completion_tokens: int
+    # Prompt tokens served from the provider's cache. No provider fills it yet.
+    cached_tokens: int = 0
 
 
 @dataclass(frozen=True)

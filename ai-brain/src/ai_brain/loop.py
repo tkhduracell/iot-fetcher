@@ -189,18 +189,21 @@ EXPERT_ANGLES: tuple[str, ...] = (
 )
 
 
-def _angle_for(name: str, priority: Priority, now: float) -> str:
+def _angle_for(name: str, priority: Priority, now: float, heartbeat_s: int = 3600) -> str:
     """This cycle's angle, deterministic from the clock and the loop's name.
 
-    Rotates on the hour, and is offset per loop so five loops waking together
-    do not all take the same angle. No stored counter: a restart must not reset
-    every loop to the first angle, which is exactly what a process that
-    restarts often would do.
+    Rotates once per heartbeat slot, and is offset per loop so five loops
+    waking together do not all take the same angle. Stepping per slot rather
+    than per hour matters: on the hour, a 30-minute brain got every angle twice
+    in a row, and a 2-hour expert with six angles only ever reached three of
+    them. Cycles woken early inside one slot share its angle. No stored
+    counter: a restart must not reset every loop to the first angle, which is
+    exactly what a process that restarts often would do.
     """
     angles = BRAIN_ANGLES if priority == "brain" else EXPERT_ANGLES
-    hours = int(now // 3600)
+    slot = int(now // max(1, heartbeat_s))
     offset = sum(ord(c) for c in name)
-    return angles[(hours + offset) % len(angles)]
+    return angles[(slot + offset) % len(angles)]
 
 # A cycle that never reached the model has not consumed its inbox, so the notes
 # stay unread for the next one. The statuses that *did* reach the model archive
@@ -252,6 +255,8 @@ class CycleTrace:
     model: str = ""
     summary: str = ""
     rounds: list[RoundTrace] = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     @property
     def in_progress(self) -> bool:
@@ -347,6 +352,9 @@ class AgentLoop:
         self.last_cycle: CycleResult | None = None
         self.last_cycle_at: float = 0.0
         self.cycle_counts: dict[str, int] = {}
+        # Tokens this loop has spent since the process started. The ledger
+        # counts per provider key, which cannot say which loop is expensive.
+        self.token_counts: dict[str, int] = {"prompt": 0, "completion": 0}
         self.trace: CycleTrace | None = None
 
     # -- one cycle -----------------------------------------------------
@@ -410,6 +418,10 @@ class AgentLoop:
                 )
                 rounds += 1
                 model = reply.model
+                self.token_counts["prompt"] += reply.usage.prompt_tokens
+                self.token_counts["completion"] += reply.usage.completion_tokens
+                trace.prompt_tokens += reply.usage.prompt_tokens
+                trace.completion_tokens += reply.usage.completion_tokens
                 trace.rounds.append(
                     RoundTrace(
                         at=self.clock(),
@@ -545,7 +557,7 @@ class AgentLoop:
         if self.memory.needs_compaction():
             system += "\n\n" + COMPACTION_INSTRUCTIONS
         now = datetime.fromtimestamp(self.clock(), UTC).isoformat()
-        angle = _angle_for(self.name, self.priority, self.clock())
+        angle = _angle_for(self.name, self.priority, self.clock(), self.heartbeat_s)
         return [
             Message("system", system),
             Message(
@@ -600,6 +612,14 @@ class AgentLoop:
         self.last_cycle_at = self.clock()
         self.cycle_counts[status] = self.cycle_counts.get(status, 0) + 1
         if self.trace is not None:
+            log.info(
+                "[%s] cycle %s rounds=%d tokens prompt=%d completion=%d",
+                self.name,
+                status,
+                rounds,
+                self.trace.prompt_tokens,
+                self.trace.completion_tokens,
+            )
             self.trace.status = status
             self.trace.model = model
             self.trace.summary = summary

@@ -251,15 +251,18 @@ def test_build_ledger_covers_the_chain_keys(tmp_path):
 
 
 class FakeLoop:
-    def __init__(self, counts, last_cycle_at=0.0):
+    def __init__(self, counts, last_cycle_at=0.0, tokens=None):
         self.cycle_counts = dict(counts)
         self.last_cycle_at = last_cycle_at
+        self.token_counts = dict(tokens or {"prompt": 0, "completion": 0})
 
 
 def test_render_emits_the_three_families(tmp_path):
     ledger = Ledger({"gemini:2.5-flash": Limits(rpm=10, tpm=1000, rpd=100)}, tmp_path / "l.json")
     loops = {
-        "brain": FakeLoop({"ok": 3, "error": 1}, last_cycle_at=940.0),
+        "brain": FakeLoop(
+            {"ok": 3, "error": 1}, last_cycle_at=940.0, tokens={"prompt": 900, "completion": 40}
+        ),
         "energy": FakeLoop({}),
     }
 
@@ -268,6 +271,8 @@ def test_render_emits_the_three_families(tmp_path):
     assert "ai_brain_cycle_total,loop=brain,status=ok value=3i" in lines
     assert "ai_brain_cycle_total,loop=brain,status=error value=1i" in lines
     assert "ai_brain_loop_last_cycle_seconds,loop=brain value=60.0" in lines
+    assert "ai_brain_loop_tokens_total,loop=brain,kind=prompt value=900i" in lines
+    assert "ai_brain_loop_tokens_total,loop=brain,kind=completion value=40i" in lines
     # never ran: no age line at all
     assert not any(
         line.startswith("ai_brain_loop_last_cycle_seconds,loop=energy") for line in lines
