@@ -212,6 +212,11 @@ class MemoryDir:
         return self.root / "gaps"
 
     @property
+    def reviews_dir(self) -> Path:
+        """Brain-only: the brain's own verdicts on each expert it has reviewed."""
+        return self.root / "reviews"
+
+    @property
     def history_dir(self) -> Path:
         return self.root / "history"
 
@@ -591,6 +596,54 @@ class MemoryDir:
             closed_at=closed_at,
             answer=str(data.get("answer") or ""),
         )
+
+    # -- reviews ---------------------------------------------------------
+    #
+    # The brain's verdicts on the experts it has reviewed, one JSONL file per
+    # expert under its own ``reviews/`` dir (``brain/reviews/<name>.jsonl``).
+    # Brain-only, like ``rewrite_goals``/``rewrite_identity``: an expert has no
+    # standing to review itself or a peer, and nothing here is read by the
+    # expert loops -- ``review_expert`` (tools/introspect.py) delivers its
+    # verdict to the expert through ``send_note``'s own path instead, the same
+    # way every other cross-loop message travels.
+
+    def append_review(self, expert: str, record: dict, keep: int = 50) -> None:
+        self._require_brain("append_review")
+        safe_name(expert)
+        self.reviews_dir.mkdir(parents=True, exist_ok=True)
+        path = self.reviews_dir / f"{expert}.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        lines.append(json.dumps(record))
+        # Pruned here rather than left to grow forever: a review is one line
+        # per angle-rotation cycle at most, so 50 is months of history and the
+        # file never needs its own compaction hint.
+        lines = lines[-keep:]
+        _atomic_write(path, "\n".join(lines) + "\n")
+
+    def recent_reviews(self, expert: str, n: int = 5) -> list[dict]:
+        """The last ``n`` reviews of ``expert``, newest first.
+
+        A line that fails to parse is dropped rather than raised -- a reader
+        of the brain's own review history must not lose every earlier verdict
+        because one line was half-written by a crash between the write and
+        the atomic replace (which cannot happen) or hand-edited on the volume
+        (which can).
+        """
+        path = self.reviews_dir / f"{safe_name(expert)}.jsonl"
+        if not path.exists():
+            return []
+        records = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+        records.reverse()
+        return records[: max(n, 0)]
 
     # -- inbox ---------------------------------------------------------
 
