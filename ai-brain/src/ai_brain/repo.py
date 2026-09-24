@@ -66,9 +66,10 @@ MAX_LOG_COMMITS = 50
 # without being an invitation to fill the memory volume.
 MAX_TOTAL_BYTES = 50 * 1024 * 1024
 
-# How many old snapshot directories to keep on disk besides the current one.
-# One spare covers "extraction is mid-flight" without the _repo dir growing
-# forever across restarts and refreshes.
+# How many SHA directories _prune_old keeps in total (current plus the most
+# recently modified others), so the _repo dir does not grow forever across
+# restarts and refreshes. The current one is never counted against this by
+# being pruned -- see _prune_old -- but it does occupy one of the slots.
 KEEP_SNAPSHOTS = 2
 
 
@@ -116,12 +117,49 @@ class RepoSnapshot:
     @property
     def state(self) -> RepoState | None:
         """The current snapshot, or ``None`` before the first refresh ever
-        succeeded (or after every attempt so far has failed)."""
+        succeeded (or after every attempt so far has failed) -- unless
+        ``adopt_existing`` found one already on disk from a previous run."""
         return self._state
 
     def commits(self, n: int) -> list[Commit]:
         """The most recent commits, newest first, cached by the last refresh."""
         return self._commits[: max(n, 0)]
+
+    # -- adopting what a previous process already fetched -----------------
+
+    def adopt_existing(self) -> RepoState | None:
+        """Point ``state`` at an already-extracted ``current`` snapshot, if
+        one is on disk -- without any network call.
+
+        A restart otherwise loses code access until the next scheduled
+        refresh succeeds, which can be hours away and, if GitHub happens to
+        be unreachable right then, longer still. The SHA is read from the
+        ``current`` symlink's target name (that is exactly what
+        ``_swap_current`` names it), and ``fetched_at`` from the target
+        directory's mtime -- both were set by the refresh that created it, so
+        this is exact, not a guess. Called once at startup, before the first
+        network refresh; ``refresh()`` itself also treats an adopted SHA as
+        "unchanged" the same way it does one from its own last refresh, so a
+        healthy GitHub does not re-download something already on disk.
+        """
+        pointer = self.root / "current"
+        try:
+            target = pointer.resolve(strict=True)
+        except OSError:
+            return None
+        if not target.is_dir() or target.parent != self.root.resolve():
+            # Not a symlink this class created, or it points somewhere odd
+            # (a stale/hand-edited pointer) -- safer to start from nothing
+            # than to adopt a directory this code did not itself extract.
+            return None
+        sha = target.name
+        try:
+            fetched_at = target.stat().st_mtime
+        except OSError:
+            return None
+        state = RepoState(sha=sha, fetched_at=fetched_at, root=target)
+        self._state = state
+        return state
 
     # -- refreshing --------------------------------------------------------
 
@@ -142,29 +180,54 @@ class RepoSnapshot:
         root = Path(dest) if dest is not None else self.root
         sha = await self._resolve_sha()
         if self._state is not None and self._state.sha == sha and dest is None:
-            # Unchanged since the last refresh: nothing to download or
-            # extract, and re-fetching the same tarball on every
-            # REPO_REFRESH_H tick would cost bandwidth for no new state.
-            await self._refresh_commits()
+            # Unchanged since the last refresh (or since adopt_existing found
+            # it on disk): nothing to download or extract, and re-fetching
+            # the same tarball on every REPO_REFRESH_H tick would cost
+            # bandwidth for no new state. The commit log is the same story --
+            # skipped too when it is already populated for this SHA, so an
+            # adopted snapshot that never had a network call yet still gets
+            # its log filled in exactly once, not on every unchanged tick.
+            if not self._commits:
+                await self._refresh_commits(sha)
             return self._state
 
         target = root / sha
-        if target.exists():
+        # Never delete the directory `current` still points to while
+        # extracting into it: a concurrent reader (a tool call mid-cycle)
+        # holds file handles into exactly that tree, and this SHA already
+        # being on disk only happens when it is the adopted/current one
+        # (the "unchanged" branch above returns before reaching here for the
+        # SHA this instance already knows about).
+        current_target = self._current_target(root)
+        if target.exists() and target != current_target:
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
 
         try:
             await self._download_and_extract(sha, target)
         except Exception:
-            shutil.rmtree(target, ignore_errors=True)
+            if target != current_target:
+                shutil.rmtree(target, ignore_errors=True)
             raise
 
         self._swap_current(root, sha)
         self._prune_old(root, sha)
         state = RepoState(sha=sha, fetched_at=time.time(), root=target)
         self._state = state
-        await self._refresh_commits()
+        # At the resolved SHA, not self.ref: REPO_REF (usually "main") keeps
+        # moving, so a log fetched "at main" right after a refresh already
+        # disagrees with the snapshot the moment another commit lands --
+        # code_log would then show commits the snapshot does not actually
+        # have. Pinning to `sha` is what keeps the two in agreement.
+        await self._refresh_commits(sha)
         return state
+
+    def _current_target(self, root: Path) -> Path | None:
+        pointer = root / "current"
+        try:
+            return pointer.resolve(strict=True)
+        except OSError:
+            return None
 
     async def _resolve_sha(self) -> str:
         url = COMMITS_URL.format(slug=self.slug, ref=self.ref)
@@ -180,14 +243,23 @@ class RepoSnapshot:
             raise ValueError(f"commits API returned no sha for {self.slug}@{self.ref}")
         return sha
 
-    async def _refresh_commits(self) -> None:
+    async def _refresh_commits(self, sha: str) -> None:
         """Best-effort: ``code_log`` degrades to empty rather than failing a
-        whole refresh over a second, non-essential API call."""
+        whole refresh over a second, non-essential API call.
+
+        ``sha`` is the *resolved* snapshot commit, not ``self.ref`` -- a
+        moving ref like ``main`` can gain a new commit between the refresh
+        that resolved ``sha`` and this call, and history "starting from
+        main" would then include commits the extracted snapshot does not
+        actually have. Starting the log from the exact commit that was
+        extracted is what keeps ``code_log`` in agreement with ``code_read``/
+        ``code_grep``.
+        """
         url = f"https://api.github.com/repos/{self.slug}/commits"
         try:
             response = await self.http.get(
                 url,
-                params={"sha": self.ref, "per_page": str(MAX_LOG_COMMITS)},
+                params={"sha": sha, "per_page": str(MAX_LOG_COMMITS)},
                 headers={"Accept": "application/vnd.github+json"},
                 timeout=COMMITS_TIMEOUT_S,
             )
@@ -241,11 +313,17 @@ class RepoSnapshot:
         os.replace(tmp_link, pointer)
 
     def _prune_old(self, root: Path, keep_sha: str) -> None:
+        """Delete SHA directories beyond ``KEEP_SNAPSHOTS``, newest first,
+        never touching ``keep_sha`` (the one ``current`` now points to)."""
         if not root.exists():
             return
-        for entry in root.iterdir():
-            if entry.name in (keep_sha, "current") or not entry.is_dir():
-                continue
+        candidates = [
+            entry
+            for entry in root.iterdir()
+            if entry.is_dir() and entry.name != "current" and entry.name != keep_sha
+        ]
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for entry in candidates[max(KEEP_SNAPSHOTS - 1, 0) :]:
             shutil.rmtree(entry, ignore_errors=True)
 
 
@@ -273,12 +351,19 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
       disk at all. A small ``.json`` member (under ``MAX_SNIFF_BYTES``) is
       read into memory to check its content too, since a service-account key
       does not always have a name that says so.
+    * the *uncompressed* total, summed from every kept member's declared
+      ``size``, must stay under ``MAX_TOTAL_BYTES`` -- checked before a
+      single byte is extracted. ``_download_and_extract`` already caps the
+      compressed download, but gzip can expand a small download into a huge
+      one on disk (the classic zip/gzip-bomb shape), so the compressed size
+      alone is not the real limit this module promises.
     """
     dest = dest.resolve()
     with tarfile.open(tar_path, mode="r:gz") as tar:
         members = tar.getmembers()
         prefix = _common_prefix(members)
         safe_members = []
+        total_size = 0
         for member in members:
             if not (member.isfile() or member.isdir()):
                 # Symlinks, hardlinks, devices, fifos: skip silently. A
@@ -310,6 +395,12 @@ def _safe_extract(tar_path: Path, dest: Path) -> None:
                 if is_sensitive(relative, sniff):
                     log.warning("[repo] excluding sensitive file from snapshot: %s", relative)
                     continue
+                total_size += member.size
+                if total_size > MAX_TOTAL_BYTES:
+                    raise ValueError(
+                        f"tarball extracts to more than {MAX_TOTAL_BYTES} bytes "
+                        "(uncompressed) -- refusing as a likely gzip bomb"
+                    )
             member.name = relative
             safe_members.append(member)
 

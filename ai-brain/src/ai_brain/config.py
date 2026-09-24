@@ -175,8 +175,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         call_timeout_s=get_int("CALL_TIMEOUT_S", 60),
         http_port=get_int("HTTP_PORT", 8091),
         # The public repo the code_* tools read -- see repo.py. Defaults to
-        # this repo itself, on its main branch.
+        # this repo itself, on its main branch. repo_refresh_h floors at 1:
+        # supervisor.py multiplies it by 3600 for _every()'s sleep interval,
+        # and 0 (or a negative value from a typo'd env) would turn that into
+        # a busy loop hammering the GitHub API on every tick instead of a
+        # config mistake that is merely more aggressive than intended.
         repo_slug=get("REPO_SLUG", "tkhduracell/iot-fetcher"),
         repo_ref=get("REPO_REF", "main"),
-        repo_refresh_h=get_int("REPO_REFRESH_H", 6),
+        repo_refresh_h=max(1, get_int("REPO_REFRESH_H", 6)),
     )

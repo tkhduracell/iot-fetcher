@@ -37,6 +37,13 @@ def test_repo_settings_are_overridable():
     assert (s.repo_slug, s.repo_ref, s.repo_refresh_h) == ("someone/fork", "dev", 1)
 
 
+def test_repo_refresh_h_floors_at_one():
+    """0 (or a typo'd negative) would turn supervisor.py's _every() interval
+    into a busy loop hammering GitHub, not a merely-too-aggressive config."""
+    assert load_settings({"REPO_REFRESH_H": "0"}).repo_refresh_h == 1
+    assert load_settings({"REPO_REFRESH_H": "-5"}).repo_refresh_h == 1
+
+
 def test_blank_experts_is_the_default_set():
     # A deployment that copied .env.example during the rollout has a literal
     # blank EXPERTS line; it must not silently pin that box to brain-only.

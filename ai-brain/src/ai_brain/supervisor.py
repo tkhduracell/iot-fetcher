@@ -160,11 +160,17 @@ def build(
 
     http = http or httpx.AsyncClient(timeout=HTTP_TIMEOUT_S)
 
-    # The brain's own view of the iot-fetcher source (code_* tools). Built
-    # eagerly like everything else here, but empty (RepoSnapshot.state is
-    # None) until the first refresh -- see repo_refresh_watcher, called once
-    # on boot and then every REPO_REFRESH_H by run().
+    # The brain's own view of the iot-fetcher source (code_* tools).
+    # adopt_existing() is synchronous (local filesystem only) and picks up
+    # whatever a previous process already extracted, so a restart keeps
+    # code_* working immediately rather than reporting "unavailable" until
+    # the next network refresh -- which, if GitHub happens to be down right
+    # after a restart, could otherwise be a long wait. Genuinely empty
+    # (RepoSnapshot.state is None) only on a fresh volume; either way, the
+    # first network refresh still happens on boot -- see repo_refresh_watcher,
+    # called once on boot and then every REPO_REFRESH_H by run().
     repo = RepoSnapshot(settings.memory_root, settings.repo_slug, settings.repo_ref, http)
+    repo.adopt_existing()
 
     registry = ToolRegistry()
     register_memory_tools(registry)

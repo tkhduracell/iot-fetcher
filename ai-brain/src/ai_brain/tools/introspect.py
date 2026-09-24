@@ -22,20 +22,25 @@ cycle.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ai_brain import sensitive
 from ai_brain.introspection import proposal_loops, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
 from ai_brain.memory import MemoryDir
-from ai_brain import sensitive
 from ai_brain.redact import redact
+from ai_brain.regex_safety import check_pattern
 from ai_brain.repo import RepoSnapshot
 from ai_brain.sensitive import is_sensitive
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
+
+log = logging.getLogger(__name__)
 
 BRAIN_ONLY = frozenset({"brain"})
 
@@ -51,8 +56,14 @@ JOURNAL_DAYS = 2
 MAX_FILE_BYTES = 256 * 1024
 MAX_LIST_ENTRIES = 500
 MAX_GREP_HITS = 100
-MAX_PATTERN_CHARS = 128
 MAX_LINE_PREVIEW = 300
+# Wall-clock budget for one code_grep call's walk-and-match, enforced from
+# outside the worker thread (see _code_grep) since a thread cannot be
+# interrupted mid-regex-match. A large subtree at a few hundred files a
+# second is comfortably inside this; a pathologically slow-but-not-rejected
+# pattern (see regex_safety.py for the ones that ARE rejected outright) is
+# what this actually bounds.
+CODE_GREP_TIMEOUT_S = 10
 
 # Directories skipped everywhere under the snapshot: dependency trees and lock
 # files are large, generated, and never what "read the code" means.
@@ -377,6 +388,12 @@ async def _code_list(ctx: ToolContext, args: dict) -> str:
     if resolved is None or not resolved.absolute.exists():
         return err(f"code_list: no such path: {relative}")
     if resolved.absolute.is_file():
+        # A path that names a sensitive file directly (not just one found
+        # while iterating a directory below) gets the same "no such path"
+        # this tool already gives a genuinely missing one -- never a
+        # distinct "denied".
+        if is_sensitive(resolved.relative, _sniff(resolved.absolute)):
+            return err(f"code_list: no such path: {relative}")
         return ok({"path": resolved.relative, "entries": [resolved.relative]})
 
     entries = []
@@ -441,8 +458,15 @@ async def _code_read(ctx: ToolContext, args: dict) -> str:
     text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines()
     start = max(1, int(args.get("start") or 1))
-    end = int(args.get("end") or len(lines))
-    end = min(end, len(lines))
+    end = int(args.get("end") or 0)
+    # end <= 0 (unset, explicit 0, or negative) means "to the end of the
+    # file"; otherwise it is clamped to both the file length and start, so a
+    # caller-supplied end below start (a mistake, or start moved past a
+    # short file) can never turn into a negative-index slice -- Python would
+    # otherwise read that from the back of the list instead of returning an
+    # empty, well-formed range.
+    end = len(lines) if end <= 0 else min(end, len(lines))
+    end = max(end, start)
     if start > len(lines):
         selected = []
     else:
@@ -465,32 +489,20 @@ async def _code_read(ctx: ToolContext, args: dict) -> str:
     )
 
 
-async def _code_grep(ctx: ToolContext, args: dict) -> str:
-    repo = _repo(ctx)
-    if repo is None or repo.state is None:
-        return _unavailable()
-    pattern = str(args["pattern"])
-    if len(pattern) > MAX_PATTERN_CHARS:
-        return err(f"code_grep: pattern too long (max {MAX_PATTERN_CHARS})")
-    try:
-        matcher = re.compile(pattern)
-    except re.error as exc:
-        return err(f"code_grep: invalid regex {pattern!r}: {exc}")
+def _grep_worker(
+    root: Path, snapshot_root: Path, matcher: re.Pattern, hits: list[dict]
+) -> bool:
+    """The actual walk-and-match, run off the event loop by ``_code_grep``.
 
-    prefix = str(args.get("path") or "")
-    resolved = _resolve_in_snapshot(repo.state.root, prefix)
-    if resolved is None or not resolved.absolute.exists():
-        return err(f"code_grep: no such path: {prefix}")
-
-    # Relativised against the *resolved* root (what _resolve_in_snapshot
-    # already computed), not repo.state.root itself: rglob's own entries come
-    # back resolved too (a temp dir under a symlinked prefix, e.g. macOS's
-    # /tmp -> /private/tmp, resolves differently than the unresolved root
-    # would), and relative_to requires both sides to agree.
-    snapshot_root = repo.state.root.resolve()
-    hits: list[dict] = []
-    truncated = False
-    for file_path in _walk_text_files(resolved.absolute):
+    Appends to ``hits`` (a plain list -- the GIL makes a single ``append()``
+    atomic, so a caller reading it from another thread after a timeout sees
+    a consistent, if incomplete, list rather than a half-written entry) and
+    returns whether the *file-count* cap was hit. It does not itself know
+    about a wall-clock deadline -- ``code_grep`` enforces that from the
+    outside via ``asyncio.wait_for``, since a plain thread cannot be
+    interrupted mid-regex-match from Python once it is running.
+    """
+    for file_path in _walk_text_files(root):
         try:
             size = file_path.stat().st_size
         except OSError:
@@ -520,11 +532,65 @@ async def _code_grep(ctx: ToolContext, args: dict) -> str:
                     {"path": rel, "line": lineno, "text": redact(line[:MAX_LINE_PREVIEW])}
                 )
                 if len(hits) >= MAX_GREP_HITS:
-                    truncated = True
-                    break
-        if truncated:
-            break
-    return ok({"hits": hits, "truncated": truncated, "sha": repo.state.sha})
+                    return True
+    return False
+
+
+async def _code_grep(ctx: ToolContext, args: dict) -> str:
+    repo = _repo(ctx)
+    if repo is None or repo.state is None:
+        return _unavailable()
+    pattern = str(args["pattern"])
+    # A too-long or catastrophically-backtracking pattern is refused
+    # outright (see regex_safety.py) -- the timeout below is a second,
+    # independent defence against an aggregate walk over many ordinary
+    # files simply taking a while, not a substitute for this check.
+    problem = check_pattern(pattern)
+    if problem is not None:
+        return err(f"code_grep: {problem}")
+    try:
+        matcher = re.compile(pattern)
+    except re.error as exc:
+        return err(f"code_grep: invalid regex {pattern!r}: {exc}")
+
+    prefix = str(args.get("path") or "")
+    resolved = _resolve_in_snapshot(repo.state.root, prefix)
+    if resolved is None or not resolved.absolute.exists():
+        return err(f"code_grep: no such path: {prefix}")
+
+    # Relativised against the *resolved* root (what _resolve_in_snapshot
+    # already computed), not repo.state.root itself: rglob's own entries come
+    # back resolved too (a temp dir under a symlinked prefix, e.g. macOS's
+    # /tmp -> /private/tmp, resolves differently than the unresolved root
+    # would), and relative_to requires both sides to agree.
+    snapshot_root = repo.state.root.resolve()
+    hits: list[dict] = []
+
+    # Off the event loop: a big subtree is many files' worth of I/O and
+    # regex matching, and running that inline would stall every other loop's
+    # cycle for as long as it takes. asyncio.to_thread hands the whole walk
+    # to a worker thread; wait_for's timeout bounds how long this call waits
+    # for it, not how long the thread itself runs -- Python cannot interrupt
+    # a thread mid-regex-match, so a timeout here means "stop waiting and
+    # report what's in `hits` so far", not "the thread stopped". `hits` is
+    # read after the timeout regardless of which way the race went, which is
+    # safe because list.append is atomic under the GIL.
+    try:
+        capped = await asyncio.wait_for(
+            asyncio.to_thread(_grep_worker, resolved.absolute, snapshot_root, matcher, hits),
+            timeout=CODE_GREP_TIMEOUT_S,
+        )
+        truncated = capped
+    except TimeoutError:
+        truncated = True
+        log.warning("[introspect] code_grep timed out after %ss; returning partial hits", CODE_GREP_TIMEOUT_S)
+
+    result = {"hits": hits[:MAX_GREP_HITS], "truncated": truncated, "sha": repo.state.sha}
+    if truncated and len(hits) <= MAX_GREP_HITS:
+        result["note"] = (
+            f"search did not finish within {CODE_GREP_TIMEOUT_S}s; results may be incomplete"
+        )
+    return ok(result)
 
 
 def _walk_text_files(root: Path):
@@ -577,22 +643,37 @@ def _headings(text: str, max_n: int = 20) -> list[str]:
     ]
 
 
-def _env_var_names(value) -> list[str]:
-    """Every env var *name* referenced by a compose value -- never the value
-    itself. ``value`` can be a ``KEY=literal`` string (docker-compose's list
-    form) or a ``${VAR}``/``${VAR:-default}`` reference inside one; both cases
-    are just names to a model asking "what does this service need configured"
-    -- the literal on the right of ``=`` is exactly the secret this tool must
-    never repeat.
+def _env_var_name_from_entry(entry) -> list[str]:
+    """Every env var *name* referenced by one ``(is_mapping, text)`` pair
+    from ``_list_field_entries`` -- never the value itself. ``text`` is
+    either ``KEY=literal`` (docker-compose's list form) or ``KEY: literal``
+    (mapping form), possibly with a ``${VAR}``/``${VAR:-default}`` reference
+    inside; all of that is just names to a model asking "what does this
+    service need configured" -- the literal to the right of the separator is
+    exactly the secret this tool must never repeat.
+
+    The split is unambiguous because the shape (``is_mapping``) is already
+    known from where ``_list_field_entries`` found the entry, rather than
+    guessed from whether ``text`` happens to contain ``=`` or ``:`` --
+    either can legitimately appear in a value, in either form
+    (``- VM_URL=http://vm:8427`` is list-form with a ':' in its value;
+    ``INFLUX_TOKEN: a=b`` is mapping-form with a '=' in its value), so
+    picking the separator by content alone can silently pick the wrong key
+    or, worse, leak a value into the name.
     """
+    if isinstance(entry, tuple):
+        is_mapping, text = entry
+    else:  # a plain string, for callers that never tagged their entries
+        is_mapping, text = False, entry
+    if not isinstance(text, str):
+        return []
+    # Mapping form "KEY: value" -- the name is always before the first ':'.
+    # List form "KEY=value" -- the name is always before the first '='.
+    key = text.split(":", 1)[0].strip() if is_mapping else text.split("=", 1)[0].strip()
     names = []
-    if isinstance(value, str):
-        # List form "KEY=value" or "KEY=${OTHER}": the name is always the
-        # part before the first '=', when there is one.
-        key = value.split("=", 1)[0].strip()
-        if re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
-            names.append(key)
-        names.extend(_ENV_VAR_RE.findall(value))
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+        names.append(key)
+    names.extend(_ENV_VAR_RE.findall(text))
     return names
 
 
@@ -692,10 +773,27 @@ def _list_field(body: list[str], field: str) -> list[str]:
     a block-mapping ``field:`` (e.g. ``depends_on:``/``environment:`` can be
     either shape in compose) -- flattened to strings either way, since this
     tool only ever renders them as a list."""
+    return [entry for _is_mapping, entry in _list_field_entries(body, field)]
+
+
+def _list_field_entries(body: list[str], field: str) -> list[tuple[bool, str]]:
+    """Like ``_list_field``, but tagging each entry with which YAML shape it
+    came from: ``(True, "KEY: value")`` for a block-mapping entry, ``(False,
+    "KEY=value")`` for a block-sequence one (the ``- `` already stripped).
+
+    ``environment:`` is the one field this distinction actually matters for
+    -- a list-form value can itself contain ``:`` (``- VM_URL=http://vm:8427``)
+    and a mapping-form value can contain ``=`` (``INFLUX_TOKEN: a=b``), so
+    guessing the shape back out of the flattened string (as an earlier
+    version of this module did, splitting on whichever separator seemed to
+    fit) could mistake one for the other and leak a value past the
+    names-only name split. Recording the shape here, at the one place that
+    already knows it, is what makes that split unambiguous downstream.
+    """
     if not body:
         return []
     base_indent = min(_indent(line) for line in body)
-    out: list[str] = []
+    out: list[tuple[bool, str]] = []
     in_field = False
     field_indent = None
     for line in body:
@@ -709,7 +807,7 @@ def _list_field(body: list[str], field: str) -> list[str]:
                 # left as one opaque string rather than parsed further.
                 value = stripped[len(field) + 1 :].strip()
                 if value:
-                    out.append(value.strip("[]").strip())
+                    out.append((False, value.strip("[]").strip()))
                 in_field = False
             field_indent = None
             continue
@@ -721,12 +819,11 @@ def _list_field(body: list[str], field: str) -> list[str]:
             in_field = False
             continue
         if stripped.startswith("- "):
-            out.append(stripped[2:].strip().strip("\"'"))
+            out.append((False, stripped[2:].strip().strip("\"'")))
         elif ":" in stripped:
             # Mapping form (depends_on as a dict of conditions, environment
-            # as key: value pairs): the key is what a name list wants, the
-            # env line is handled by the caller instead.
-            out.append(stripped)
+            # as key: value pairs).
+            out.append((True, stripped))
     return out
 
 
@@ -735,10 +832,10 @@ def _compose_services(text: str) -> list[dict]:
     depends_on, ports, networks, volumes and env var NAMES ONLY."""
     out = []
     for name, body in _top_level_blocks(text, "services"):
-        env_lines = _list_field(body, "environment")
+        env_entries = _list_field_entries(body, "environment")
         env_names: set[str] = set()
-        for entry in env_lines:
-            env_names.update(_env_var_names(entry.split(":", 1)[0] if ":" in entry and "=" not in entry else entry))
+        for entry in env_entries:
+            env_names.update(_env_var_name_from_entry(entry))
 
         depends_raw = _list_field(body, "depends_on")
         depends_list = sorted({d.split(":", 1)[0].strip() for d in depends_raw})
@@ -762,21 +859,64 @@ def _compose_services(text: str) -> list[dict]:
     return out
 
 
+def _read_if_safe(root: Path, path: Path) -> str | None:
+    """``path``'s text, or ``None`` if it does not exist, cannot be read, or
+    ``is_sensitive`` (name and, for a small ``.json``, content) refuses it.
+    ``root`` is the snapshot root ``path`` is relative to.
+
+    ``code_overview`` reads a fixed, small set of well-known filenames
+    (READMEs, ``CLAUDE.md``, ``docker-compose.yml``, CI workflow files) --
+    none of them should ever match the denylist, but this is the same
+    defence-in-depth reasoning as ``code_read``/``code_grep``: a check that
+    costs nothing here is worth having in case a repo one day names one of
+    these unusually (a component literally called ``secret-store``, say).
+    """
+    try:
+        relative = str(path.relative_to(root))
+    except ValueError:
+        relative = path.name
+    if is_sensitive(relative, _sniff(path)):
+        return None
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def _ci_workflows(root: Path) -> list[dict]:
     workflows_dir = root / ".github" / "workflows"
     if not workflows_dir.exists():
         return []
     out = []
     for path in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
+        rel = str(path.relative_to(root))
+        if is_sensitive(rel):
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         push_blocks = _top_level_blocks(text, "on")
         push_body = next((body for name, body in push_blocks if name == "push"), None)
-        paths = _list_field(push_body, "paths") if push_body else []
+        paths = [redact(p) for p in (_list_field(push_body, "paths") if push_body else [])]
         out.append({"file": path.name, "triggers_on_paths": paths})
     return out
+
+
+def _redact_compose_service(service: dict) -> dict:
+    """``redact()`` over every free-text field ``_compose_services`` fills --
+    ``image``/``build`` (a registry URL can carry a token query string),
+    ``ports``/``volumes`` (host paths, which can embed a household detail or
+    a mount that names a secret file). ``depends_on``/``networks``/
+    ``env_var_names`` are compose *identifiers* the file itself defines, not
+    free text pulled from a value, so they are left alone."""
+    return {
+        **service,
+        "image": redact(service["image"]) if service["image"] else service["image"],
+        "build": redact(service["build"]) if service["build"] else service["build"],
+        "ports": [redact(p) for p in service["ports"]],
+        "volumes": [redact(v) for v in service["volumes"]],
+    }
 
 
 async def _code_overview(ctx: ToolContext, _args: dict) -> str:
@@ -790,38 +930,37 @@ async def _code_overview(ctx: ToolContext, _args: dict) -> str:
         if not child.is_dir() or _skip_dir(child.name) or child.name.startswith("."):
             continue
         readme = child / "README.md"
-        summary = ""
-        if readme.exists():
-            try:
-                summary = _first_paragraph(readme.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                summary = ""
+        component_readme_text = _read_if_safe(root, readme) if readme.exists() else None
+        summary = (
+            redact(_first_paragraph(component_readme_text))
+            if component_readme_text is not None
+            else ""
+        )
         components.append({"name": child.name, "readme_summary": summary})
 
     compose_path = root / "docker-compose.yml"
     services = []
-    if compose_path.exists():
+    compose_text = _read_if_safe(root, compose_path) if compose_path.exists() else None
+    if compose_text is not None:
         try:
-            services = _compose_services(compose_path.read_text(encoding="utf-8", errors="replace"))
+            services = [_redact_compose_service(s) for s in _compose_services(compose_text)]
         except OSError:
             services = []
 
     root_claude = root / "CLAUDE.md"
     root_readme = root / "README.md"
+    claude_text = _read_if_safe(root, root_claude) if root_claude.exists() else None
+    readme_text = _read_if_safe(root, root_readme) if root_readme.exists() else None
     result = {
         "sha": repo.state.sha,
         "fetched_at": repo.state.fetched_at,
         "components": components,
         "services": services,
         "claude_md_headings": (
-            _headings(root_claude.read_text(encoding="utf-8", errors="replace"))
-            if root_claude.exists()
-            else []
+            [redact(h) for h in _headings(claude_text)] if claude_text is not None else []
         ),
         "readme_headings": (
-            _headings(root_readme.read_text(encoding="utf-8", errors="replace"))
-            if root_readme.exists()
-            else []
+            [redact(h) for h in _headings(readme_text)] if readme_text is not None else []
         ),
         "ci_workflows": _ci_workflows(root),
         # Deployed vs main: the snapshot tracks REPO_REF (main by default),
@@ -959,7 +1098,9 @@ def register_introspect(registry: ToolRegistry) -> None:
                 name="code_read",
                 description=(
                     "Read a text file from the iot-fetcher repo snapshot, optionally a line "
-                    "range ('start'/'end', 1-based, inclusive). Repo-relative path, e.g. "
+                    "range ('start'/'end', 1-based, inclusive). Omit 'end' or pass 0 (or "
+                    "negative) for 'to the end of the file'; an 'end' below 'start' is "
+                    "clamped up to 'start' rather than erroring. Repo-relative path, e.g. "
                     "'pool-pump-planner/vm.go'. Text files only, max 256 KB."
                 ),
                 parameters=_schema(
@@ -981,7 +1122,9 @@ def register_introspect(registry: ToolRegistry) -> None:
                 name="code_grep",
                 description=(
                     "Search the repo snapshot for a regex, optionally under one path prefix. "
-                    "Returns matching lines with file and line number, capped at 100 hits."
+                    "Returns matching lines with file and line number, capped at 100 hits. A "
+                    "search that does not finish within 10s returns whatever it found so far "
+                    "with truncated=true -- narrow the pattern or path if that happens."
                 ),
                 parameters=_schema(
                     {"pattern": {"type": "string"}, "path": {"type": "string"}},
