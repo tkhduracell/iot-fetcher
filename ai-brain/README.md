@@ -343,6 +343,22 @@ without guessing from logs and metrics alone.
   path and no `..` segment, and the resolved path must stay under the
   snapshot root. A total size cap (~50 MB) refuses an oversized archive before
   extracting a single byte. See `ai_brain/repo.py` for the full policy.
+- **Sensitive-file denylist.** The snapshot already only contains what git
+  tracked, but `ai_brain/sensitive.py`'s `is_sensitive(path, content=None)`
+  is a second, independent gate against a secret-shaped file committed by
+  mistake — applied both at extraction (the file is never written to
+  `/memory/_repo` at all) and again in every `code_*` tool. `code_list` hides
+  a match entirely; `code_read`/`code_grep` answer exactly as if the path did
+  not exist, never a distinct "denied" that would itself confirm the file is
+  there. Denied: `.env`/`.env.*`/`*.env` (but not `*.example`/`*.template`/
+  `*.sample`); `*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`/`id_rsa*`/
+  `id_ed25519*`; a filename containing `password`/`secret`/`credential`/
+  `token` — except a source file (`.py`/`.ts`/`.tsx`/`.js`/`.go`/`.sh`/`.md`),
+  where those words are ordinary code names (`redact.py`,
+  `set-github-secrets.sh`); a small `.json` file whose content has a
+  `private_key` field or a `service_account` type marker, regardless of its
+  name; `.mcp.json`/`.netrc`/`.npmrc`/`.pypirc`/`.git-credentials`/
+  `.htpasswd`; and anything under `volumes/` or `.git/`.
 - **`code_overview()`** — call this first. Every top-level component with its
   README's first paragraph, `docker-compose.yml`'s services (image/build,
   depends_on, ports, networks, volumes and env var **names only, never
