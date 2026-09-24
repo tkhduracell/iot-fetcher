@@ -13,8 +13,9 @@ let the brain decide whether it is worth a human's attention.
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 
-from ai_brain.approvals import KINDS, PENDING
+from ai_brain.approvals import KINDS, PENDING, proposal_target, rejected_groups
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 
@@ -219,6 +220,38 @@ def junk_proposal_reason(kind: str, payload: dict, topic: str) -> str | None:
     return None
 
 
+def _rejection_guard(ctx: ToolContext, kind: str, payload: dict) -> str | None:
+    """A one-line refusal if ``kind``+``payload`` matches a recent rejection.
+
+    Kept separate from ``_propose`` on purpose: a settled "no" from Filip is a
+    different failure mode from a bad kind or a missing payload key, checked
+    before either the approvals object or Slack is touched, and small enough
+    to lift out cleanly if this file changes shape elsewhere. Returns ``None``
+    when nothing blocks the proposal (no approvals configured is "nothing to
+    check against", not a refusal -- the existing "approvals not configured"
+    error in ``_propose`` already covers that case).
+    """
+    approvals = ctx.extras.get("approvals")
+    if approvals is None:
+        return None
+    days = getattr(ctx.settings, "rejection_memory_days", 30)
+    # approvals.clock, not wall time: Approvals is built from the same clock
+    # the rest of the outbox (proposal.created, expiry) is timestamped
+    # against, so "recently" means the same thing here as it does there --
+    # and it is what lets a frozen-clock test actually move this window.
+    since = approvals.clock() - timedelta(days=days)
+    target = proposal_target(kind, payload)
+    for group in rejected_groups(approvals.all(), since=since):
+        if group.kind == kind and group.target == target:
+            reason = f" ({group.reason})" if group.reason else ""
+            return (
+                f"Filip already rejected {kind} / {target} {group.count}x, most recently "
+                f"{group.last_at}{reason}. Do not re-propose this without genuinely new "
+                "evidence -- ask him in Slack instead if you have some."
+            )
+    return None
+
+
 async def _propose(ctx: ToolContext, args: dict) -> str:
     approvals = ctx.extras.get("approvals")
     if approvals is None:
@@ -228,13 +261,18 @@ async def _propose(ctx: ToolContext, args: dict) -> str:
     if not isinstance(payload, dict):
         return err(f"payload must be an object, got {type(payload).__name__}")
 
-    junk_reason = junk_proposal_reason(str(args["kind"]), payload, str(args["topic"]))
+    kind = str(args["kind"])
+    junk_reason = junk_proposal_reason(kind, payload, str(args["topic"]))
     if junk_reason is not None:
         return err(f"refused: {junk_reason}")
 
+    blocked = _rejection_guard(ctx, kind, payload)
+    if blocked is not None:
+        return err(blocked)
+
     try:
         proposal = await approvals.propose(
-            str(args["kind"]),
+            kind,
             payload,
             str(args["reason"]),
             str(args["topic"]),
@@ -246,7 +284,14 @@ async def _propose(ctx: ToolContext, args: dict) -> str:
         # to and nothing was left pending. Saying so plainly is what lets the
         # model try again on a later cycle instead of assuming it asked.
         return err(f"{exc}; nothing was proposed, try again on a later cycle")
-    return ok({"id": proposal.id, "status": proposal.status})
+    result = {"id": proposal.id, "status": proposal.status}
+    slack_out = ctx.extras.get("slack_out")
+    if slack_out is not None:
+        # Same reasoning as slack_post's result: naming what already exists
+        # is what stops the next proposal from picking yet another near-
+        # duplicate topic ('pool-pump-optimizer' next to 'pool-pump-bug').
+        result["active_topics"] = slack_out.recent_topics()
+    return ok(result)
 
 
 async def _list_proposals(ctx: ToolContext, args: dict) -> str:
@@ -287,8 +332,11 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                     "done. The outcome arrives as an inbox note on a later cycle. "
                     "Check list_proposals first if the thing you are about to ask for sounds "
                     "like something you may have already asked -- a pending proposal is still "
-                    "waiting on a human, and asking again just duplicates the Slack message; a "
-                    "recently rejected one probably should not be re-asked either. "
+                    "waiting on a human, and asking again just duplicates the Slack message. "
+                    "A proposal whose kind and target match a rejection from the last "
+                    "REJECTION_MEMORY_DAYS days is refused outright -- see the 'Filip has said "
+                    "no to' section of your context; if you genuinely have new evidence, say so "
+                    "to him in Slack instead of re-proposing. "
                     "Kinds: sonos_say (payload {\"text\": ...}, speaks aloud, refused between "
                     "22:00 and 07:00), ha_todo_add (payload {\"item\": ...}), ha_service "
                     "(payload {\"service\": \"light.turn_off\", \"entity_id\": \"light.kitchen\", "
@@ -311,8 +359,12 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                             "type": "string",
                             "description": (
                                 "Short subject naming this proposal, e.g. 'roborock' or "
-                                "'pool-pump'. Never 'chat' -- that thread is reserved for "
-                                "Filip's own open conversation with you and is repointed "
+                                "'pool-pump'. Reuse an existing topic (see 'active_topics' in "
+                                "this tool's own past results, or slack_post's) rather than a "
+                                "close variant of one -- 'pool-pump-bug' is routed into an "
+                                "existing 'pool-pump' thread automatically, but naming it "
+                                "directly is clearer. Never 'chat' -- that thread is reserved "
+                                "for Filip's own open conversation with you and is repointed "
                                 "every time he starts a new one."
                             ),
                         },

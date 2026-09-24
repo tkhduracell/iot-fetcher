@@ -84,6 +84,7 @@ class Settings:
     repo_slug: str
     repo_ref: str
     repo_refresh_h: int
+    rejection_memory_days: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -183,4 +184,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         repo_slug=get("REPO_SLUG", "tkhduracell/iot-fetcher"),
         repo_ref=get("REPO_REF", "main"),
         repo_refresh_h=max(1, get_int("REPO_REFRESH_H", 6)),
+        # How long a rejection keeps blocking a repeat proposal on the same
+        # kind+target -- see propose.py's rejection-memory guard. 30 days is
+        # long enough that "Filip said no last week" still holds, short enough
+        # that a genuinely stale objection eventually stops gatekeeping.
+        rejection_memory_days=get_int("REJECTION_MEMORY_DAYS", 30),
     )

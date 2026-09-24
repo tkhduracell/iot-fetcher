@@ -1,7 +1,13 @@
 """The brain's voice. Experts have none -- they note the brain instead.
 
 ``slack_post`` writes into the plain thread named by ``topic``, creating it
-on first use.
+on first use -- or, if ``topic`` normalizes to (or shares a '-'-boundary
+prefix with) an existing session's topic, into that thread instead. See
+``SlackOut.resolve_topic``: this is what keeps ``pool-pump-bug`` from opening
+a second thread next to an existing ``pool-pump``. Every result names the
+topic it actually posted under and the handful of other topics currently
+active, so a model that is about to invent a new name sees what already
+exists first.
 
 Filip's notes are owed a reply. ``owed_replies`` names the topics a cycle's
 inbox is waiting on (``ANY_TOPIC`` for a bare DM with no thread yet, which any
@@ -69,11 +75,20 @@ async def _slack_post(ctx: ToolContext, args: dict) -> str:
         ts = await out.post(topic, str(args["text"]))
     except SlackRateCapped as exc:
         return err(str(exc))
+    # owed_replies is built from the inbox note's own `topic:` line, never
+    # from a session -- discard against what was asked for, not wherever
+    # resolve_topic (inside out.post) actually routed the reply.
     owed = ctx.extras.get("owed_replies")
     if owed:
         owed.discard(topic)
         owed.discard(ANY_TOPIC)
-    return ok({"ts": ts})
+    # resolve_topic runs again here (post() already ran it once, internally)
+    # purely to report back where the message actually landed -- cheap, since
+    # it is just a sessions.json read, and the alternative is threading the
+    # resolved topic out of post() for every caller that does not need it.
+    resolved = out.resolve_topic(topic)
+    result = {"ts": ts, "topic": resolved, "active_topics": out.recent_topics()}
+    return ok(result)
 
 
 def register_slack_tools(registry: ToolRegistry) -> None:
@@ -86,7 +101,11 @@ def register_slack_tools(registry: ToolRegistry) -> None:
                     "from you -- your journal and facts are private, he never reads them, "
                     "so answering him there reaches nobody. Each topic is its own threaded "
                     "conversation, so reuse the same short topic for follow-ups and pick a "
-                    "new one for a new subject. The 'chat' topic is the exception: it is his "
+                    "new one for a new subject -- a close variant of an existing topic "
+                    "(e.g. 'pool-pump-bug' when 'pool-pump' already exists) is routed into "
+                    "that existing thread automatically, but prefer typing the existing name "
+                    "outright. The result names every currently active topic; check it before "
+                    "picking a new one. The 'chat' topic is the exception: it is his "
                     "own open conversation with you, so use it only to reply to a note whose "
                     "`topic:` line already says chat -- never to start something new, since "
                     "it gets repointed to whatever thread he last opened, not the one this "

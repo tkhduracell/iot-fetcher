@@ -32,10 +32,11 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
 from ai_brain.llm import ChainExhausted, Message, ProviderChain
@@ -652,6 +653,9 @@ class AgentLoop:
 
     def _opening_messages(self, notes: list[Note]) -> list[Message]:
         context = self.memory.read_context(self.constitution, notes=notes)
+        rejections = self._rejection_memory_section()
+        if rejections:
+            context += "\n\n" + rejections
         system = context + "\n\n" + CYCLE_INSTRUCTIONS
         if self.memory.needs_compaction():
             system += "\n\n" + COMPACTION_INSTRUCTIONS
@@ -664,6 +668,23 @@ class AgentLoop:
                 f"Begin your think cycle. Current time: {now}.\n\nAngle for this cycle: {angle}",
             ),
         ]
+
+    def _rejection_memory_section(self) -> str:
+        """"Filip has said no to" -- rendered fresh every cycle, from the outbox.
+
+        Not stored anywhere: the outbox is already the source of truth, and a
+        cached copy would drift the moment a proposal is rejected mid-cycle by
+        another loop. Missing entirely (no approvals configured, e.g. a test
+        harness) is silence, not an error -- the same posture ``propose``
+        itself takes when Slack is unreachable.
+        """
+        approvals = self.ctx.extras.get("approvals")
+        if approvals is None:
+            return ""
+        days = getattr(self.ctx.settings, "rejection_memory_days", 30)
+        since = datetime.fromtimestamp(self.clock(), UTC) - timedelta(days=days)
+        groups = rejected_groups(approvals.all(), since=since)
+        return rejection_memory_section(groups)
 
     async def _finish(
         self,

@@ -30,11 +30,16 @@ def test_defaults_from_empty_env():
     assert s.repo_slug == "tkhduracell/iot-fetcher"
     assert s.repo_ref == "main"
     assert s.repo_refresh_h == 6
+    assert s.rejection_memory_days == 30
 
 
 def test_repo_settings_are_overridable():
     s = load_settings({"REPO_SLUG": "someone/fork", "REPO_REF": "dev", "REPO_REFRESH_H": "1"})
     assert (s.repo_slug, s.repo_ref, s.repo_refresh_h) == ("someone/fork", "dev", 1)
+
+
+def test_rejection_memory_days_is_overridable():
+    assert load_settings({"REJECTION_MEMORY_DAYS": "7"}).rejection_memory_days == 7
 
 
 def test_repo_refresh_h_floors_at_one():

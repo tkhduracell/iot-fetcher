@@ -65,6 +65,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,43 @@ SUGGESTED_PROMPTS = [
 
 class SlackRateCapped(Exception):
     """Raised when a post would exceed the hourly cap. Never swallowed here."""
+
+
+# How many trailing "-2026-09-24"-style or bare "-2" suffixes normalize_topic
+# strips. One pass handles the observed sprawl (``think-cycle-2026-09-24``,
+# ``pool-pump-2``); a topic is never chained deep enough to need more, and an
+# unbounded loop would risk eating a topic that is legitimately all digits.
+_TRAILING_DATE_OR_INDEX = re.compile(
+    r"(-\d{4}-\d{2}-\d{2}|-\d{1,2})+$"
+)
+_SEPARATORS = re.compile(r"[\s_]+")
+_REPEATED_DASHES = re.compile(r"-{2,}")
+
+
+def normalize_topic(topic: str) -> str:
+    """A topic's canonical form, for matching -- never for display or storage.
+
+    Lowercases, turns whitespace/underscores into ``-``, strips a trailing
+    date (``-2026-09-24``) or index (``-2``) suffix, and collapses repeated
+    dashes left behind by any of that. ``think-cycle-2026-09-24`` and
+    ``Think Cycle`` both normalize to ``think-cycle``; ``pool-pump-bug``
+    normalizes to itself, since ``bug`` is not a date or a bare index -- the
+    prefix match in ``SlackOut.resolve_topic`` is what folds that one in.
+    """
+    slug = _SEPARATORS.sub("-", topic.strip().lower())
+    slug = _TRAILING_DATE_OR_INDEX.sub("", slug)
+    slug = _REPEATED_DASHES.sub("-", slug).strip("-")
+    return slug
+
+
+def _shares_dash_prefix(a: str, b: str) -> bool:
+    """Whether one of two normalized topics is a '-'-boundary prefix of the
+    other -- ``pool-pump`` of ``pool-pump-bug``, but not ``pool`` of
+    ``pool-pump`` (a whole segment must match, not a partial word)."""
+    if not a or not b:
+        return False
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return longer == shorter or longer.startswith(shorter + "-")
 
 
 class SlackOut:
@@ -243,8 +281,11 @@ class SlackOut:
 
         ``blocks`` is Block Kit content (e.g. approval buttons); ``text`` is
         still sent as the fallback string Slack shows in notifications and to
-        clients that do not render blocks.
+        clients that do not render blocks. ``topic`` is resolved against
+        existing sessions first (see ``resolve_topic``), so ``pool-pump-bug``
+        lands in an existing ``pool-pump`` thread instead of opening its own.
         """
+        topic = self.resolve_topic(topic)
         self._check_cap()
         ts = await self._send(topic, text, blocks)
         if ts != "queued":
@@ -335,6 +376,61 @@ class SlackOut:
             path.unlink()
             sent += 1
         return sent
+
+    # -- topic routing ---------------------------------------------------
+
+    def resolve_topic(self, topic: str) -> str:
+        """The existing session topic ``topic`` should post into, or itself.
+
+        Three tries, in order: an exact match (the common case -- nothing to
+        do); a match on ``normalize_topic`` (``Think Cycle`` finds
+        ``think-cycle``); and a '-'-boundary prefix match either direction
+        (``pool-pump-bug`` finds an existing ``pool-pump``, and a first-ever
+        ``pool-pump`` post later finds an existing longer ``pool-pump-bug`` if
+        that happened to be created first) -- picking the existing topic whose
+        normalized form is shortest, on the reasoning that the shorter one is
+        the more likely "real" subject a longer variant sprawled off of. No
+        match creates a new session under ``topic`` unchanged, exactly like
+        before this existed. ``CHAT_TOPIC`` is never a match target or a
+        candidate: it is not a subject, it is Filip's own reserved thread.
+        """
+        if topic == CHAT_TOPIC:
+            return topic
+        sessions = self._read_sessions()
+        if topic in sessions:
+            return topic
+        candidates = [t for t in sessions if t != CHAT_TOPIC]
+        if not candidates:
+            return topic
+        normalized = normalize_topic(topic)
+        exact = [t for t in candidates if normalize_topic(t) == normalized]
+        if exact:
+            return min(exact, key=len)
+        prefixed = [
+            t
+            for t in candidates
+            if _shares_dash_prefix(normalized, normalize_topic(t))
+        ]
+        if prefixed:
+            return min(prefixed, key=len)
+        return topic
+
+    def recent_topics(self, limit: int = 15) -> list[str]:
+        """The most recently active session topics, newest first.
+
+        For the ``slack_post``/``propose`` tool descriptions: naming the
+        topics that already exist is what lets the model reuse one instead of
+        inventing a near-duplicate, which is the whole reason
+        ``resolve_topic`` exists in the first place -- prevention alongside
+        the cure. Ordered by ``thread_ts``, Slack's own message timestamp, so
+        this is "most recently created", not "most recently posted to" (the
+        session map does not record the latter); close enough to steer a
+        model away from spawning a new thread for an active subject.
+        """
+        sessions = self._read_sessions()
+        topics = [t for t in sessions if t != CHAT_TOPIC]
+        topics.sort(key=lambda t: sessions[t].get("thread_ts", ""), reverse=True)
+        return topics[: max(limit, 0)]
 
     # -- reading -------------------------------------------------------
 

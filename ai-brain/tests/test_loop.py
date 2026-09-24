@@ -1,9 +1,11 @@
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from ai_brain.approvals import Approvals
 from ai_brain.config import load_settings
 from ai_brain.events import EventBus
 from ai_brain.ledger import Ledger, Limits
@@ -1588,3 +1590,131 @@ async def test_state_file_with_unknown_status_is_ignored(
     assert loop.last_cycle_at == 123.0
     # Only the recognised status in cycle_counts survives.
     assert loop.cycle_counts == {"ok": 3}
+
+
+# -- rejection memory in the opening context ----------------------------
+
+
+def _dt_clock(wall):
+    """Approvals wants a datetime clock; the loop's own `wall` is epoch
+    seconds -- this is the one conversion every test below shares."""
+
+    def _now():
+        return datetime.fromtimestamp(wall(), UTC)
+
+    return _now
+
+
+async def _reject_one(approvals, kind: str, payload: dict, topic: str = "#home") -> None:
+    p = await approvals.propose(kind, payload, "why", topic)
+    await approvals.on_reaction(p.slack_ts, "x")
+
+
+async def test_a_rejected_target_appears_in_the_opening_context(make_loop, brain_dir, wall):
+    approvals = Approvals(brain_dir, executors=None, clock=_dt_clock(wall), on_message=_always_ts)
+    await _reject_one(approvals, "ha_todo_add", {"item": "buy filters"}, "house-ops")
+
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))]
+    )
+    loop.ctx.extras["approvals"] = approvals
+
+    await loop.run_cycle()
+
+    system = provider.calls[0][0][0].content
+    assert "Filip has said no to" in system
+    assert "buy filters" in system
+
+
+async def test_no_rejections_means_no_section_at_all(make_loop, brain_dir, wall):
+    """An empty heading would cost prompt budget for nothing -- see
+    rejection_memory_section's own docstring."""
+    approvals = Approvals(brain_dir, executors=None, clock=_dt_clock(wall), on_message=_always_ts)
+
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))]
+    )
+    loop.ctx.extras["approvals"] = approvals
+
+    await loop.run_cycle()
+
+    system = provider.calls[0][0][0].content
+    assert "Filip has said no to" not in system
+
+
+async def test_no_approvals_configured_is_silent_not_an_error(make_loop):
+    """ctx.extras has no "approvals" key at all -- the default for every other
+    make_loop test in this file. Must not raise."""
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))]
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    system = provider.calls[0][0][0].content
+    assert "Filip has said no to" not in system
+
+
+async def test_an_old_rejection_outside_the_window_is_not_shown(make_loop, brain_dir, wall):
+    approvals = Approvals(brain_dir, executors=None, clock=_dt_clock(wall), on_message=_always_ts)
+    await _reject_one(approvals, "ha_todo_add", {"item": "buy filters"}, "house-ops")
+
+    wall.state["t"] += 40 * 24 * 3600  # 40 days, past the 30-day default
+
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))]
+    )
+    loop.ctx.extras["approvals"] = approvals
+
+    await loop.run_cycle()
+
+    system = provider.calls[0][0][0].content
+    assert "Filip has said no to" not in system
+
+
+async def test_an_expert_loop_also_sees_rejection_memory(
+    registry, wall, tmp_path, brain_dir, expert_dir
+):
+    """"the brain and experts don't see rejection history" -- both loops share
+    the same outbox, so an expert cycle renders the same section."""
+    approvals = Approvals(brain_dir, executors=None, clock=_dt_clock(wall), on_message=_always_ts)
+    await _reject_one(approvals, "ha_todo_add", {"item": "buy filters"}, "house-ops")
+
+    provider = FakeProvider(
+        "fake:1",
+        script=[reply("done", call("end_cycle", "c", next_wake_minutes=5, summary="s"))],
+    )
+    ledger = Ledger(
+        {"fake:1": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "ledger.json", clock=wall
+    )
+    chain = ProviderChain([provider], ledger)
+    ctx = ToolContext(
+        loop="energy",
+        memory=expert_dir,
+        memories={"brain": brain_dir, "energy": expert_dir},
+        settings=load_settings({}),
+        wake=lambda _name: None,
+        extras={"approvals": approvals},
+    )
+    loop = AgentLoop(
+        name="energy",
+        memory=expert_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="expert",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+
+    await loop.run_cycle()
+
+    system = provider.calls[0][0][0].content
+    assert "Filip has said no to" in system
+
+
+async def _always_ts(topic: str, text: str, blocks=None) -> str:
+    return "1.1"
