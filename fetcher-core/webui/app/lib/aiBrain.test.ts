@@ -1053,6 +1053,26 @@ describe('decodeEscapes', () => {
   it('handles an empty string', () => {
     expect(decodeEscapes('')).toBe('');
   });
+
+  it('keeps an escaped backslash followed by a literal n as \\n, not a real newline', () => {
+    // Source code containing the two characters `\` and `n` (e.g. a string
+    // literal `"\n"` inside a code_read body) comes back from json.dumps as
+    // four characters: \, \, \, n -- i.e. the JS string '\\\\n'. A naive
+    // sequential-replace decoder resolves the \n half first and turns this
+    // into a backslash plus a real newline; the single-pass version must
+    // instead consume the \\ as one escape and leave the following n alone.
+    expect(decodeEscapes('a\\\\nb')).toBe('a\\nb');
+  });
+
+  it('decodes a \\uXXXX escape to its character', () => {
+    expect(decodeEscapes('sm\\u00e5 \\u00e4pplen')).toBe('små äpplen');
+  });
+
+  it('decodes a mixed code snippet: real newlines, an escaped backslash-n, and non-ASCII', () => {
+    const input = 'def f():\\n    s = "\\\\n"  # kommentar om \\u00e5\\u00e4\\u00f6\\n    return s';
+    const expected = 'def f():\n    s = "\\n"  # kommentar om åäö\n    return s';
+    expect(decodeEscapes(input)).toBe(expected);
+  });
 });
 
 // ------------------------------------------------------ splitPreviewSuffix

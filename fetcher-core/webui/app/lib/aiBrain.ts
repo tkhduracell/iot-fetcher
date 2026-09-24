@@ -515,13 +515,41 @@ export function summarizeArgs(name: string, args: Record<string, string> | undef
  *  whole module exists to fix. Only used for the raw-text fallback path;
  *  `JSON.parse` already does this correctly for anything that parses. */
 export function decodeEscapes(text: string): string {
-  return text
-    .replace(/\\r\\n/g, '\n')
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
-    .replace(/\\r/g, '\n')
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\');
+  // One pass, left to right, consuming each backslash escape as it is found
+  // -- not a chain of sequential .replace() calls. Sequential replaces are
+  // wrong here: running \n before \\ would turn source code's literal `"\n"`
+  // (already escaped once by json.dumps, so `\\n` in this text) into a
+  // backslash plus a real newline instead of the literal `\n` it should stay.
+  // A single regex with no overlap between alternatives has no such ordering
+  // to get wrong. Also decodes `\uXXXX`, since a 500-char-capped preview cuts
+  // off before json.dumps's ensure_ascii-escaped non-ASCII (e.g. Swedish
+  // å/ä/ö) has a chance to matter less.
+  // `\r\n` (two escapes in the source JSON, a Windows line ending) must match
+  // as one unit ahead of the single-escape alternatives below, or `\r` alone
+  // would consume the first half and leave a stray blank line behind.
+  return text.replace(/\\(r\\n|u[0-9a-fA-F]{4}|[nrt"\\/bf])/g, (_, code: string) => {
+    switch (code) {
+      case 'r\\n':
+      case 'n':
+        return '\n';
+      case 'r':
+        return '\n';
+      case 't':
+        return '\t';
+      case '"':
+        return '"';
+      case '\\':
+        return '\\';
+      case '/':
+        return '/';
+      case 'b':
+        return '\b';
+      case 'f':
+        return '\f';
+      default:
+        return String.fromCharCode(parseInt(code.slice(1), 16));
+    }
+  });
 }
 
 /** `result_preview` is `_trunc(json.dumps(...), 500)` server-side: valid JSON
