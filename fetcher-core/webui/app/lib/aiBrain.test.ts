@@ -29,11 +29,23 @@ import {
   activeLedgerKeys,
   usefulShare,
   freshnessTone,
+  bodyEqualsTitle,
+  factQualityScore,
+  verdictLabel,
+  verdictTone,
+  isDistrustedReview,
+  modelStateLabel,
+  lastRunLabel,
+  normaliseSessionTopic,
+  groupSlackSessions,
   type AgentSummary,
+  type FactStat,
   type LanState,
   type LedgerKey,
   type Loop,
   type Proposal,
+  type Review,
+  type SlackSession,
   type Status,
 } from './aiBrain';
 
@@ -360,10 +372,11 @@ describe('quotaCounts', () => {
     expect(quotaCounts(undefined as unknown as number, 200)).toBe('0/200');
   });
 
-  it('shows an infinity denominator for an unmetered key regardless of its limit', () => {
+  it('drops the denominator entirely for an unmetered key regardless of its limit', () => {
     // A lan: key carries UNMETERED's real (huge) Limits, not 0 -- unmetered
-    // must win over the numeric limit or this would still print "2/1000000".
-    expect(quotaCounts(2, 1_000_000, true)).toBe('2/∞');
+    // must win over the numeric limit or this would still print "2/1000000",
+    // and even "2/∞" reads as a budget when there isn't one.
+    expect(quotaCounts(2, 1_000_000, true)).toBe('2');
   });
 });
 
@@ -732,5 +745,196 @@ describe('freshnessTone', () => {
     expect(freshnessTone(now - 3 * 86_400, now)).toBe('warn');
     expect(freshnessTone(now - 30 * 86_400, now)).toBe('error');
     expect(freshnessTone(null, now)).toBe('idle');
+  });
+});
+
+// ------------------------------------------------------ wall fact ranking
+
+describe('bodyEqualsTitle', () => {
+  it('drops a fact whose body is just its title restated', () => {
+    expect(bodyEqualsTitle('Pooltemperatur', 'Pooltemperatur')).toBe(true);
+    expect(bodyEqualsTitle('Pooltemperatur', 'pooltemperatur.')).toBe(true);
+    expect(bodyEqualsTitle('Pooltemperatur', '  Pooltemperatur  ')).toBe(true);
+  });
+
+  it('keeps a fact whose body says something beyond the title', () => {
+    expect(bodyEqualsTitle('Pooltemperatur', 'Pooltemperatur är 26 grader.')).toBe(false);
+  });
+
+  it('is false with no body yet, rather than treating absence as a match', () => {
+    expect(bodyEqualsTitle('Pooltemperatur', undefined)).toBe(false);
+    expect(bodyEqualsTitle('Pooltemperatur', '')).toBe(false);
+  });
+});
+
+describe('factQualityScore', () => {
+  const now = 1_000_000;
+  const stat = (over: Partial<FactStat>): FactStat => ({
+    name: 'f',
+    title: 'F',
+    written_at: now,
+    first_written_at: now,
+    writes: 1,
+    ...over,
+  });
+
+  it('ranks a fact reaffirmed many times over a fresh single write', () => {
+    const oftenWritten = factQualityScore(stat({ writes: 8, written_at: now - 5 * 86_400 }), now, null);
+    const freshOnce = factQualityScore(stat({ writes: 1, written_at: now }), now, null);
+    expect(oftenWritten).toBeGreaterThan(freshOnce);
+  });
+
+  it('scores a fresher fact above an equally-written stale one', () => {
+    const fresh = factQualityScore(stat({ writes: 2, written_at: now }), now, null);
+    const stale = factQualityScore(stat({ writes: 2, written_at: now - 20 * 86_400 }), now, null);
+    expect(fresh).toBeGreaterThan(stale);
+  });
+
+  it('demotes a fact whose expert was last reviewed wrong or stale', () => {
+    const trusted = factQualityScore(stat({ writes: 3 }), now, { ts: now, verdict: 'good', findings: '' });
+    const distrusted = factQualityScore(stat({ writes: 3 }), now, { ts: now, verdict: 'wrong', findings: '' });
+    expect(distrusted).toBeLessThan(trusted);
+  });
+
+  it('does not zero out a distrusted expert entirely', () => {
+    const distrusted = factQualityScore(stat({ writes: 3 }), now, { ts: now, verdict: 'stale', findings: '' });
+    expect(distrusted).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------------------------- review verdicts
+
+describe('verdictLabel / verdictTone / isDistrustedReview', () => {
+  it('labels every verdict in Swedish', () => {
+    expect(verdictLabel('good')).toBe('bra');
+    expect(verdictLabel('wrong')).toBe('fel');
+    expect(verdictLabel(undefined)).toBe('ogranskad');
+  });
+
+  it('tones good as ok, wrong as error, and the rest as warn', () => {
+    expect(verdictTone('good')).toBe('ok');
+    expect(verdictTone('wrong')).toBe('error');
+    expect(verdictTone('stale')).toBe('warn');
+    expect(verdictTone('repetitive')).toBe('warn');
+    expect(verdictTone('off_goal')).toBe('warn');
+    expect(verdictTone(undefined)).toBe('idle');
+  });
+
+  it('treats only wrong and stale as distrusted', () => {
+    expect(isDistrustedReview({ ts: 0, verdict: 'wrong', findings: '' })).toBe(true);
+    expect(isDistrustedReview({ ts: 0, verdict: 'stale', findings: '' })).toBe(true);
+    expect(isDistrustedReview({ ts: 0, verdict: 'good', findings: '' })).toBe(false);
+    expect(isDistrustedReview({ ts: 0, verdict: 'repetitive', findings: '' })).toBe(false);
+    expect(isDistrustedReview(null)).toBe(false);
+    expect(isDistrustedReview(undefined)).toBe(false);
+  });
+});
+
+// -------------------------------------------------- agent header labels
+
+describe('modelStateLabel', () => {
+  it('prefers the last cycle model whenever one exists', () => {
+    expect(modelStateLabel('gemini:gemini-2.5-flash', false, null, true)).toBe('2.5-flash');
+    expect(modelStateLabel('gemini:gemini-2.5-flash', true, 'other', true)).toBe('2.5-flash');
+  });
+
+  it('says a cycle is in progress, with its model when the trace has one', () => {
+    expect(modelStateLabel(null, true, 'gemini:gemini-2.5-flash', true)).toBe('pågår · 2.5-flash');
+    expect(modelStateLabel(null, true, null, true)).toBe('pågår');
+  });
+
+  it('says "okänt sedan omstart" rather than "ingen modell" when the journal has history', () => {
+    expect(modelStateLabel(null, false, null, true)).toBe('okänt sedan omstart');
+  });
+
+  it('only claims no model at all when nothing backs up any history', () => {
+    expect(modelStateLabel(null, false, null, false)).toBe('ingen modell');
+  });
+});
+
+describe('lastRunLabel', () => {
+  const now = 1_000_000;
+
+  it('prefers a real last_cycle_at over every other case', () => {
+    expect(lastRunLabel(now - 120, now, true, true)).toBe('senast 2 min sedan');
+  });
+
+  it('says a cycle is running now rather than "aldrig kört"', () => {
+    expect(lastRunLabel(null, now, true, true)).toBe('pågår nu');
+    expect(lastRunLabel(undefined, now, true, false)).toBe('pågår nu');
+  });
+
+  it('says "okänt sedan omstart" for a loop with journal history but no last_cycle_at', () => {
+    expect(lastRunLabel(null, now, false, true)).toBe('okänt sedan omstart');
+  });
+
+  it('only says "aldrig kört" when the journal backs up that claim', () => {
+    expect(lastRunLabel(null, now, false, false)).toBe('aldrig kört');
+  });
+});
+
+// ---------------------------------------------------------- slack sessions
+
+describe('normaliseSessionTopic', () => {
+  it('lowercases and dash-separates', () => {
+    expect(normaliseSessionTopic('Pool Pump Schedule')).toBe('pool-pump-schedule');
+    expect(normaliseSessionTopic('pool_pump_schedule')).toBe('pool-pump-schedule');
+  });
+
+  it('strips a trailing date so daily re-asks collapse to one topic', () => {
+    expect(normaliseSessionTopic('pool-pump-schedule-2026-09-20')).toBe('pool-pump-schedule');
+    expect(normaliseSessionTopic('pool-pump-schedule-20260920')).toBe('pool-pump-schedule');
+  });
+
+  it('strips more than one trailing date', () => {
+    expect(normaliseSessionTopic('roborock-brush-2026-09-19-2026-09-20')).toBe('roborock-brush');
+  });
+
+  it('falls back to a placeholder for an empty topic', () => {
+    expect(normaliseSessionTopic('')).toBe('okänt-ämne');
+  });
+});
+
+describe('groupSlackSessions', () => {
+  const session = (over: Partial<SlackSession>): SlackSession => ({
+    topic: 't',
+    thread_ts: '1.1',
+    channel: 'C1',
+    status: 'closed',
+    ...over,
+  });
+
+  it('folds same-topic sessions (even re-dated ones) into one group', () => {
+    const groups = groupSlackSessions([
+      session({ topic: 'pool-pump-schedule-2026-09-19', channel: 'C1', thread_ts: '1' }),
+      session({ topic: 'pool-pump-schedule-2026-09-20', channel: 'C2', thread_ts: '2' }),
+      session({ topic: 'roborock-brush', channel: 'C3', thread_ts: '3' }),
+    ]);
+    expect(groups).toHaveLength(2);
+    const pool = groups.find((g) => g.topic === 'pool-pump-schedule');
+    expect(pool?.sessions).toHaveLength(2);
+  });
+
+  it('orders groups by member count, largest first', () => {
+    const groups = groupSlackSessions([
+      session({ topic: 'a' }),
+      session({ topic: 'b' }),
+      session({ topic: 'b' }),
+    ]);
+    expect(groups.map((g) => g.topic)).toEqual(['b', 'a']);
+  });
+
+  it('marks a group open when any member session is still open', () => {
+    const groups = groupSlackSessions([
+      session({ topic: 'x', status: 'closed' }),
+      session({ topic: 'x', status: 'open' }),
+    ]);
+    expect(groups[0].open).toBe(true);
+  });
+
+  it('handles an empty or missing session list', () => {
+    expect(groupSlackSessions([])).toEqual([]);
+    expect(groupSlackSessions(null)).toEqual([]);
+    expect(groupSlackSessions(undefined)).toEqual([]);
   });
 });

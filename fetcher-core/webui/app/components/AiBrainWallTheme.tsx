@@ -159,12 +159,13 @@ export const Pill: React.FC<{
   /** Override the tone colour outright, for a section accent. */
   color?: string;
   title?: string;
-}> = ({ children, tone = 'idle', color, title }) => {
+  className?: string;
+}> = ({ children, tone = 'idle', color, title, className = '' }) => {
   const c = color ?? toneColor(tone);
   return (
     <span
       title={title}
-      className="inline-flex items-center px-2 py-[2px] rounded-full text-[12px] whitespace-nowrap"
+      className={`inline-flex items-center px-2 py-[2px] rounded-full text-[12px] whitespace-nowrap ${className}`}
       style={{ fontFamily: MONO, color: c, border: `1px solid ${c}`, opacity: 0.85 }}
     >
       {children}
@@ -521,8 +522,14 @@ export const WallShell: React.FC<{
       }
       style={{ background: WALL.ground, color: WALL.ink, fontFamily: SANS }}
     >
-      <header className="flex items-center justify-between gap-6 shrink-0 min-w-0">
-        <div className="flex items-baseline gap-5 min-w-0">
+      {/* `flex-wrap` is the fix for a real overlap: at desktop widths the nav
+          (VÄGGEN FLÖDE …) and headerRight (e.g. an agent page's sibling-loop
+          chips) are two `nowrap` groups that used to share one unwrapped row
+          and collide once their combined width passed the viewport. Wrapping
+          drops headerRight to its own row instead — still one glance, never
+          on top of the nav. */}
+      <header className="flex items-center flex-wrap justify-between gap-x-6 gap-y-2 shrink-0 min-w-0">
+        <div className="flex items-baseline gap-5 min-w-0 flex-wrap">
           {title && (
             <h1
               className={`${wall ? 'text-[18px]' : 'text-[16px]'} tracking-[0.28em] uppercase m-0 whitespace-nowrap`}
@@ -533,7 +540,7 @@ export const WallShell: React.FC<{
           )}
           <WallNav current={current} className="hidden md:flex" />
         </div>
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="flex items-center gap-4 min-w-0 flex-wrap justify-end">
           {headerRight}
           {close}
         </div>

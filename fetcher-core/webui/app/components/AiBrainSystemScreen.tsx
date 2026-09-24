@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   type AgentSummary,
@@ -16,6 +16,7 @@ import {
   fetchStatus,
   formatAgo,
   formatUptime,
+  groupSlackSessions,
   isExecuted,
   isPending,
   isRejected,
@@ -79,6 +80,52 @@ const Field: React.FC<{
   </div>
 );
 
+/** Groups shown before "visa alla" — a screenful, not the whole 42-session
+ *  list the deployed system page dumped in one long flat list. */
+const COLLAPSED_GROUPS = 6;
+
+/** One normalised topic and every raw session folded into it.
+ *
+ *  Channel IDs and thread timestamps are real identifiers, not something a
+ *  reader wants at a glance — they are the reason 42 sessions read as 42
+ *  distinct things instead of a handful of topics asked about on different
+ *  days. `showRaw` is the escape hatch for when they are actually needed
+ *  (debugging a specific thread), off by default. */
+const SlackSessionGroupRow: React.FC<{
+  group: ReturnType<typeof groupSlackSessions>[number];
+  showRaw: boolean;
+}> = ({ group, showRaw }) => (
+  <li className="flex flex-col gap-1 min-w-0">
+    <div className="flex items-baseline gap-3 flex-wrap min-w-0">
+      <Pill tone={group.open ? 'busy' : 'idle'}>{group.open ? 'öppen' : 'stängd'}</Pill>
+      <span className="text-[14px] break-words" style={{ fontFamily: SANS, color: WALL.ink }}>
+        {group.topic}
+      </span>
+      {group.sessions.length > 1 && (
+        <span
+          className="text-[12px] tabular-nums"
+          style={{ fontFamily: MONO, color: WALL.inkFaint }}
+        >
+          {group.sessions.length}× tråd
+        </span>
+      )}
+    </div>
+    {showRaw && (
+      <ul className="flex flex-col gap-[2px] list-none m-0 pl-4">
+        {group.sessions.map((s) => (
+          <li
+            key={`${s.channel}-${s.thread_ts}`}
+            className="text-[12px] tabular-nums"
+            style={{ fontFamily: MONO, color: WALL.inkFaint }}
+          >
+            {s.status} · {s.channel} · {s.thread_ts}
+          </li>
+        ))}
+      </ul>
+    )}
+  </li>
+);
+
 const proposalTone = (p: Proposal) =>
   isPending(p) ? 'warn' : isExecuted(p) ? 'ok' : isRejected(p) ? 'error' : 'idle';
 
@@ -130,6 +177,9 @@ const ProposalRow: React.FC<{ proposal: Proposal; now: number }> = ({ proposal, 
 );
 
 const AiBrainSystemScreen: React.FC = () => {
+  const [showAllSessions, setShowAllSessions] = useState(false);
+  const [showRawSessions, setShowRawSessions] = useState(false);
+
   const statusFetcher = useCallback((signal: AbortSignal) => fetchStatus(signal), []);
   const agentsFetcher = useCallback((signal: AbortSignal) => fetchAgents(signal), []);
   const proposalsFetcher = useCallback((signal: AbortSignal) => fetchProposals(signal), []);
@@ -162,6 +212,8 @@ const AiBrainSystemScreen: React.FC = () => {
   const agentList = agents.data?.agents ?? [];
   const proposalList = proposals.data?.proposals ?? [];
   const sessions = slackSessions.data?.sessions ?? [];
+  const sessionGroups = useMemo(() => groupSlackSessions(sessions), [sessions]);
+  const shownGroups = showAllSessions ? sessionGroups : sessionGroups.slice(0, COLLAPSED_GROUPS);
 
   const offline = !s && Boolean(status.error);
 
@@ -243,8 +295,8 @@ const AiBrainSystemScreen: React.FC = () => {
                 className="text-[12px] tabular-nums break-words"
                 style={{ fontFamily: MONO, color: WALL.inkFaint }}
               >
-                {shortModel(k.key)} · 0 av{' '}
-                {k.key.startsWith('lan:') ? '∞' : k.requests_limit || '–'} anrop
+                {shortModel(k.key)} · 0 anrop
+                {k.key.startsWith('lan:') ? '' : ` av ${k.requests_limit || '–'}`}
               </li>
             ))}
           </ul>
@@ -410,28 +462,45 @@ const AiBrainSystemScreen: React.FC = () => {
               Inga aktiva trådar.
             </EmptyState>
           ) : (
-            <ul className="flex flex-col gap-2 list-none m-0 p-0">
-              {sessions.map((session) => (
-                <li
-                  key={`${session.channel}-${session.thread_ts}`}
-                  className="flex items-baseline gap-3 flex-wrap min-w-0"
+            <div className="flex flex-col gap-2 min-w-0">
+              <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                <span
+                  className="text-[12px]"
+                  style={{ fontFamily: MONO, color: WALL.inkFaint }}
                 >
-                  <Pill tone={session.status === 'open' ? 'busy' : 'idle'}>{session.status}</Pill>
-                  <span
-                    className="text-[14px] break-words"
-                    style={{ fontFamily: SANS, color: WALL.ink }}
-                  >
-                    {session.topic || '(utan ämne)'}
-                  </span>
-                  <span
-                    className="text-[12px] tabular-nums"
-                    style={{ fontFamily: MONO, color: WALL.inkFaint }}
-                  >
-                    {session.channel} · {session.thread_ts}
-                  </span>
-                </li>
-              ))}
-            </ul>
+                  {sessionGroups.length} {sessionGroups.length === 1 ? 'ämne' : 'ämnen'} ·{' '}
+                  {sessions.length} {sessions.length === 1 ? 'tråd' : 'trådar'} totalt
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowRawSessions((v) => !v)}
+                  aria-pressed={showRawSessions}
+                  className="text-[12px] underline cursor-pointer bg-transparent p-0"
+                  style={{ fontFamily: SANS, color: WALL.inkDim, border: 'none' }}
+                >
+                  {showRawSessions ? 'dölj kanal-id och tidsstämplar' : 'visa kanal-id och tidsstämplar'}
+                </button>
+              </div>
+
+              <ul className="flex flex-col gap-2 list-none m-0 p-0">
+                {shownGroups.map((group) => (
+                  <SlackSessionGroupRow key={group.topic} group={group} showRaw={showRawSessions} />
+                ))}
+              </ul>
+
+              {sessionGroups.length > COLLAPSED_GROUPS && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSessions((v) => !v)}
+                  className="self-start text-[12px] underline cursor-pointer bg-transparent p-0"
+                  style={{ fontFamily: SANS, color: WALL.inkDim, border: 'none' }}
+                >
+                  {showAllSessions
+                    ? 'visa färre ämnen'
+                    : `visa alla ${sessionGroups.length} ämnen`}
+                </button>
+              )}
+            </div>
           )}
         </div>
       </Section>
