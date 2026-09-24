@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ai_brain import sensitive
-from ai_brain.introspection import proposal_loops, usefulness_rows
+from ai_brain.introspection import proposal_loops, token_rows, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
 from ai_brain.memory import MemoryDir
@@ -147,6 +147,7 @@ async def _system_status(ctx: ToolContext, _args: dict) -> str:
         {
             "cycles": cycles,
             "usefulness": usefulness_rows(loops),
+            "tokens": token_rows(loops),
             "proposal_loops": proposal_loops(approvals)["loops"],
             "ledger": ledger.usage(),
             "lan_hosts": _lan_summary(ctx.extras.get("chain")),
@@ -154,6 +155,7 @@ async def _system_status(ctx: ToolContext, _args: dict) -> str:
                 "ai_brain_cycle_total (labels: loop, status)",
                 "ai_brain_loop_last_cycle_seconds (labels: loop)",
                 "ai_brain_ledger_remaining (labels: model, kind)",
+                "ai_brain_loop_tokens_total (labels: loop, kind)",
             ],
         }
     )

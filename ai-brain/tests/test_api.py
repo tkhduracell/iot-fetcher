@@ -958,6 +958,21 @@ async def test_usefulness_buckets_every_status_loop_py_records(client, system):
     }
 
 
+async def test_tokens_reports_each_loops_share(client, system):
+    system.loops["brain"].token_counts = {"prompt": 600, "completion": 0}
+    system.loops["brain"].cycle_counts = {"ok": 2}
+    system.loops["energy"].token_counts = {"prompt": 150, "completion": 50}
+
+    body = await get_json(client, "/api/tokens")
+
+    assert body["total"] == 800
+    brain = body["loops"][0]
+    assert brain["name"] == "brain"
+    assert brain["share"] == 0.75
+    assert brain["per_cycle"] == 300
+    assert brain["heartbeat_s"] == 1800
+
+
 async def test_usefulness_keeps_an_unknown_status_rather_than_dropping_it(
     client, system
 ):

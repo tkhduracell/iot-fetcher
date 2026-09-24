@@ -33,6 +33,8 @@ def render(loops: dict[str, Any], ledger: Ledger, now: float) -> list[str]:
         tag = _tag(name)
         for status, count in loop.cycle_counts.items():
             lines.append(f"ai_brain_cycle_total,loop={tag},status={_tag(status)} value={count}i")
+        for kind, count in loop.token_counts.items():
+            lines.append(f"ai_brain_loop_tokens_total,loop={tag},kind={_tag(kind)} value={count}i")
         # A loop that has never finished a cycle has no age to report; a zero
         # would read as "just ran", which is the opposite of the truth.
         if loop.last_cycle_at > 0:
