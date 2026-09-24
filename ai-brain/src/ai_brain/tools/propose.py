@@ -12,6 +12,8 @@ let the brain decide whether it is worth a human's attention.
 
 from __future__ import annotations
 
+import re
+
 from ai_brain.approvals import KINDS, PENDING
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
@@ -25,6 +27,125 @@ BRAIN_ONLY = frozenset({"brain"})
 # yesterday" without that.
 RECENT_TERMINAL_LIMIT = 20
 
+# On a weak local fallback model, ``propose`` sometimes gets called with the
+# model's own prompt text as the item -- "Start the think cycle", "Pick up an
+# open thread. Read your recent journal…" -- rather than anything Filip
+# should see in Slack. 17 of 23 real proposals were this junk. The guard below
+# catches it before a human ever sees the message, and the error names the
+# reason so the model can learn what "an actual request" looks like instead of
+# just trying again with the same words.
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+# Topics that name the *mechanism* of thinking rather than a subject a human
+# would recognise -- the giveaway that the model proposed its own scaffolding
+# instead of a request. "chat" is deliberately not included here: it is
+# Filip's own reserved topic name, already refused by approvals.propose with
+# a more specific reason ("is reserved; pick a topic naming this proposal"),
+# and that error must not be shadowed by this more generic one.
+#
+# Checked two ways: word-for-word (catches "think", "cycle" appearing amongst
+# other words) and as whole compounds joined by "_"/"-" (catches "wake_up",
+# "next-wake" as units, where splitting on underscore would otherwise turn
+# "wake_up" into the words "wake" and "up" and "up" alone means nothing).
+_META_TOPIC_WORDS = frozenset(
+    {
+        "think",
+        "thinking",
+        "cycle",
+        "wake",
+        "unfinished",
+        "thread",
+        "greeting",
+        "greetings",
+    }
+)
+_META_TOPIC_COMPOUNDS = frozenset({"wake_up", "wake-up", "next_wake", "next-wake"})
+
+# A title/body must share at least this fraction of its tokens with a known
+# prompt sentence to count as a restatement of it rather than a coincidence.
+_ANGLE_OVERLAP_THRESHOLD = 0.6
+
+MIN_ITEM_WORDS = 3
+
+
+def _words(text: str) -> frozenset[str]:
+    return frozenset(_WORD_RE.findall(text.lower()))
+
+
+def _prompt_sentences() -> tuple[str, ...]:
+    """Every sentence the model is ever shown as an instruction, not a request.
+
+    Imported lazily (inside the function, not at module scope) to avoid a
+    circular import at process start: ``ai_brain.loop`` imports
+    ``ai_brain.tools`` (this package's ``__init__``), so importing
+    ``ai_brain.loop`` back at ``propose.py``'s own module scope would run
+    while that package init is still mid-import.
+    """
+    from ai_brain.loop import BRAIN_ANGLES, CYCLE_INSTRUCTIONS, EXPERT_ANGLES
+
+    sentences = list(BRAIN_ANGLES) + list(EXPERT_ANGLES)
+    sentences.extend(s.strip() for s in CYCLE_INSTRUCTIONS.split(".") if s.strip())
+    return tuple(sentences)
+
+
+def _echoes_a_prompt(text: str) -> str | None:
+    """The prompt sentence ``text`` most looks like a restatement of, if any."""
+    text_words = _words(text)
+    if len(text_words) < MIN_ITEM_WORDS:
+        return None
+    for sentence in _prompt_sentences():
+        sentence_words = _words(sentence)
+        if len(sentence_words) < MIN_ITEM_WORDS:
+            continue
+        overlap = len(text_words & sentence_words)
+        smaller = min(len(text_words), len(sentence_words))
+        if smaller and overlap / smaller >= _ANGLE_OVERLAP_THRESHOLD:
+            return sentence
+    return None
+
+
+# Only the payload keys that carry prose a human would actually read in
+# Slack -- "item" for ha_todo_add, "text" for sonos_say. Deliberately not
+# every key KINDS lists for a kind: ha_service's "service" and "entity_id"
+# (e.g. "light.turn_off", "light.kitchen") and docker_restart's "container"
+# are short identifiers, not sentences a model would restate its own prompt
+# into, and checking them against MIN_ITEM_WORDS would reject every ordinary
+# entity id for being "too short".
+_PROSE_FIELDS = frozenset({"item", "text"})
+
+
+def junk_proposal_reason(kind: str, payload: dict, topic: str) -> str | None:
+    """None if this proposal looks like a real request; else why it is not.
+
+    Pure and side-effect free so it can be unit tested directly, without a
+    running approvals system. ``_propose`` is the only caller in production.
+    """
+    text_fields = [
+        str(payload[key])
+        for key in KINDS.get(kind, ())
+        if key in _PROSE_FIELDS and isinstance(payload.get(key), str)
+    ]
+    topic_norm = topic.strip().lower()
+    topic_words = _words(topic)
+
+    if (topic_words and topic_words & _META_TOPIC_WORDS) or topic_norm in _META_TOPIC_COMPOUNDS:
+        return f"topic {topic!r} names the thinking process, not a subject -- pick what this is actually about"
+
+    for field_text in text_fields:
+        stripped = field_text.strip()
+        if len(_words(stripped)) < MIN_ITEM_WORDS:
+            return f"too short to be a real request: {field_text!r}"
+        if stripped.strip().lower() == topic_norm:
+            return "the item is just the topic repeated -- say what you actually want done"
+        echoed = _echoes_a_prompt(stripped)
+        if echoed is not None:
+            return (
+                f"this restates your own instructions ({echoed!r}) rather than asking for "
+                "something -- propose the actual request that came out of following it"
+            )
+    return None
+
 
 async def _propose(ctx: ToolContext, args: dict) -> str:
     approvals = ctx.extras.get("approvals")
@@ -34,6 +155,10 @@ async def _propose(ctx: ToolContext, args: dict) -> str:
     payload = args["payload"]
     if not isinstance(payload, dict):
         return err(f"payload must be an object, got {type(payload).__name__}")
+
+    junk_reason = junk_proposal_reason(str(args["kind"]), payload, str(args["topic"]))
+    if junk_reason is not None:
+        return err(f"refused: {junk_reason}")
 
     try:
         proposal = await approvals.propose(

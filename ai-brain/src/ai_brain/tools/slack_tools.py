@@ -14,6 +14,7 @@ quietly, and left Filip looking at a spinner that eventually turned red.
 
 from __future__ import annotations
 
+from ai_brain.config import Settings
 from ai_brain.llm import ToolSpec
 from ai_brain.memory import Note
 from ai_brain.slack_io import SlackRateCapped
@@ -22,6 +23,18 @@ from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 BRAIN_ONLY = frozenset({"brain"})
 NOTE_SENDER = "filip"
 ANY_TOPIC = "*"
+
+
+def _slack_configured(settings: Settings) -> bool:
+    """Mirrors ``api.py``'s own "is Slack connected" check: both tokens set.
+
+    This is the same thing ``_out`` checks at call time via ``ctx.extras``
+    (``slack_out`` is only built when both are present -- see supervisor.py),
+    but ``available`` only ever sees ``Settings``, not the running system, so
+    it re-derives the same answer from the tokens the connection is built
+    from rather than the connection object itself.
+    """
+    return bool(settings.slack_bot_token and settings.slack_app_token)
 
 
 def owed_replies(notes: list[Note]) -> set[str]:
@@ -93,5 +106,6 @@ def register_slack_tools(registry: ToolRegistry) -> None:
             ),
             fn=_slack_post,
             loops=BRAIN_ONLY,
+            available=_slack_configured,
         )
     )

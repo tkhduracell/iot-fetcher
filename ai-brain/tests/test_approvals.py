@@ -91,7 +91,7 @@ async def call_propose(brain_dir, approvals) -> str:
             name="propose",
             args={
                 "kind": "sonos_say",
-                "payload": {"text": "hi"},
+                "payload": {"text": "the pool pump has been off for an hour"},
                 "reason": "why",
                 "topic": "#home",
             },
@@ -440,7 +440,7 @@ async def test_a_queued_post_makes_the_propose_tool_return_an_error(
                 name="propose",
                 args={
                     "kind": "sonos_say",
-                    "payload": {"text": "hi"},
+                    "payload": {"text": "the garage door is still open"},
                     "reason": "why",
                     "topic": "#home",
                 },
@@ -592,7 +592,7 @@ async def test_propose_tool_creates_a_pending_proposal(registry, make_ctx, appro
         registry,
         make_ctx(),
         kind="sonos_say",
-        payload={"text": "hi"},
+        payload={"text": "the garage door is still open"},
         reason="user asked",
         topic="#home",
     )
@@ -630,7 +630,7 @@ async def test_propose_tool_reports_the_reserved_chat_topic_as_an_error(registry
         registry,
         make_ctx(),
         kind="sonos_say",
-        payload={"text": "hi"},
+        payload={"text": "the garage door is still open"},
         reason="why",
         topic="chat",
     )
@@ -859,10 +859,20 @@ def test_all_is_empty_before_anything_is_proposed(approvals):
 async def test_list_proposals_reports_pending_and_recent(registry, make_ctx, approvals):
     ctx = make_ctx()
     pending_out = await call(
-        registry, ctx, kind="sonos_say", payload={"text": "still open"}, reason="why", topic="#home"
+        registry,
+        ctx,
+        kind="sonos_say",
+        payload={"text": "the garage door is still open"},
+        reason="why",
+        topic="#home",
     )
     done_out = await call(
-        registry, ctx, kind="sonos_say", payload={"text": "done"}, reason="why", topic="#home"
+        registry,
+        ctx,
+        kind="sonos_say",
+        payload={"text": "the garage door is now closed"},
+        reason="why",
+        topic="#home",
     )
     await approvals.on_reaction(
         [p.slack_ts for p in approvals.all() if p.id == done_out["id"]][0], "x"
@@ -873,7 +883,7 @@ async def test_list_proposals_reports_pending_and_recent(registry, make_ctx, app
     assert out["ok"] is True
     assert [p["id"] for p in out["pending"]] == [pending_out["id"]]
     assert out["pending"][0]["kind"] == "sonos_say"
-    assert out["pending"][0]["payload"] == {"text": "still open"}
+    assert out["pending"][0]["payload"] == {"text": "the garage door is still open"}
     assert [p["id"] for p in out["recent"]] == [done_out["id"]]
     assert out["recent"][0]["status"] == "rejected"
 
@@ -896,7 +906,12 @@ async def test_list_proposals_caps_recent_terminal_entries(
         # second, the way real cycles minutes apart always do.
         moving_clock.state["now"] = START + timedelta(seconds=i)
         out = await call(
-            registry, ctx, kind="sonos_say", payload={"text": str(i)}, reason="why", topic="#home"
+            registry,
+            ctx,
+            kind="sonos_say",
+            payload={"text": f"garage door check number {i}"},
+            reason="why",
+            topic="#home",
         )
         proposal = next(p for p in approvals.all() if p.id == out["id"])
         await approvals.on_reaction(proposal.slack_ts, "x")
@@ -906,7 +921,9 @@ async def test_list_proposals_caps_recent_terminal_entries(
     assert len(out["recent"]) == RECENT_TERMINAL_LIMIT
     # The oldest ones fell off, not the newest -- a reader wants what just
     # happened, not the earliest history.
-    assert out["recent"][-1]["payload"] == {"text": str(RECENT_TERMINAL_LIMIT + 4)}
+    assert out["recent"][-1]["payload"] == {
+        "text": f"garage door check number {RECENT_TERMINAL_LIMIT + 4}"
+    }
 
 
 async def test_list_proposals_is_refused_for_an_expert(registry, make_ctx):

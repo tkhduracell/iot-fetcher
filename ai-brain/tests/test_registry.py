@@ -42,6 +42,42 @@ def test_specs_for_filters_by_loop():
     assert [s.name for s in reg.specs_for("energy")] == ["everywhere"]
 
 
+def _tool_with_availability(name: str, available) -> Tool:
+    async def fn(ctx: ToolContext, args: dict) -> str:
+        return ok({"echo": args["x"]})
+
+    spec = ToolSpec(name=name, description="echo x back", parameters=SPEC)
+    return Tool(spec=spec, fn=fn, loops=None, available=available)
+
+
+def test_specs_for_omits_a_tool_whose_available_check_fails():
+    reg = ToolRegistry()
+    reg.register(echo_tool("always"))
+    reg.register(_tool_with_availability("needs_key", lambda settings: bool(settings.brave_api_key)))
+
+    unconfigured = load_settings({})
+    configured = load_settings({"BRAVE_API_KEY": "secret"})
+
+    assert [s.name for s in reg.specs_for("brain", unconfigured)] == ["always"]
+    assert {s.name for s in reg.specs_for("brain", configured)} == {"always", "needs_key"}
+
+
+def test_specs_for_without_settings_treats_every_tool_as_available():
+    """Existing call sites that never pass settings (and tests of them) must
+    keep seeing every allowlisted tool -- only a caller that opts in to
+    passing settings gets availability filtering."""
+    reg = ToolRegistry()
+    reg.register(_tool_with_availability("needs_key", lambda settings: False))
+
+    assert [s.name for s in reg.specs_for("brain")] == ["needs_key"]
+
+
+def test_a_tool_with_no_available_predicate_ignores_settings():
+    reg = ToolRegistry()
+    reg.register(echo_tool("plain"))
+    assert [s.name for s in reg.specs_for("brain", load_settings({}))] == ["plain"]
+
+
 async def test_dispatch_runs_the_tool(ctx):
     reg = ToolRegistry()
     reg.register(echo_tool())
