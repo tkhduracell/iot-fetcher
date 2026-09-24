@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ai_brain.approvals import rejected_groups, rejection_memory_section
+from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
 from ai_brain.llm import ChainExhausted, Message, ProviderChain
@@ -56,21 +57,37 @@ MAX_TOKENS = 8000
 MIN_BACKOFF_S = 60
 MAX_WAKE_S = 12 * 3600
 
-# No per-model cap (config.py's CYCLE_MAX_ROUNDS_BY_MODEL, validated at load
-# time) may push a cycle past this, whatever a generous env value says --
-# the belt to that config's braces.
-CYCLE_MAX_ROUNDS_HARD_CEILING = 64
+# Mirrors config.py's own default for CYCLE_MAX_PROMPT_TOKENS -- used only as
+# this constructor's fallback for callers (mostly tests) that build an
+# AgentLoop without going through Settings.
+CYCLE_MAX_PROMPT_TOKENS = 400_000
 
-# Sent once per cycle, two rounds before the effective cap: a cycle that is
-# about to be cut off gets one chance to land what it found rather than
-# losing an unfinished thought to max_rounds. "2" rounds is deliberately
+# CYCLE_MAX_ROUNDS_HARD_CEILING lives in config.py (it is validated there,
+# against _parse_max_rounds_by_model's own N range) and is imported rather
+# than redefined here -- two copies of the same ceiling is how they drift.
+
+# Sent once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP rounds before the effective
+# cap: a cycle that is about to be cut off gets one chance to land what it
+# found rather than losing an unfinished thought to max_rounds. Deliberately
 # small -- a nudge much earlier would fire on ordinary cycles nowhere near
 # their cap, since the cap can be as low as CYCLE_MAX_ROUNDS itself (16).
 WRAP_UP_ROUNDS_BEFORE_CAP = 2
-WRAP_UP_NUDGE = (
-    "You have 2 rounds left: write what you found (append_journal / "
-    "write_fact) and call end_cycle now."
-)
+
+
+def _wrap_up_nudge(rounds_left: int) -> str:
+    """The wrap-up nudge, with the real remaining-round count baked in.
+
+    ``rounds_left`` is ``effective_cap - rounds`` at the moment the nudge is
+    sent -- normally WRAP_UP_ROUNDS_BEFORE_CAP, but a cap that drops (a
+    mid-cycle fallback) or a token-budget cutoff can hand this a different
+    number, and a nudge that still said "2 rounds" regardless would just be
+    wrong.
+    """
+    unit = "round" if rounds_left == 1 else "rounds"
+    return (
+        f"You have {rounds_left} {unit} left: write what you found "
+        "(append_journal / write_fact) and call end_cycle now."
+    )
 
 # Tools are expected to bound their own output, but a tool that forgets would
 # otherwise push an unbounded string into the conversation -- and the
@@ -326,6 +343,42 @@ def _safe_args(args: Any) -> dict:
     }
 
 
+def _tool_result_stats(result: str) -> dict:
+    """Cheap, structured shape of a tool result, from the full string.
+
+    Computed once from a single ``json.loads`` -- never a second parse of a
+    result the caller already parsed for another reason -- and always run on
+    the untruncated result, since ``lines``/``series``/``hits`` counted off
+    ``result_preview`` would just be wrong for anything past
+    TRACE_PREVIEW_CHARS. ``chars`` is the one field that never depends on the
+    parse succeeding, so it is set first and unconditionally.
+
+    Tool results in this codebase are ``ok()``/``err()``'s own JSON envelopes
+    (see tools/__init__.py) -- an object with ``ok``/``error`` and whatever
+    payload keys the tool added -- so a result that fails to parse (a tool
+    that returned plain text, or a truncation marker appended past the
+    ``MAX_TOOL_RESULT_CHARS`` cut) just skips the rest rather than raising.
+    """
+    stats: dict[str, Any] = {"chars": len(result)}
+    try:
+        parsed = json.loads(result)
+    except (ValueError, TypeError):
+        return stats
+    if not isinstance(parsed, dict):
+        return stats
+    stats["ok"] = "error" not in parsed
+    body = parsed.get("body")
+    if isinstance(body, str):
+        stats["lines"] = len(body.splitlines())
+    series = parsed.get("series")
+    if isinstance(series, list):
+        stats["series"] = len(series)
+    hits = parsed.get("hits")
+    if isinstance(hits, list):
+        stats["hits"] = len(hits)
+    return stats
+
+
 def _round_event(loop_name: str, round_: RoundTrace) -> dict:
     """A ``round_complete`` event, in the same shape ``_trace_json`` serves.
 
@@ -362,6 +415,7 @@ class AgentLoop:
         max_rounds: int = 16,
         max_rounds_by_model: list[tuple[str, int]] | None = None,
         max_tokens: int = MAX_TOKENS,
+        max_prompt_tokens: int = CYCLE_MAX_PROMPT_TOKENS,
         call_timeout_s: int = 60,
         events: EventBus | None = None,
     ) -> None:
@@ -378,6 +432,7 @@ class AgentLoop:
         self.max_rounds = max_rounds
         self.max_rounds_by_model = list(max_rounds_by_model or [])
         self.max_tokens = max_tokens
+        self.max_prompt_tokens = max_prompt_tokens
         self.call_timeout_s = call_timeout_s
         self.events = events
         # The exact worst case for one round: every provider in the chain
@@ -511,6 +566,13 @@ class AgentLoop:
         # Fires once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP short of whatever
         # effective_cap turns out to be at the time.
         nudge_sent = False
+        # Set once trace.prompt_tokens first crosses max_prompt_tokens, to the
+        # round it happened on plus WRAP_UP_ROUNDS_BEFORE_CAP -- frozen from
+        # then on, so a per-model cap bump on a later round cannot grow
+        # effective_cap back past it (recomputing rounds + the window fresh
+        # every round would let it creep upward one round at a time). None
+        # means the budget has not been crossed yet.
+        budget_cap: int | None = None
 
         # Paused: no provider call at all, but the cycle still closes its books
         # so the pause shows up in the journal like any other outcome. The
@@ -560,19 +622,52 @@ class AgentLoop:
                 )
                 rounds += 1
                 model = reply.model
+                self.token_counts["prompt"] += reply.usage.prompt_tokens
+                self.token_counts["completion"] += reply.usage.completion_tokens
+                trace.prompt_tokens += reply.usage.prompt_tokens
+                trace.completion_tokens += reply.usage.completion_tokens
                 # Evaluated after every reply, not just once at the start: a
                 # cycle that opened on a strong model and fell back to a weak
                 # one partway through must be cut at the weak model's limit,
                 # even though it has already passed it -- so this can only
                 # ever make effective_cap *smaller* than a round already
                 # played past, never retroactively grant more rounds for
-                # rounds already spent.
-                effective_cap = self._rounds_cap(reply.key, reply.model)
+                # rounds already spent. new_cap dropping the cycle to (or
+                # past) its wrap-up window with no nudge sent yet is rescued
+                # just below, once, rather than left to end the cycle with the
+                # model never having seen a nudge at all.
+                new_cap = self._rounds_cap(reply.key, reply.model)
+                if budget_cap is None and self._prompt_budget_exceeded(trace.prompt_tokens):
+                    # First round over CYCLE_MAX_PROMPT_TOKENS: same rescue as
+                    # a cap drop -- enough extra room for one nudge, never
+                    # more -- except this one is sticky (budget_cap, once set,
+                    # is never recomputed), since a per-model cap bump on a
+                    # later round must not undo a stop the token budget
+                    # already called for.
+                    budget_cap = min(rounds + WRAP_UP_ROUNDS_BEFORE_CAP, CYCLE_MAX_ROUNDS_HARD_CEILING)
+                    log.warning(
+                        "[%s] prompt tokens (%d) exceeded CYCLE_MAX_PROMPT_TOKENS (%d)",
+                        self.name,
+                        trace.prompt_tokens,
+                        self.max_prompt_tokens,
+                    )
+                if budget_cap is not None:
+                    effective_cap = min(new_cap, budget_cap)
+                elif not nudge_sent and new_cap <= rounds + WRAP_UP_ROUNDS_BEFORE_CAP:
+                    # A cap drop (a fallback to a weaker, lower-cap model) that
+                    # lands the cycle inside or past its wrap-up window before
+                    # the nudge has ever been sent. Grant just enough extra
+                    # room for the nudge to do its job -- never less than the
+                    # dropped cap says, never more than the hard ceiling --
+                    # rather than ending the cycle mid-thought with the model
+                    # never told it was about to be cut off.
+                    effective_cap = min(
+                        max(new_cap, rounds + WRAP_UP_ROUNDS_BEFORE_CAP),
+                        CYCLE_MAX_ROUNDS_HARD_CEILING,
+                    )
+                else:
+                    effective_cap = new_cap
                 trace.cap = effective_cap
-                self.token_counts["prompt"] += reply.usage.prompt_tokens
-                self.token_counts["completion"] += reply.usage.completion_tokens
-                trace.prompt_tokens += reply.usage.prompt_tokens
-                trace.completion_tokens += reply.usage.completion_tokens
                 trace.rounds.append(
                     RoundTrace(
                         at=self.clock(),
@@ -601,11 +696,18 @@ class AgentLoop:
                     break
                 for call in reply.tool_calls:
                     result = await self.registry.dispatch(self.ctx, call)
+                    # Stats are computed from the tool's own full result,
+                    # before either truncation -- the loop's MAX_TOOL_RESULT_CHARS
+                    # backstop below or the trace's own preview cut -- since a
+                    # count of "lines" in an already-truncated body would just
+                    # be wrong.
+                    stats = _tool_result_stats(result)
                     result = self._cap_tool_result(call.name, result)
                     trace.rounds[-1].tool_results.append(
                         {
                             "name": call.name,
                             "result_preview": _trunc(result, TRACE_PREVIEW_CHARS),
+                            "stats": stats,
                         }
                     )
                     messages.append(Message("tool", result, tool_call_id=call.id, name=call.name))
@@ -616,10 +718,14 @@ class AgentLoop:
                 if not nudge_sent and rounds >= effective_cap - WRAP_UP_ROUNDS_BEFORE_CAP:
                     # Once per cycle: fires the round it first comes within
                     # WRAP_UP_ROUNDS_BEFORE_CAP of the *current* effective_cap,
-                    # so a cap that later drops (a fallback to a weaker model)
-                    # can still trigger it even if the first check came too
-                    # early to.
-                    messages.append(Message("user", WRAP_UP_NUDGE))
+                    # so a cap that later drops (a fallback to a weaker model,
+                    # or the cap-drop rescue above) can still trigger it even
+                    # if the first check came too early to. The remaining
+                    # count in the text is the real one -- effective_cap minus
+                    # rounds played so far -- not always
+                    # WRAP_UP_ROUNDS_BEFORE_CAP, since the rescue above can
+                    # leave more than that in force.
+                    messages.append(Message("user", _wrap_up_nudge(effective_cap - rounds)))
                     nudge_sent = True
 
             ended = self.ctx.extras.get("end_cycle")
@@ -632,8 +738,14 @@ class AgentLoop:
                 # nothing chose a wake, so reporting it as ``ok`` hides a loop
                 # that may be going in circles every heartbeat.
                 status = "max_rounds"
-                summary = f"hit max_rounds ({effective_cap}) without end_cycle"
-                log.warning("[%s] hit max_rounds (%d) without end_cycle", self.name, effective_cap)
+                if budget_cap is not None:
+                    summary = (
+                        f"hit CYCLE_MAX_PROMPT_TOKENS ({self.max_prompt_tokens}) "
+                        f"without end_cycle: prompt tokens reached {trace.prompt_tokens}"
+                    )
+                else:
+                    summary = f"hit max_rounds ({effective_cap}) without end_cycle"
+                log.warning("[%s] %s", self.name, summary)
         except TimeoutError:
             status, summary = (
                 "timeout",
@@ -710,6 +822,14 @@ class AgentLoop:
             if fnmatch.fnmatch(candidate, pattern):
                 return min(rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
         return min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
+
+    def _prompt_budget_exceeded(self, prompt_tokens: int) -> bool:
+        """True once a cycle's running prompt-token total passes the budget.
+
+        ``self.max_prompt_tokens == 0`` is the documented off switch -- same
+        spelling as ``HTTP_PORT``'s.
+        """
+        return self.max_prompt_tokens > 0 and prompt_tokens > self.max_prompt_tokens
 
     def _cap_tool_result(self, tool: str, result: str) -> str:
         """Keep one runaway tool result from swamping the conversation.

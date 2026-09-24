@@ -141,8 +141,9 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `LAN_SCAN_MIN` | `10` | Minutes between sweeps. |
 | `CALL_TIMEOUT_S` | `60` | Seconds one model call may take before the chain falls to the next provider. Not read by `lan:` providers, which set their own (below) -- a local model can legitimately need minutes, nothing like a cloud API's SLA. |
 | `CYCLE_MAX_ROUNDS` | `16` | Tool rounds one cycle may take before the loop stops waiting for `end_cycle`. |
-| `CYCLE_MAX_ROUNDS_BY_MODEL` | `gemini:*3.8*=32,lan:qwen3.8*=32` | Per-model override of `CYCLE_MAX_ROUNDS`: comma-separated `pattern=N` entries, matched fnmatch-style against the chain key of whichever model answered the cycle's most recent round -- the same `provider:model` shape as an `LLM_CHAIN` entry (`gemini:gemini-3.8-flash`, `lan:qwen3-coder:30b`). First match wins; no match falls back to `CYCLE_MAX_ROUNDS`. `N` must be 1-64 -- a malformed entry or an out-of-range `N` is a startup error, same as a bad `LLM_CHAIN`. See [Effort and per-model rounds](#effort-and-per-model-rounds). |
+| `CYCLE_MAX_ROUNDS_BY_MODEL` | `gemini:*3.8*=32,lan:qwen3.8*=32` | Per-model override of `CYCLE_MAX_ROUNDS`: comma-separated `pattern=N` entries, matched fnmatch-style against the chain key of whichever model answered the cycle's most recent round -- the same `provider:model` shape as an `LLM_CHAIN` entry (`gemini:gemini-3.8-flash`, `lan:qwen3-coder:30b`). First match wins; no match falls back to `CYCLE_MAX_ROUNDS`. `N` must be 1-64 -- a malformed entry or an out-of-range `N` is a startup error, same as a bad `LLM_CHAIN`. Unset or blank uses this default; `none`/`off` (case-insensitive) disables per-model caps entirely. See [Effort and per-model rounds](#effort-and-per-model-rounds). |
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
+| `CYCLE_MAX_PROMPT_TOKENS` | `400000` | Per-cycle prompt-token budget across every round combined. `0` disables it. Crossing it mid-cycle is handled the same way a per-model cap drop is -- see [Effort and per-model rounds](#effort-and-per-model-rounds). |
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
 | `REPO_SLUG` | `tkhduracell/iot-fetcher` | The public GitHub repo the `code_*` tools read (see [Reading the repo](#reading-the-repo)). |
@@ -288,17 +289,41 @@ that later falls back to an unmatched, weak model is cut at the weak model's
 limit from that round on, even if the strong model had already carried it past
 that number. No per-model entry can push a cycle past `CYCLE_MAX_ROUNDS_HARD_CEILING`
 (64) regardless of what the pattern says — a belt-and-braces ceiling on top of
-load-time validation.
+load-time validation. Unset or blank falls back to the documented default
+above; `none` or `off` (case-insensitive) turns per-model caps off entirely,
+leaving every cycle governed by the flat `CYCLE_MAX_ROUNDS`.
 
-Two rounds before the effective cap, the loop appends one wrap-up nudge to the
-conversation ("You have 2 rounds left: write what you found ... and call
-`end_cycle` now"), once per cycle — enough runway for the model to write a
+`WRAP_UP_ROUNDS_BEFORE_CAP` (2) rounds before the effective cap, the loop
+appends one wrap-up nudge to the conversation ("You have N round(s) left:
+write what you found ... and call `end_cycle` now", `N` singular/plural to
+match the real count), once per cycle — enough runway for the model to write a
 fact or journal line and call `end_cycle` cleanly rather than being cut off by
-`max_rounds` mid-thought.
+`max_rounds` mid-thought. A cap that *drops* mid-cycle (a fallback to a weaker
+model, or the token budget below) can otherwise land inside or past that
+window before the nudge has ever been sent — worst case, the fallback lands
+so late that the cycle would end on the very round the cap dropped, with the
+model never having seen a nudge at all. When that happens the drop is rescued
+once: the effective cap for that round is raised to `rounds +
+WRAP_UP_ROUNDS_BEFORE_CAP` (never above the dropped cap if that is even
+higher, and never above `CYCLE_MAX_ROUNDS_HARD_CEILING`), just enough for the
+nudge to land and for the model to get one more round to act on it. This only
+ever happens once per cycle, the same as the nudge itself.
 
 The rounds actually used and the cap in force are both in the journal line
 (`rounds=12/32`) and the trace/API (`cap`), so `journal.md` and Grafana both
 show whether a cycle is running out of room or ending early.
+
+`CYCLE_MAX_PROMPT_TOKENS` (default `400000`, `0` disables it) is the same idea
+applied to token spend instead of round count: a cycle that keeps pulling in
+large tool results round after round without ever calling `end_cycle` can burn
+through a huge prompt long before it hits any round cap. Crossing the budget
+is handled exactly like a cap drop — the wrap-up nudge fires if it has not
+already, at most `WRAP_UP_ROUNDS_BEFORE_CAP` more rounds are allowed, and the
+cycle then stops with status `max_rounds` and a summary naming the token
+budget rather than the round cap. Once the budget has stopped a cycle the stop
+is sticky for the rest of it: a later round answered by a model whose own
+`CYCLE_MAX_ROUNDS_BY_MODEL` entry would otherwise raise the cap cannot undo
+it.
 
 ## Approvals
 
@@ -567,7 +592,13 @@ brain carries on without it.
 | `GET /api/slack/sessions` | The topic-to-thread map and how many posts are queued. `configured: false` when Slack is off — a 200, not an error. |
 
 The trace is in memory only and is replaced at the start of every cycle: the
-journal is the history, this is the live view. From the box:
+journal is the history, this is the live view. Each round's `tool_results`
+entries carry a `stats` object alongside `result_preview` -- `{"chars": N}`
+always, plus `ok` (false when the parsed result has an `"error"` key),
+`lines` (a string `body`'s line count), `series` and `hits` (list lengths),
+whichever of those the tool's own result actually has. It is computed from
+the tool's full, untruncated result, so it stays accurate even once
+`result_preview` itself has been cut off. From the box:
 
 ```sh
 curl -s http://localhost:8091/api/agents/brain/trace

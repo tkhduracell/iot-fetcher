@@ -38,11 +38,17 @@ from ai_brain.tools.slack_tools import register_slack_tools
 HEARTBEAT = 900
 
 
-def reply(text: str = "", *calls: ToolCall, model: str = "fake:1", key: str = "") -> Reply:
+def reply(
+    text: str = "",
+    *calls: ToolCall,
+    model: str = "fake:1",
+    key: str = "",
+    prompt_tokens: int = 10,
+) -> Reply:
     return Reply(
         text=text,
         tool_calls=tuple(calls),
-        usage=Usage(prompt_tokens=10, completion_tokens=5),
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=5),
         model=model,
         key=key,
     )
@@ -253,7 +259,11 @@ async def test_a_round_with_tool_calls_publishes_complete_after_dispatch(make_lo
     first_complete = events[1]
     assert first_complete["round"]["tool_calls"] == [{"name": "list_facts", "args": {}}]
     assert first_complete["round"]["tool_results"] == [
-        {"name": "list_facts", "result_preview": '{"ok": true, "result": []}'}
+        {
+            "name": "list_facts",
+            "result_preview": '{"ok": true, "result": []}',
+            "stats": {"chars": 26, "ok": True},
+        }
     ]
 
 
@@ -518,7 +528,10 @@ async def test_a_mid_cycle_fallback_to_a_weak_model_is_cut_at_its_own_limit(
     one partway through is cut at the weak model's limit (the global default,
     8) as soon as that model answers -- even though the strong model had
     already carried the cycle past 8 rounds while its own, higher limit was in
-    force."""
+    force. The drop itself is rescued one round: since the nudge has not yet
+    been sent, round 11 (the first weak one) grants just enough extra room for
+    it rather than ending the cycle right there with the model never told it
+    was about to be cut off -- see the wrap-up-nudge cap-drop tests below."""
     strong = [
         reply(f"strong {i}", call("list_facts", f"s{i}"), key="gemini:gemini-3.8-flash")
         for i in range(10)
@@ -534,13 +547,16 @@ async def test_a_mid_cycle_fallback_to_a_weak_model_is_cut_at_its_own_limit(
 
     assert result.status == "max_rounds"
     # 10 rounds on the strong model (cap 20, never hit) are already in the
-    # bank when round 11 -- the first weak one -- lands and drops the
-    # effective cap straight back to 8: rounds(10) < cap(8) is already false,
-    # so the loop stops there without dispatching a 12th round.
-    assert result.rounds == 11
-    assert len(provider.calls) == 11
+    # bank when round 11 -- the first weak one -- lands and drops the model's
+    # own cap to 8. That is within WRAP_UP_ROUNDS_BEFORE_CAP (2) of round 11,
+    # so the cap-drop rescue bumps effective_cap to 11+2=13 for this once and
+    # sends the nudge; round 12 (still weak, cap 8 again, nudge already sent)
+    # is not rescued a second time, so rounds(12) < effective_cap(8) is false
+    # and the loop stops there.
+    assert result.rounds == 12
+    assert len(provider.calls) == 12
     assert result.cap == 8
-    assert "rounds=11/8" in brain_dir.journal_text(1)
+    assert "rounds=12/8" in brain_dir.journal_text(1)
 
 
 async def test_the_hard_ceiling_clamps_a_too_generous_per_model_cap(make_loop, brain_dir):
@@ -613,6 +629,186 @@ async def test_wrap_up_nudge_not_sent_when_the_cycle_ends_well_before_the_cap(
         if msg.role == "user" and "You have 2 rounds left" in msg.content
     ]
     assert nudges == []
+
+
+async def test_a_mid_cycle_cap_drop_still_gets_a_wrap_up_nudge(make_loop, brain_dir):
+    """The bug in the cap-drop test above's old expectation: a strong model
+    (cap 32-ish, here unbounded by max_rounds_by_model matching everything)
+    answers rounds 1-20, then a fallback to a weak 16-cap model lands on round
+    21 -- already past the weak cap. Without the rescue the loop would simply
+    stop there, the model never having seen the nudge at all. With it, round
+    21 is granted just enough room (21+2=23) for the nudge to land and for
+    the model to get one more round to act on it."""
+    strong = [
+        reply(f"strong {i}", call("list_facts", f"s{i}"), key="gemini:strong")
+        for i in range(20)
+    ]
+    # Round 21: the weak model's first answer, already past its own cap (16).
+    # It still calls a tool (so the round is not treated as a bare, toolless
+    # answer) rather than end_cycle, so the cycle carries on to see the nudge.
+    weak = [reply("weak 0", call("list_facts", "w0"), key="weak")]
+    weak.append(reply("done", call("end_cycle", "e", next_wake_minutes=10, summary="wrapped up"), key="weak"))
+    loop, provider = make_loop(
+        strong + weak,
+        max_rounds=16,
+        max_rounds_by_model=[("gemini:strong", 32)],
+    )
+
+    result = await loop.run_cycle()
+
+    # Round 21 (the drop) is rescued to cap 23, which is what lets round 22
+    # happen at all -- without the rescue rounds(21) < effective_cap(16) is
+    # already false and the loop stops right there. Round 22 calls end_cycle
+    # cleanly having seen the nudge, so the cycle ends "ok", not "max_rounds";
+    # its own cap (16, the weak model's again, no second rescue since the
+    # nudge was already sent) is what the result reports, since cap always
+    # reflects whichever round answered last.
+    assert result.status == "ok"
+    assert result.rounds == 22
+    assert result.cap == 16
+
+    final_messages = provider.calls[-1][0]
+    nudges = [msg for msg in final_messages if msg.role == "user" and "rounds left" in msg.content]
+    assert len(nudges) == 1
+    # Two rounds left at the moment the rescued cap (23) was set and round 21
+    # had already been played -- 23 - 21 = 2.
+    assert "You have 2 rounds left" in nudges[0].content
+
+
+async def test_the_cap_drop_rescue_never_exceeds_the_hard_ceiling(make_loop, brain_dir):
+    """A drop that lands within WRAP_UP_ROUNDS_BEFORE_CAP of the hard ceiling
+    itself must not be rescued past it -- the ceiling is belt-and-braces over
+    every other rule, the rescue included."""
+    from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
+
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), key="gemini:strong")
+        for i in range(CYCLE_MAX_ROUNDS_HARD_CEILING - 1)
+    ]
+    # The last round before the loop would stop anyway answers on a model with
+    # no match, dropping the cap to the plain default (8) -- deep within the
+    # rescue's window this close to the ceiling.
+    script.append(reply(f"round {CYCLE_MAX_ROUNDS_HARD_CEILING - 1}", call("list_facts", "last")))
+    loop, provider = make_loop(
+        script,
+        max_rounds=8,
+        max_rounds_by_model=[("gemini:strong", CYCLE_MAX_ROUNDS_HARD_CEILING)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.cap <= CYCLE_MAX_ROUNDS_HARD_CEILING
+    assert result.rounds <= CYCLE_MAX_ROUNDS_HARD_CEILING
+
+
+def test_wrap_up_nudge_text_reports_the_real_remaining_count():
+    from ai_brain.loop import _wrap_up_nudge
+
+    assert _wrap_up_nudge(2) == (
+        "You have 2 rounds left: write what you found (append_journal / "
+        "write_fact) and call end_cycle now."
+    )
+    assert _wrap_up_nudge(1) == (
+        "You have 1 round left: write what you found (append_journal / "
+        "write_fact) and call end_cycle now."
+    )
+    assert _wrap_up_nudge(5) == (
+        "You have 5 rounds left: write what you found (append_journal / "
+        "write_fact) and call end_cycle now."
+    )
+
+
+# -- per-cycle prompt-token budget ---------------------------------------
+
+
+async def test_prompt_budget_sends_the_nudge_then_stops_within_the_wrap_up_window(
+    make_loop, brain_dir
+):
+    """Crossing CYCLE_MAX_PROMPT_TOKENS mid-cycle behaves like a cap drop: the
+    nudge is sent (if not already), at most WRAP_UP_ROUNDS_BEFORE_CAP more
+    rounds are allowed, then the cycle stops with status max_rounds and a
+    summary naming the token budget rather than the round cap."""
+    # 5 rounds of 3000 prompt tokens each: the 4th round (12000) crosses a
+    # budget of 10000, at which point the nudge fires and at most 2 more
+    # rounds are allowed (rounds 4 and 5) -- round 5 is scripted to keep
+    # calling tools rather than end_cycle, so the cycle is cut off there.
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), prompt_tokens=3000) for i in range(6)
+    ]
+    loop, provider = make_loop(script, max_rounds=20, max_prompt_tokens=10_000)
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    # Budget crossed on round 4 (running total 12000); rescued to
+    # rounds(4)+WRAP_UP_ROUNDS_BEFORE_CAP(2)=6, so round 6 is the last one
+    # played.
+    assert result.rounds == 6
+    assert result.cap == 6
+    journal = brain_dir.journal_text(1)
+    assert "CYCLE_MAX_PROMPT_TOKENS" in journal
+    assert "rounds=6/6" in journal
+
+    final_messages = provider.calls[-1][0]
+    nudges = [msg for msg in final_messages if msg.role == "user" and "rounds left" in msg.content]
+    assert len(nudges) == 1
+
+
+async def test_prompt_budget_of_zero_disables_the_check(make_loop, brain_dir):
+    """0 is the documented off switch: even a running total that would
+    obviously have crossed any real budget never triggers the nudge or an
+    early stop."""
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), prompt_tokens=100_000) for i in range(3)
+    ]
+    script.append(reply("done", call("end_cycle", "e", next_wake_minutes=10, summary="s")))
+    loop, provider = make_loop(script, max_rounds=8, max_prompt_tokens=0)
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    final_messages = provider.calls[-1][0]
+    nudges = [msg for msg in final_messages if msg.role == "user" and "rounds left" in msg.content]
+    assert nudges == []
+
+
+async def test_prompt_budget_does_not_fire_when_never_crossed(make_loop, brain_dir):
+    script = [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"), prompt_tokens=10)]
+    loop, provider = make_loop(script, max_rounds=8, max_prompt_tokens=10_000)
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+
+
+async def test_prompt_budget_stop_is_sticky_even_if_a_later_model_would_raise_the_cap(
+    make_loop, brain_dir
+):
+    """Once the token budget has stopped a cycle, a per-model cap bump on a
+    later round (a fallback to a model matching a generous
+    CYCLE_MAX_ROUNDS_BY_MODEL entry) must not undo the stop -- the budget
+    reason stays in force for the rest of the cycle."""
+    over_budget = reply("big", call("list_facts", "a"), prompt_tokens=20_000, key="weak")
+    strong_after = [
+        reply(f"s{i}", call("list_facts", f"s{i}"), prompt_tokens=10, key="gemini:strong")
+        for i in range(5)
+    ]
+    loop, provider = make_loop(
+        [over_budget, *strong_after],
+        max_rounds=8,
+        max_prompt_tokens=10_000,
+        max_rounds_by_model=[("gemini:strong", 32)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    # Budget crossed on round 1 (20000 > 10000): rescued to 1+2=3, and even
+    # though round 2 onward answers on the "strong" model (cap 32 if the
+    # budget stop were not sticky), the cap never grows back past 3.
+    assert result.rounds == 3
+    assert result.cap == 3
+    assert "CYCLE_MAX_PROMPT_TOKENS" in brain_dir.journal_text(1)
 
 
 async def test_chain_exhausted_backs_off_until_retry_at(make_loop, wall, brain_dir):
@@ -1338,6 +1534,102 @@ async def test_trace_text_and_results_are_truncated(make_loop, registry):
     assert round_one.tool_calls[0]["args"]["note"].endswith("…[+1500]")
     assert len(round_one.tool_results[0]["result_preview"]) <= 500 + len("…[+3500]")
     assert "…[+" in round_one.tool_results[0]["result_preview"]
+
+
+def test_tool_result_stats_computed_from_the_full_untruncated_result():
+    from ai_brain.loop import _tool_result_stats
+
+    body = "line one\nline two\nline three"
+    result = json.dumps({"ok": True, "body": body})
+    stats = _tool_result_stats(result)
+    assert stats == {"chars": len(result), "ok": True, "lines": 3}
+
+
+def test_tool_result_stats_counts_series_and_hits():
+    from ai_brain.loop import _tool_result_stats
+
+    series_result = json.dumps({"ok": True, "series": [{"a": 1}, {"a": 2}, {"a": 3}]})
+    assert _tool_result_stats(series_result) == {
+        "chars": len(series_result),
+        "ok": True,
+        "series": 3,
+    }
+
+    hits_result = json.dumps({"ok": True, "hits": [{"h": 1}]})
+    assert _tool_result_stats(hits_result) == {"chars": len(hits_result), "ok": True, "hits": 1}
+
+
+def test_tool_result_stats_ok_is_false_on_an_error_envelope():
+    from ai_brain.loop import _tool_result_stats
+
+    result = json.dumps({"error": "policy: tool x not allowed"})
+    assert _tool_result_stats(result) == {"chars": len(result), "ok": False}
+
+
+def test_tool_result_stats_skips_the_shape_keys_on_a_parse_failure():
+    """A tool result that fails to parse as JSON (plain text, or a truncation
+    marker appended past MAX_TOOL_RESULT_CHARS) still gets a chars count --
+    the one field that never depends on the parse succeeding."""
+    from ai_brain.loop import _tool_result_stats
+
+    assert _tool_result_stats("not json at all") == {"chars": len("not json at all")}
+    assert _tool_result_stats("[1, 2, 3]") == {"chars": 9}  # valid JSON, not a dict
+    assert _tool_result_stats("") == {"chars": 0}
+
+
+async def test_tool_results_carry_stats_alongside_the_preview(make_loop, registry):
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="vm_query", description="d", parameters={"type": "object"}),
+            fn=_static(json.dumps({"ok": True, "series": [1, 2, 3, 4], "body": "a\nb"})),
+        )
+    )
+    loop, _ = make_loop(
+        [
+            reply("looking", call("vm_query", "a")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    stats = loop.trace.rounds[0].tool_results[0]["stats"]
+    assert stats["ok"] is True
+    assert stats["series"] == 4
+    assert stats["lines"] == 2
+    assert "hits" not in stats
+
+
+async def test_tool_result_stats_use_the_full_result_not_the_truncated_preview(
+    make_loop, registry
+):
+    """lines/series/hits must be counted off the tool's real output, never off
+    result_preview (capped at TRACE_PREVIEW_CHARS) or the loop's own
+    MAX_TOOL_RESULT_CHARS-truncated copy -- both would undercount a result
+    long enough to hit either limit."""
+    big_series = list(range(50))
+    huge_body_lines = "\n".join("x" * 200 for _ in range(200))  # well past both caps
+    registry.register(
+        Tool(
+            spec=ToolSpec(name="huge_query", description="d", parameters={"type": "object"}),
+            fn=_static(json.dumps({"ok": True, "series": big_series, "body": huge_body_lines})),
+        )
+    )
+    loop, _ = make_loop(
+        [
+            reply("looking", call("huge_query", "a")),
+            reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s")),
+        ]
+    )
+
+    await loop.run_cycle()
+
+    stats = loop.trace.rounds[0].tool_results[0]["stats"]
+    assert stats["series"] == 50
+    assert stats["lines"] == 200
+    # The preview itself did get truncated -- otherwise this test would not
+    # be exercising what it claims to.
+    assert "…[+" in loop.trace.rounds[0].tool_results[0]["result_preview"]
 
 
 async def test_the_trace_is_visible_from_inside_a_tool_while_the_cycle_runs(make_loop, registry):
