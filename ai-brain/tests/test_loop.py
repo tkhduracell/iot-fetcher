@@ -531,7 +531,10 @@ async def test_a_mid_cycle_fallback_to_a_weak_model_is_cut_at_its_own_limit(
     force. The drop itself is rescued one round: since the nudge has not yet
     been sent, round 11 (the first weak one) grants just enough extra room for
     it rather than ending the cycle right there with the model never told it
-    was about to be cut off -- see the wrap-up-nudge cap-drop tests below."""
+    was about to be cut off -- see the wrap-up-nudge cap-drop tests below. That
+    rescued floor (13) is then sticky for the rest of the cycle: it is not
+    recomputed back down to the weak model's own cap (8) on later rounds, or
+    the model would have been promised "2 rounds left" and then gotten fewer."""
     strong = [
         reply(f"strong {i}", call("list_facts", f"s{i}"), key="gemini:gemini-3.8-flash")
         for i in range(10)
@@ -549,14 +552,14 @@ async def test_a_mid_cycle_fallback_to_a_weak_model_is_cut_at_its_own_limit(
     # 10 rounds on the strong model (cap 20, never hit) are already in the
     # bank when round 11 -- the first weak one -- lands and drops the model's
     # own cap to 8. That is within WRAP_UP_ROUNDS_BEFORE_CAP (2) of round 11,
-    # so the cap-drop rescue bumps effective_cap to 11+2=13 for this once and
-    # sends the nudge; round 12 (still weak, cap 8 again, nudge already sent)
-    # is not rescued a second time, so rounds(12) < effective_cap(8) is false
-    # and the loop stops there.
-    assert result.rounds == 12
-    assert len(provider.calls) == 12
-    assert result.cap == 8
-    assert "rounds=12/8" in brain_dir.journal_text(1)
+    # so the cap-drop rescue fixes floor_cap to 11+2=13, sends the nudge, and
+    # that floor is sticky: every later round (still weak, own cap 8) uses
+    # max(new_cap, floor_cap) = 13, not the weak model's own, lower cap. The
+    # loop keeps going until rounds(13) < effective_cap(13) is false.
+    assert result.rounds == 13
+    assert len(provider.calls) == 13
+    assert result.cap == 13
+    assert "rounds=13/13" in brain_dir.journal_text(1)
 
 
 async def test_the_hard_ceiling_clamps_a_too_generous_per_model_cap(make_loop, brain_dir):
@@ -656,22 +659,120 @@ async def test_a_mid_cycle_cap_drop_still_gets_a_wrap_up_nudge(make_loop, brain_
 
     result = await loop.run_cycle()
 
-    # Round 21 (the drop) is rescued to cap 23, which is what lets round 22
-    # happen at all -- without the rescue rounds(21) < effective_cap(16) is
+    # Round 21 (the drop) is rescued to floor_cap=23, which is what lets round
+    # 22 happen at all -- without the rescue rounds(21) < effective_cap(16) is
     # already false and the loop stops right there. Round 22 calls end_cycle
-    # cleanly having seen the nudge, so the cycle ends "ok", not "max_rounds";
-    # its own cap (16, the weak model's again, no second rescue since the
-    # nudge was already sent) is what the result reports, since cap always
-    # reflects whichever round answered last.
+    # cleanly having seen the nudge, so the cycle ends "ok", not "max_rounds".
+    # floor_cap is sticky, so round 22's effective_cap is max(new_cap=16,
+    # floor_cap=23) = 23, not the weak model's own, lower cap -- the model was
+    # promised 2 rounds and the cap must not shrink back under it before it
+    # gets to use them.
     assert result.status == "ok"
     assert result.rounds == 22
-    assert result.cap == 16
+    assert result.cap == 23
 
     final_messages = provider.calls[-1][0]
     nudges = [msg for msg in final_messages if msg.role == "user" and "rounds left" in msg.content]
     assert len(nudges) == 1
     # Two rounds left at the moment the rescued cap (23) was set and round 21
     # had already been played -- 23 - 21 = 2.
+    assert "You have 2 rounds left" in nudges[0].content
+
+
+async def test_the_cap_drop_rescue_floor_is_sticky_across_further_drops(make_loop, brain_dir):
+    """Regression: the rescued floor must not be recomputed on a later round.
+
+    Round 11 drops the cap to a weak model's own limit (8), lands within the
+    wrap-up window, and is rescued to floor_cap = 11+2 = 13, with the nudge
+    promising "2 rounds left". If effective_cap were naively recomputed as
+    max(new_cap, rounds+2) on every later round instead of freezing floor_cap
+    at the moment it was first set, round 12 (still the weak model, still cap
+    8, rounds now 12) would recompute effective_cap = max(8, 12+2) = 14 --
+    coincidentally still growing here, so this alone would not catch the bug.
+    The real failure mode is the loop exiting *too early*: with the old,
+    non-sticky code, round 12's cap was max(new_cap, rounds+2) computed fresh
+    ignoring the floor already promised, which in the shape below collapses
+    back toward the weak model's own low cap once nudge_sent gate stops
+    re-widening it, cutting the model off after round 12 instead of round 13.
+    The provider-call count pins the model actually getting to use both of
+    its promised rounds (12 and 13), not being cut off after just one."""
+    strong = [
+        reply(f"strong {i}", call("list_facts", f"s{i}"), key="gemini:gemini-3.8-flash")
+        for i in range(10)
+    ]
+    # The weak model keeps calling tools (never end_cycle) for far more
+    # rounds than the rescue could possibly grant, so however many rounds the
+    # loop actually plays is determined purely by the cap logic, not by the
+    # script running out.
+    weak = [
+        reply(f"weak {i}", call("list_facts", f"w{i}"), key="ollama:llama3.2:3b") for i in range(20)
+    ]
+    loop, provider = make_loop(
+        strong + weak,
+        max_rounds=8,
+        max_rounds_by_model=[("gemini:*3.8*", 20)],
+    )
+
+    result = await loop.run_cycle()
+
+    # Round 11 (first weak) rescues floor_cap to 11+2=13 and sends the nudge
+    # that round. The model is promised exactly WRAP_UP_ROUNDS_BEFORE_CAP (2)
+    # more rounds after that -- rounds 12 and 13 -- and the sticky floor must
+    # deliver exactly that, not fewer.
+    assert result.status == "max_rounds"
+    assert result.rounds == 13
+    assert len(provider.calls) == 13
+    assert result.cap == 13
+
+    final_messages = provider.calls[-1][0]
+    nudge_indices = [
+        i
+        for i, msg in enumerate(final_messages)
+        if msg.role == "user" and "You have 2 rounds left" in msg.content
+    ]
+    assert len(nudge_indices) == 1
+    assistant_indices = [i for i, msg in enumerate(final_messages) if msg.role == "assistant"]
+    # The nudge landed after round 11's tool results and the model got two
+    # more assistant turns (rounds 12 and 13) after it.
+    assert nudge_indices[0] < assistant_indices[-2] < assistant_indices[-1]
+
+
+async def test_prompt_budget_floor_is_sticky_across_a_later_cap_bump(make_loop, brain_dir):
+    """The budget-stop counterpart of the cap-drop regression above: once the
+    token budget has fixed floor_cap, the model must get to use exactly the
+    WRAP_UP_ROUNDS_BEFORE_CAP (2) rounds the nudge promised it, not be cut off
+    after only one because a later round's per-model cap bump reset the
+    budget's own math."""
+    over_budget = reply("big", call("list_facts", "a"), prompt_tokens=20_000, key="weak")
+    # The strong model keeps calling tools well past where the rescue could
+    # possibly grant more room, so the round count actually played is
+    # governed purely by the sticky floor, not by the script running out.
+    strong_after = [
+        reply(f"s{i}", call("list_facts", f"s{i}"), prompt_tokens=10, key="gemini:strong")
+        for i in range(10)
+    ]
+    loop, provider = make_loop(
+        [over_budget, *strong_after],
+        max_rounds=8,
+        max_prompt_tokens=10_000,
+        max_rounds_by_model=[("gemini:strong", 32)],
+    )
+
+    result = await loop.run_cycle()
+
+    # Round 1 crosses the budget (20000 > 10000): floor_cap = 1+2 = 3, nudge
+    # sent that round promising 2 rounds left. Rounds 2 and 3 answer on the
+    # "strong" model, whose own CYCLE_MAX_ROUNDS_BY_MODEL entry (32) must not
+    # be allowed to either grow the cap past 3 or -- the actual regression --
+    # cause the loop to stop before round 3 is even played.
+    assert result.status == "max_rounds"
+    assert result.rounds == 3
+    assert len(provider.calls) == 3
+    assert result.cap == 3
+
+    final_messages = provider.calls[-1][0]
+    nudges = [msg for msg in final_messages if msg.role == "user" and "rounds left" in msg.content]
+    assert len(nudges) == 1
     assert "You have 2 rounds left" in nudges[0].content
 
 

@@ -566,13 +566,21 @@ class AgentLoop:
         # Fires once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP short of whatever
         # effective_cap turns out to be at the time.
         nudge_sent = False
-        # Set once trace.prompt_tokens first crosses max_prompt_tokens, to the
-        # round it happened on plus WRAP_UP_ROUNDS_BEFORE_CAP -- frozen from
-        # then on, so a per-model cap bump on a later round cannot grow
-        # effective_cap back past it (recomputing rounds + the window fresh
-        # every round would let it creep upward one round at a time). None
-        # means the budget has not been crossed yet.
-        budget_cap: int | None = None
+        # True once trace.prompt_tokens first crosses max_prompt_tokens.
+        # Sticky forever after: a per-model cap bump on a later round must
+        # not undo a stop the token budget already called for.
+        budget_stopped = False
+        # Set the round a cap-drop rescue or the token-budget stop first
+        # fires, to rounds + WRAP_UP_ROUNDS_BEFORE_CAP at that moment --
+        # frozen from then on, so neither a per-model cap bump nor a further
+        # cap drop on a later round can move it. Without freezing it, a
+        # second per-model drop the very next round (still within the
+        # window, still before the *next* nudge check runs) would recompute
+        # against the new, later ``rounds`` and quietly shrink the promised
+        # window to less than WRAP_UP_ROUNDS_BEFORE_CAP -- the model would
+        # have been told "N rounds left" and then get fewer. None means
+        # neither has fired yet.
+        floor_cap: int | None = None
 
         # Paused: no provider call at all, but the cycle still closes its books
         # so the pause shows up in the journal like any other outcome. The
@@ -637,34 +645,44 @@ class AgentLoop:
                 # just below, once, rather than left to end the cycle with the
                 # model never having seen a nudge at all.
                 new_cap = self._rounds_cap(reply.key, reply.model)
-                if budget_cap is None and self._prompt_budget_exceeded(trace.prompt_tokens):
+                if not budget_stopped and self._prompt_budget_exceeded(trace.prompt_tokens):
                     # First round over CYCLE_MAX_PROMPT_TOKENS: same rescue as
                     # a cap drop -- enough extra room for one nudge, never
-                    # more -- except this one is sticky (budget_cap, once set,
-                    # is never recomputed), since a per-model cap bump on a
-                    # later round must not undo a stop the token budget
+                    # more -- except this stop is sticky (budget_stopped
+                    # stays True forever after), since a per-model cap bump on
+                    # a later round must not undo a stop the token budget
                     # already called for.
-                    budget_cap = min(rounds + WRAP_UP_ROUNDS_BEFORE_CAP, CYCLE_MAX_ROUNDS_HARD_CEILING)
+                    budget_stopped = True
                     log.warning(
                         "[%s] prompt tokens (%d) exceeded CYCLE_MAX_PROMPT_TOKENS (%d)",
                         self.name,
                         trace.prompt_tokens,
                         self.max_prompt_tokens,
                     )
-                if budget_cap is not None:
-                    effective_cap = min(new_cap, budget_cap)
-                elif not nudge_sent and new_cap <= rounds + WRAP_UP_ROUNDS_BEFORE_CAP:
-                    # A cap drop (a fallback to a weaker, lower-cap model) that
-                    # lands the cycle inside or past its wrap-up window before
-                    # the nudge has ever been sent. Grant just enough extra
-                    # room for the nudge to do its job -- never less than the
-                    # dropped cap says, never more than the hard ceiling --
-                    # rather than ending the cycle mid-thought with the model
-                    # never told it was about to be cut off.
-                    effective_cap = min(
-                        max(new_cap, rounds + WRAP_UP_ROUNDS_BEFORE_CAP),
-                        CYCLE_MAX_ROUNDS_HARD_CEILING,
-                    )
+                if floor_cap is None and (
+                    budget_stopped or (not nudge_sent and new_cap <= rounds + WRAP_UP_ROUNDS_BEFORE_CAP)
+                ):
+                    # The rescue floor, set once: the token budget just
+                    # tripped, or a cap drop (a fallback to a weaker,
+                    # lower-cap model) landed the cycle inside or past its
+                    # wrap-up window before the nudge has ever been sent.
+                    # Fixed to rounds + WRAP_UP_ROUNDS_BEFORE_CAP right here,
+                    # clamped to the hard ceiling, and never recomputed --
+                    # recomputing it fresh against a larger ``rounds`` on a
+                    # later round (a second cap drop, or budget_stopped
+                    # already True) would quietly shrink the window below
+                    # what the nudge already promised the model.
+                    floor_cap = min(rounds + WRAP_UP_ROUNDS_BEFORE_CAP, CYCLE_MAX_ROUNDS_HARD_CEILING)
+                if budget_stopped:
+                    # The budget stop is exact, not a floor: once tripped, no
+                    # per-model cap -- however generous -- may push the cycle
+                    # past floor_cap (set on the same round budget_stopped
+                    # first became True, and frozen from then on -- so it is
+                    # never None here), unlike the cap-drop rescue below
+                    # which only ever raises effective_cap up to its floor.
+                    effective_cap = floor_cap if floor_cap is not None else new_cap
+                elif floor_cap is not None:
+                    effective_cap = max(new_cap, floor_cap)
                 else:
                     effective_cap = new_cap
                 trace.cap = effective_cap
@@ -738,7 +756,7 @@ class AgentLoop:
                 # nothing chose a wake, so reporting it as ``ok`` hides a loop
                 # that may be going in circles every heartbeat.
                 status = "max_rounds"
-                if budget_cap is not None:
+                if budget_stopped:
                     summary = (
                         f"hit CYCLE_MAX_PROMPT_TOKENS ({self.max_prompt_tokens}) "
                         f"without end_cycle: prompt tokens reached {trace.prompt_tokens}"
