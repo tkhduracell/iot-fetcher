@@ -7,6 +7,7 @@ brain_dir/expert_dir fixtures in conftest.py, and json.loads(dispatch(...)).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 
@@ -558,6 +559,38 @@ async def test_code_grep_times_out_and_returns_partial_hits(
     assert out["truncated"] is True
     assert out["note"] == "search did not finish within 0.05s; results may be incomplete"
     assert [h["path"] for h in out["hits"]] == ["a.py"]
+
+    # The worker thread is still asleep inside slow_walk's b.py stall,
+    # holding _GREP_BUSY, well past the point where _code_grep gave up
+    # waiting on it -- a second call right now must see that and refuse
+    # rather than starting a concurrent walk over the same snapshot.
+    second = await call(registry, ctx, "code_grep", pattern="needle")
+    assert "still running" in second["error"]
+
+    # Wait for the stalled worker to actually finish (its 1s sleep) and
+    # release the lock, so this test does not leak a held _GREP_BUSY into
+    # whichever test runs next in the same process.
+    deadline = time.monotonic() + 5
+    while introspect_module._GREP_BUSY.locked() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert not introspect_module._GREP_BUSY.locked()
+
+
+async def test_code_grep_hit_cap_is_not_reported_as_a_timeout(registry, make_ctx, tmp_path):
+    """The 100-hit cap and a wall-clock timeout are different reasons to
+    truncate -- only a genuine timeout gets the 'note' explaining why."""
+    root = tmp_path / "many-lines-one-file"
+    root.mkdir()
+    (root / "a.py").write_text("needle\n" * 150, encoding="utf-8")
+    repo = RepoSnapshot(tmp_path / "memory", "x/y", "main", http=None)
+    repo._state = RepoState(sha="s", fetched_at=0.0, root=root)
+    ctx = make_ctx(extras={"repo": repo})
+
+    out = await call(registry, ctx, "code_grep", pattern="needle")
+
+    assert out["truncated"] is True
+    assert len(out["hits"]) == 100
+    assert "note" not in out
 
 
 async def test_code_list_root(registry, make_ctx, fake_repo):
