@@ -27,6 +27,14 @@ def test_defaults_from_empty_env():
     assert (s.rpm, s.tpm, s.rpd) == (8, 200000, 200)
     assert s.call_timeout_s == 60
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
+    assert s.repo_slug == "tkhduracell/iot-fetcher"
+    assert s.repo_ref == "main"
+    assert s.repo_refresh_h == 6
+
+
+def test_repo_settings_are_overridable():
+    s = load_settings({"REPO_SLUG": "someone/fork", "REPO_REF": "dev", "REPO_REFRESH_H": "1"})
+    assert (s.repo_slug, s.repo_ref, s.repo_refresh_h) == ("someone/fork", "dev", 1)
 
 
 def test_blank_experts_is_the_default_set():
