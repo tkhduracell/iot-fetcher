@@ -14,6 +14,7 @@ import re
 import time
 
 from ai_brain.llm import ToolSpec
+from ai_brain.regex_safety import check_pattern
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 from ai_brain.tools.http import decode_json, request
 
@@ -22,22 +23,6 @@ VM_LOOPS = frozenset({"brain", "energy", "health"})
 MAX_POINTS = 200
 MAX_SERIES = 20
 MAX_METRICS = 200
-MAX_PATTERN_CHARS = 128
-# A pattern that nests one quantifier inside another -- ``(a+)+``, ``(a*)*``,
-# ``(a|a)+`` -- can make the backtracking engine take exponential time on a
-# name that nearly matches. There is no way to bound that once it starts:
-# CPython's ``re`` holds the GIL for the whole match, so a thread and a timeout
-# would stop nothing and block the process anyway. The only real defence is to
-# refuse the pattern, which costs nothing a metric search actually needs.
-_NESTED_QUANTIFIER = re.compile(r"""
-    \(                     # a group
-    (?:\?[:=!P][^)]*|)     # optionally non-capturing / lookaround / named
-    [^()]*                 # its body, with no nested group
-    [*+?}]                 # ending in a quantifier
-    \)                     # close it
-    \s*[*+{]               # and quantify the group itself
-""", re.VERBOSE)
-_ALTERNATION_QUANTIFIER = re.compile(r"\([^()]*\|[^()]*\)\s*[*+{]")
 
 
 def _auth(ctx: ToolContext) -> dict[str, str]:
@@ -104,14 +89,11 @@ async def _vm_query(ctx: ToolContext, args: dict) -> str:
 
 async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
     pattern = str(args["pattern"])
-    # A long regex is a cheap way to make re spend a long time on 200 names.
-    if len(pattern) > MAX_PATTERN_CHARS:
-        return err(f"vm_metrics: pattern too long (max {MAX_PATTERN_CHARS})")
-    if _NESTED_QUANTIFIER.search(pattern) or _ALTERNATION_QUANTIFIER.search(pattern):
-        return err(
-            "vm_metrics: pattern nests a quantifier inside a quantified group, which can "
-            "take exponential time; use a simpler pattern"
-        )
+    # A long or catastrophically-backtracking regex is a cheap way to make
+    # re spend a long time on 200 names -- see regex_safety.py.
+    problem = check_pattern(pattern)
+    if problem is not None:
+        return err(f"vm_metrics: {problem}")
     try:
         matcher = re.compile(pattern)
     except re.error as exc:

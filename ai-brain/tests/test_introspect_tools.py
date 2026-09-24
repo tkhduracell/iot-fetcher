@@ -17,7 +17,7 @@ from ai_brain.ledger import Ledger, Limits
 from ai_brain.llm import ToolCall
 from ai_brain.repo import Commit, RepoSnapshot, RepoState
 from ai_brain.tools import ToolContext, ToolRegistry
-from ai_brain.tools.introspect import register_introspect
+from ai_brain.tools.introspect import _compose_services, register_introspect
 
 ENV = {"MEMORY_ROOT": "/tmp/ai-brain-introspect-test", "VM_URL": "http://vm.test"}
 
@@ -338,6 +338,50 @@ async def test_review_expert_unknown_expert_is_an_error(registry, make_ctx):
 # -- code_* ---------------------------------------------------------------
 
 
+# -- _compose_services: mapping vs list-form environment entries -----------
+
+
+def test_compose_env_mapping_form_splits_on_colon_even_with_an_equals_in_the_value():
+    """INFLUX_TOKEN: a=b=c is mapping-form (no leading '- '); the name is
+    everything before the first ':', never guessed from whether the value
+    happens to contain '='."""
+    text = (
+        "services:\n"
+        "  ai-brain:\n"
+        "    environment:\n"
+        "      INFLUX_TOKEN: a=b=c\n"
+    )
+    services = _compose_services(text)
+    assert services[0]["env_var_names"] == ["INFLUX_TOKEN"]
+
+
+def test_compose_env_list_form_splits_on_equals_even_with_a_colon_in_the_value():
+    """- VM_URL=http://vm:8427 is list-form; the name is everything before
+    the first '=', never guessed from the ':' inside the URL value."""
+    text = (
+        "services:\n"
+        "  ai-brain:\n"
+        "    environment:\n"
+        "      - VM_URL=http://vm:8427\n"
+    )
+    services = _compose_services(text)
+    assert services[0]["env_var_names"] == ["VM_URL"]
+
+
+def test_compose_env_names_only_no_value_text_leaks():
+    text = (
+        "services:\n"
+        "  ai-brain:\n"
+        "    environment:\n"
+        "      INFLUX_TOKEN: a=b=c\n"
+        "      - VM_URL=http://vm:8427\n"
+    )
+    dumped = json.dumps(_compose_services(text))
+    assert "a=b=c" not in dumped
+    assert "http://vm:8427" not in dumped
+    assert sorted(_compose_services(text)[0]["env_var_names"]) == ["INFLUX_TOKEN", "VM_URL"]
+
+
 @pytest.fixture
 def fake_repo(tmp_path):
     """A RepoSnapshot whose ``state`` points at a small tree on disk, no
@@ -402,6 +446,43 @@ async def test_code_read_a_line_range(registry, make_ctx, fake_repo):
     assert out["body"] == "package main"
 
 
+async def test_code_read_zero_end_means_to_the_end_of_the_file(registry, make_ctx, fake_repo):
+    ctx = make_ctx(extras={"repo": fake_repo})
+    out = await call(
+        registry, ctx, "code_read", path="pool-pump-planner/vm.go", start=4, end=0
+    )
+    assert out["body"] == "\treturn 0\n}"
+    assert out["end"] == out["total_lines"]
+
+
+async def test_code_read_negative_end_means_to_the_end_of_the_file(registry, make_ctx, fake_repo):
+    ctx = make_ctx(extras={"repo": fake_repo})
+    out = await call(
+        registry, ctx, "code_read", path="pool-pump-planner/vm.go", start=4, end=-1
+    )
+    assert out["body"] == "\treturn 0\n}"
+
+
+async def test_code_read_end_below_start_is_clamped_up_to_start(registry, make_ctx, fake_repo):
+    """A caller-supplied end below start must never turn into a negative-
+    index slice (Python would read from the back of the file instead)."""
+    ctx = make_ctx(extras={"repo": fake_repo})
+    out = await call(
+        registry, ctx, "code_read", path="pool-pump-planner/vm.go", start=3, end=1
+    )
+    assert out["body"] == "func fetchWaterTempAt(t time.Time) float64 {"
+    assert out["start"] == 3
+    assert out["end"] == 3
+
+
+async def test_code_read_omitted_end_still_means_to_the_end_of_the_file(
+    registry, make_ctx, fake_repo
+):
+    ctx = make_ctx(extras={"repo": fake_repo})
+    out = await call(registry, ctx, "code_read", path="pool-pump-planner/vm.go", start=4)
+    assert out["body"] == "\treturn 0\n}"
+
+
 async def test_code_read_missing_env_file_is_not_found(registry, make_ctx, fake_repo):
     ctx = make_ctx(extras={"repo": fake_repo})
     out = await call(registry, ctx, "code_read", path=".env")
@@ -429,6 +510,54 @@ async def test_code_grep_caps_hits(registry, make_ctx, tmp_path):
 
     assert out["truncated"] is True
     assert len(out["hits"]) <= 100
+
+
+async def test_code_grep_refuses_a_catastrophic_pattern(registry, make_ctx, fake_repo):
+    ctx = make_ctx(extras={"repo": fake_repo})
+    out = await call(registry, ctx, "code_grep", pattern="(a+)+$")
+    assert "error" in out
+    assert "exponential" in out["error"]
+
+
+async def test_code_grep_times_out_and_returns_partial_hits(
+    registry, make_ctx, tmp_path, monkeypatch
+):
+    """A search that does not finish inside the wall-clock budget returns
+    whatever it found before the deadline, with truncated=true -- rather
+    than hanging the cycle or raising."""
+    import time
+
+    import ai_brain.tools.introspect as introspect_module
+
+    root = tmp_path / "slow-walk"
+    root.mkdir()
+    (root / "a.py").write_text("needle in a.py\n", encoding="utf-8")
+    (root / "b.py").write_text("needle in b.py\n", encoding="utf-8")
+    repo = RepoSnapshot(tmp_path / "memory", "x/y", "main", http=None)
+    repo._state = RepoState(sha="s", fetched_at=0.0, root=root)
+    ctx = make_ctx(extras={"repo": repo})
+
+    monkeypatch.setattr(introspect_module, "CODE_GREP_TIMEOUT_S", 0.05)
+
+    real_walk = introspect_module._walk_text_files
+
+    def slow_walk(root_path):
+        # b.py stalls well past the patched 0.05s deadline, so the timeout
+        # fires while the worker thread is still blocked inside this
+        # generator -- a.py's hit has already landed in `hits` by then
+        # (list.append is synchronous), which is what the test checks.
+        for path in real_walk(root_path):
+            if path.name == "b.py":
+                time.sleep(1)
+            yield path
+
+    monkeypatch.setattr(introspect_module, "_walk_text_files", slow_walk)
+
+    out = await call(registry, ctx, "code_grep", pattern="needle")
+
+    assert out["truncated"] is True
+    assert out["note"] == "search did not finish within 0.05s; results may be incomplete"
+    assert [h["path"] for h in out["hits"]] == ["a.py"]
 
 
 async def test_code_list_root(registry, make_ctx, fake_repo):
@@ -481,6 +610,26 @@ async def test_code_list_keeps_a_template_visible(registry, make_ctx, sensitive_
     ctx = make_ctx(extras={"repo": sensitive_repo})
     out = await call(registry, ctx, "code_list", path="wud")
     assert "wud/.env.example" in out["entries"]
+
+
+async def test_code_list_on_a_denied_file_path_is_no_such_path_never_denied(
+    registry, make_ctx, sensitive_repo
+):
+    """code_list called *directly* on a sensitive file's own path -- not
+    discovered while iterating a directory -- must be refused the same way
+    a genuinely missing path is."""
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    for path in (".env", ".mcp.json", "gcp-creds.json"):
+        out = await call(registry, ctx, "code_list", path=path)
+        assert "error" in out, path
+        assert "no such path" in out["error"], path
+        assert "denied" not in out["error"].lower(), path
+
+
+async def test_code_list_on_a_template_file_path_still_works(registry, make_ctx, sensitive_repo):
+    ctx = make_ctx(extras={"repo": sensitive_repo})
+    out = await call(registry, ctx, "code_list", path="wud/.env.example")
+    assert out["entries"] == ["wud/.env.example"]
 
 
 async def test_code_read_denied_files_are_not_found_never_denied(registry, make_ctx, sensitive_repo):
@@ -591,6 +740,64 @@ async def test_code_overview_covers_components_services_and_ci(registry, make_ct
     assert any(w["file"] == "build.yml" for w in out["ci_workflows"])
     build = next(w for w in out["ci_workflows"] if w["file"] == "build.yml")
     assert build["triggers_on_paths"] == ["ai-brain/**"]
+
+
+async def test_code_overview_redacts_secret_shaped_text_in_free_text_fields(
+    registry, make_ctx, tmp_path
+):
+    """A token-shaped string anywhere code_overview renders as free text --
+    a README summary, a heading, a compose port/volume mapping, a CI
+    trigger path -- must come back masked, the same defence-in-depth
+    reasoning as code_read/code_grep's own redact() calls."""
+    root = tmp_path / "redact-snapshot"
+    (root / "svc").mkdir(parents=True)
+    secret_line = "token=AKIA1234567890ABCDEF issued for CI"
+    (root / "svc" / "README.md").write_text(f"{secret_line}\n", encoding="utf-8")
+    (root / "README.md").write_text(f"# {secret_line}\n", encoding="utf-8")
+    (root / "CLAUDE.md").write_text(f"# {secret_line}\n", encoding="utf-8")
+    (root / "docker-compose.yml").write_text(
+        "services:\n"
+        "  svc:\n"
+        f"    image: example/svc:latest\n"
+        "    ports:\n"
+        f'      - "8080:8080?token=AKIA1234567890ABCDEF"\n'
+        "    volumes:\n"
+        f"      - /host/{secret_line.replace(' ', '_')}:/data\n",
+        encoding="utf-8",
+    )
+    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github" / "workflows" / "build.yml").write_text(
+        "on:\n  push:\n    paths:\n      - 'svc/**'\n", encoding="utf-8"
+    )
+
+    repo = RepoSnapshot(tmp_path / "memory", "x/y", "main", http=None)
+    repo._state = RepoState(sha="deadbeef", fetched_at=0.0, root=root)
+    ctx = make_ctx(extras={"repo": repo})
+
+    out = await call(registry, ctx, "code_overview")
+
+    assert "AKIA1234567890ABCDEF" not in json.dumps(out)
+
+
+async def test_code_overview_applies_is_sensitive_to_every_file_it_reads(
+    registry, make_ctx, tmp_path, monkeypatch, fake_repo
+):
+    """is_sensitive is wired into every read code_overview does (component
+    READMEs, docker-compose.yml, root CLAUDE.md/README.md) -- forcing it to
+    refuse everything must degrade the overview to empty fields rather than
+    silently reading around the check."""
+    import ai_brain.tools.introspect as introspect_module
+
+    monkeypatch.setattr(introspect_module, "is_sensitive", lambda *a, **k: True)
+
+    ctx = make_ctx(extras={"repo": fake_repo})
+    out = await call(registry, ctx, "code_overview")
+
+    assert out["services"] == []
+    assert out["claude_md_headings"] == []
+    assert out["readme_headings"] == []
+    for component in out["components"]:
+        assert component["readme_summary"] == ""
 
 
 async def test_code_overview_without_a_snapshot_reports_unavailable(registry, make_ctx, tmp_path):
