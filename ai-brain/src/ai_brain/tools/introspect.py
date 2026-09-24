@@ -26,6 +26,7 @@ import asyncio
 import fnmatch
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,6 +65,13 @@ MAX_LINE_PREVIEW = 300
 # pattern (see regex_safety.py for the ones that ARE rejected outright) is
 # what this actually bounds.
 CODE_GREP_TIMEOUT_S = 10
+# Held by the worker thread for the whole walk. A timed-out grep's thread
+# keeps running until it finishes (it cannot be interrupted), so without
+# this a model retrying a slow pattern would stack threads in the default
+# executor, each burning CPU, until the pool starves every other to_thread
+# user. One grep at a time; a second call while one is still running gets a
+# clear "busy" error instead.
+_GREP_BUSY = threading.Lock()
 
 # Directories skipped everywhere under the snapshot: dependency trees and lock
 # files are large, generated, and never what "read the code" means.
@@ -492,6 +500,13 @@ async def _code_read(ctx: ToolContext, args: dict) -> str:
 def _grep_worker(
     root: Path, snapshot_root: Path, matcher: re.Pattern, hits: list[dict]
 ) -> bool:
+    with _GREP_BUSY:
+        return _grep_walk(root, snapshot_root, matcher, hits)
+
+
+def _grep_walk(
+    root: Path, snapshot_root: Path, matcher: re.Pattern, hits: list[dict]
+) -> bool:
     """The actual walk-and-match, run off the event loop by ``_code_grep``.
 
     Appends to ``hits`` (a plain list -- the GIL makes a single ``append()``
@@ -565,6 +580,8 @@ async def _code_grep(ctx: ToolContext, args: dict) -> str:
     # would), and relative_to requires both sides to agree.
     snapshot_root = repo.state.root.resolve()
     hits: list[dict] = []
+    if _GREP_BUSY.locked():
+        return err("code_grep: a previous search is still running; try again in a moment")
 
     # Off the event loop: a big subtree is many files' worth of I/O and
     # regex matching, and running that inline would stall every other loop's
@@ -581,12 +598,14 @@ async def _code_grep(ctx: ToolContext, args: dict) -> str:
             timeout=CODE_GREP_TIMEOUT_S,
         )
         truncated = capped
+        timed_out = False
     except TimeoutError:
         truncated = True
+        timed_out = True
         log.warning("[introspect] code_grep timed out after %ss; returning partial hits", CODE_GREP_TIMEOUT_S)
 
     result = {"hits": hits[:MAX_GREP_HITS], "truncated": truncated, "sha": repo.state.sha}
-    if truncated and len(hits) <= MAX_GREP_HITS:
+    if timed_out:
         result["note"] = (
             f"search did not finish within {CODE_GREP_TIMEOUT_S}s; results may be incomplete"
         )
