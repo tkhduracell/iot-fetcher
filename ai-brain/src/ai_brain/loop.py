@@ -114,6 +114,13 @@ enough to know when it is done, and rewrite the file when one is finished or
 turns out to be boring. A goal like "understand what the house costs to run in
 October" is worth months of cycles; "monitor the house" is worth none.
 
+# Introspection (brain only)
+`system_status`, `expert_overview`/`read_expert`/`review_expert` and `code_*`
+exist for "why am I / is the system behaving like this" questions -- your own
+cycle health, an expert's memory, or the source of a service you depend on.
+Start with `code_overview` to see how the services connect before diagnosing
+something in one of them.
+
 # Acting
 You have `propose` for anything that touches the physical house: it asks Filip
 and he approves or does not. Use it when you have an actual reason -- something
@@ -161,6 +168,13 @@ BRAIN_ANGLES: tuple[str, ...] = (
     "answer in the household documents or on the web.",
     "Tend your own memory. Merge facts that say the same thing, delete what is "
     "no longer true, and rewrite goals that have gone stale.",
+    "Review one expert. Use expert_overview, pick the one you trust least, read "
+    "its journal and facts, check one or two claims against data or what Filip "
+    "has told you, then record it with review_expert. Contradictions with your "
+    "own facts count as findings.",
+    "Understand the machine. Use code_overview, then read the code of one "
+    "service whose data you rely on, and write a fact on how it works and how "
+    "it fails.",
 )
 
 EXPERT_ANGLES: tuple[str, ...] = (
