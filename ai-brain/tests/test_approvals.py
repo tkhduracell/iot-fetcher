@@ -934,3 +934,541 @@ async def test_list_proposals_is_refused_for_an_expert(registry, make_ctx):
     )
 
     assert "not allowed" in out["error"]
+
+
+# --- rejection memory: proposal_target -------------------------------------
+
+
+def test_proposal_target_uses_the_kind_specific_key():
+    from ai_brain.approvals import proposal_target
+
+    assert proposal_target("ha_todo_add", {"item": "buy filters"}) == "buy filters"
+    assert proposal_target("docker_restart", {"container": "iot-fetcher"}) == "iot-fetcher"
+    assert proposal_target("sonos_say", {"text": "hello"}) == "hello"
+
+
+def test_proposal_target_falls_back_to_the_whole_payload_when_the_key_is_missing():
+    from ai_brain.approvals import proposal_target
+
+    assert proposal_target("ha_todo_add", {}) == "{}"
+
+
+# --- rejection memory: proposal_target for ha_service -----------------------
+#
+# ha_service is not in TARGET_KEY -- the entity alone would treat
+# "light.turn_off" and "light.turn_on" on the same entity as the same ask,
+# which is exactly the over-blocking a code review of the first version of
+# this caught. See proposal_target's own docstring.
+
+
+def test_proposal_target_for_ha_service_keys_on_service_and_entity():
+    from ai_brain.approvals import proposal_target
+
+    target = proposal_target(
+        "ha_service",
+        {"service": "climate.set_temperature", "entity_id": "climate.living_room"},
+    )
+    assert target == "climate.set_temperature climate.living_room"
+
+
+def test_proposal_target_for_ha_service_ignores_numeric_data():
+    """A different setpoint is still "the same ask" for rejection purposes --
+    only the service and entity distinguish one ha_service target from
+    another, never a bare number like temperature or brightness_pct."""
+    from ai_brain.approvals import proposal_target
+
+    a = proposal_target(
+        "ha_service",
+        {
+            "service": "climate.set_temperature",
+            "entity_id": "climate.living_room",
+            "data": {"temperature": 21},
+        },
+    )
+    b = proposal_target(
+        "ha_service",
+        {
+            "service": "climate.set_temperature",
+            "entity_id": "climate.living_room",
+            "data": {"temperature": 23},
+        },
+    )
+    assert a == b == "climate.set_temperature climate.living_room"
+
+
+def test_proposal_target_for_ha_service_keeps_non_numeric_data():
+    """hvac_mode is not a bare setpoint -- "heat" and "off" on the same
+    entity are genuinely different asks, so it stays part of the target."""
+    from ai_brain.approvals import proposal_target
+
+    heat = proposal_target(
+        "ha_service",
+        {
+            "service": "climate.set_hvac_mode",
+            "entity_id": "climate.living_room",
+            "data": {"hvac_mode": "heat"},
+        },
+    )
+    off = proposal_target(
+        "ha_service",
+        {
+            "service": "climate.set_hvac_mode",
+            "entity_id": "climate.living_room",
+            "data": {"hvac_mode": "off"},
+        },
+    )
+    assert heat != off
+    assert "heat" in heat
+    assert "off" in off
+
+
+def test_proposal_target_for_ha_service_with_no_data():
+    from ai_brain.approvals import proposal_target
+
+    target = proposal_target(
+        "ha_service", {"service": "light.turn_off", "entity_id": "light.kitchen"}
+    )
+    assert target == "light.turn_off light.kitchen"
+
+
+# --- rejection memory: rejected_groups --------------------------------------
+
+
+async def test_rejected_groups_is_empty_with_no_rejections(approvals):
+    from ai_brain.approvals import rejected_groups
+
+    await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    assert rejected_groups(approvals.all()) == []
+
+
+async def test_rejected_groups_groups_by_kind_target_and_topic(approvals):
+    from ai_brain.approvals import rejected_groups
+
+    p1 = await approvals.propose(
+        "ha_service",
+        {"service": "climate.set_temperature", "entity_id": "climate.living_room"},
+        "too cold",
+        "climate",
+    )
+    await approvals.on_reaction(p1.slack_ts, "x")
+    p2 = await approvals.propose(
+        "ha_service",
+        {"service": "climate.set_temperature", "entity_id": "climate.living_room"},
+        "still cold",
+        "climate",
+    )
+    await approvals.on_reaction(p2.slack_ts, "x")
+
+    [group] = rejected_groups(approvals.all())
+    assert group.kind == "ha_service"
+    assert group.target == "climate.set_temperature climate.living_room"
+    assert group.topic == "climate"
+    assert group.count == 2
+    assert group.last_at == p2.created
+
+
+async def test_rejected_groups_ignores_pending_and_approved_proposals(approvals, executors):
+    from ai_brain.approvals import rejected_groups
+
+    approved = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    await approvals.on_reaction(approved.slack_ts, "white_check_mark")
+    await approvals.propose("sonos_say", {"text": "still pending"}, "why", "#home")
+
+    assert rejected_groups(approvals.all()) == []
+
+
+async def test_rejected_groups_different_targets_stay_separate(approvals):
+    from ai_brain.approvals import rejected_groups
+
+    a = await approvals.propose("ha_todo_add", {"item": "milk"}, "why", "#home")
+    await approvals.on_reaction(a.slack_ts, "x")
+    b = await approvals.propose("ha_todo_add", {"item": "eggs"}, "why", "#home")
+    await approvals.on_reaction(b.slack_ts, "x")
+
+    groups = rejected_groups(approvals.all())
+    assert {g.target for g in groups} == {"milk", "eggs"}
+    assert all(g.count == 1 for g in groups)
+
+
+async def test_rejected_groups_carries_the_latest_rejection_reason(approvals, brain_dir):
+    from ai_brain.approvals import rejected_groups
+
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    await approvals.on_reaction(p.slack_ts, "x")
+
+    [group] = rejected_groups(approvals.all())
+    # A bare reject carries no result text -- resolved_text's "❌ Rejected."
+    # wording is display-only, so an empty reason is the honest answer here.
+    assert group.reason == ""
+
+
+async def test_rejected_groups_respects_the_since_cutoff(approvals, moving_clock):
+    from datetime import timedelta
+
+    from ai_brain.approvals import rejected_groups
+
+    p = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    await approvals.on_reaction(p.slack_ts, "x")
+
+    cutoff = moving_clock() + timedelta(days=1)
+    assert rejected_groups(approvals.all(), since=cutoff) == []
+    assert len(rejected_groups(approvals.all(), since=moving_clock() - timedelta(days=1))) == 1
+
+
+async def test_rejected_groups_keeps_a_group_re_rejected_after_an_old_first_miss(
+    approvals, moving_clock
+):
+    """An old rejection alone would fall outside since -- but a second, recent
+    rejection of the same target means the group is still current."""
+    from datetime import timedelta
+
+    from ai_brain.approvals import rejected_groups
+
+    p1 = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    await approvals.on_reaction(p1.slack_ts, "x")
+
+    moving_clock.state["now"] += timedelta(days=60)
+    p2 = await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
+    await approvals.on_reaction(p2.slack_ts, "x")
+
+    cutoff = moving_clock() - timedelta(days=30)
+    [group] = rejected_groups(approvals.all(), since=cutoff)
+    assert group.count == 2
+    assert group.last_at == p2.created
+
+
+async def test_rejected_groups_sorts_newest_first(approvals, moving_clock):
+    from datetime import timedelta
+
+    from ai_brain.approvals import rejected_groups
+
+    older = await approvals.propose("ha_todo_add", {"item": "milk"}, "why", "#home")
+    await approvals.on_reaction(older.slack_ts, "x")
+
+    moving_clock.state["now"] += timedelta(minutes=5)
+    newer = await approvals.propose("ha_todo_add", {"item": "eggs"}, "why", "#home")
+    await approvals.on_reaction(newer.slack_ts, "x")
+
+    groups = rejected_groups(approvals.all())
+    assert [g.target for g in groups] == ["eggs", "milk"]
+
+
+# --- rejection memory: rejection_memory_section -----------------------------
+
+
+def test_rejection_memory_section_is_empty_with_no_groups():
+    from ai_brain.approvals import rejection_memory_section
+
+    assert rejection_memory_section([]) == ""
+
+
+def test_rejection_memory_section_names_kind_target_count_and_date():
+    from ai_brain.approvals import RejectionGroup, rejection_memory_section
+
+    group = RejectionGroup(
+        kind="ha_todo_add",
+        target="buy filters",
+        topic="house-ops",
+        count=2,
+        last_at="2026-09-20T10:00:00Z",
+        reason="",
+    )
+    text = rejection_memory_section([group])
+    assert text.startswith("# Filip has said no to")
+    assert "ha_todo_add" in text
+    assert "buy filters" in text
+    assert "house-ops" in text
+    assert "2x" in text
+    assert "2026-09-20T10:00:00Z" in text
+
+
+def test_rejection_memory_section_includes_the_reason_when_present():
+    from ai_brain.approvals import RejectionGroup, rejection_memory_section
+
+    group = RejectionGroup(
+        kind="sonos_say",
+        target="test message",
+        topic="#home",
+        count=1,
+        last_at="2026-09-20T10:00:00Z",
+        reason="too loud at night",
+    )
+    assert "too loud at night" in rejection_memory_section([group])
+
+
+def test_rejection_memory_section_caps_the_number_of_entries():
+    from ai_brain.approvals import REJECTION_MEMORY_MAX_ENTRIES, RejectionGroup, rejection_memory_section
+
+    groups = [
+        RejectionGroup(
+            kind="ha_todo_add",
+            target=f"item-{i}",
+            topic="house-ops",
+            count=1,
+            last_at="2026-09-20T10:00:00Z",
+            reason="",
+        )
+        for i in range(REJECTION_MEMORY_MAX_ENTRIES + 5)
+    ]
+    text = rejection_memory_section(groups)
+    assert text.count("item-") == REJECTION_MEMORY_MAX_ENTRIES
+
+
+def test_rejection_memory_section_caps_total_length_by_dropping_whole_lines():
+    from ai_brain.approvals import (
+        REJECTION_MEMORY_MAX_CHARS,
+        REJECTION_MEMORY_MAX_ENTRIES,
+        RejectionGroup,
+        rejection_memory_section,
+    )
+
+    # REJECTION_MEMORY_MAX_ENTRIES caps the entry count well below what would
+    # ever hit the char cap on its own, so a handful of long-but-plausible
+    # targets (not one absurd 5000-char one) is what actually exercises it.
+    groups = [
+        RejectionGroup(
+            kind="ha_todo_add",
+            target=f"a fairly long todo item description number {i} " * 3,
+            topic="house-ops",
+            count=1,
+            last_at="2026-09-20T10:00:00Z",
+            reason="",
+        )
+        for i in range(REJECTION_MEMORY_MAX_ENTRIES)
+    ]
+    text = rejection_memory_section(groups)
+
+    assert len(text) <= REJECTION_MEMORY_MAX_CHARS
+    # No line is a truncated fragment -- every kept line still names its own
+    # kind/topic/count in full, and the drop is called out on its own line.
+    for line in text.splitlines():
+        assert line.startswith(("# Filip has said no to", "- ha_todo_add", "…and "))
+    assert "…and " in text and " more" in text
+
+
+def test_rejection_memory_section_never_drops_below_the_heading():
+    """However long a single entry is, the heading itself always survives."""
+    from ai_brain.approvals import RejectionGroup, rejection_memory_section
+
+    group = RejectionGroup(
+        kind="sonos_say",
+        target="x" * 5000,
+        topic="#home",
+        count=1,
+        last_at="2026-09-20T10:00:00Z",
+        reason="",
+    )
+    text = rejection_memory_section([group])
+    assert text.splitlines()[0] == "# Filip has said no to"
+
+
+# --- rejection memory: the propose guard ------------------------------------
+
+
+async def test_propose_tool_refuses_a_target_rejected_recently(registry, make_ctx, approvals):
+    ctx = make_ctx()
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={"service": "climate.set_temperature", "entity_id": "climate.living_room"},
+        reason="too cold",
+        topic="climate",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "x")
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={"service": "climate.set_temperature", "entity_id": "climate.living_room"},
+        reason="still cold",
+        topic="climate",
+    )
+
+    assert "error" in out
+    assert "already rejected" in out["error"]
+    assert "climate.living_room" in out["error"]
+
+
+async def test_propose_tool_still_allows_a_different_target(registry, make_ctx, approvals):
+    ctx = make_ctx()
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={"service": "climate.set_temperature", "entity_id": "climate.living_room"},
+        reason="too cold",
+        topic="climate",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "x")
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={"service": "climate.set_temperature", "entity_id": "climate.bedroom"},
+        reason="too cold",
+        topic="climate",
+    )
+
+    assert out["ok"] is True
+
+
+async def test_propose_tool_allows_turn_on_after_a_rejected_turn_off(registry, make_ctx, approvals):
+    """The entity alone is too coarse a target for ha_service -- rejecting
+    'turn the light off' must not also block 'turn the light on'."""
+    ctx = make_ctx()
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={"service": "light.turn_off", "entity_id": "light.kitchen"},
+        reason="testing",
+        topic="lights",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "x")
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={"service": "light.turn_on", "entity_id": "light.kitchen"},
+        reason="testing",
+        topic="lights",
+    )
+
+    assert out["ok"] is True
+
+
+async def test_propose_tool_refuses_a_different_setpoint_on_a_rejected_climate_entity(
+    registry, make_ctx, approvals
+):
+    """A numeric argument (the setpoint) does not distinguish one ha_service
+    target from another -- a different temperature on the same rejected
+    service+entity is still the observed repeat pattern and must be refused."""
+    ctx = make_ctx()
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={
+            "service": "climate.set_temperature",
+            "entity_id": "climate.living_room",
+            "data": {"temperature": 21},
+        },
+        reason="too cold",
+        topic="climate",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "x")
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_service",
+        payload={
+            "service": "climate.set_temperature",
+            "entity_id": "climate.living_room",
+            "data": {"temperature": 23},
+        },
+        reason="still cold",
+        topic="climate",
+    )
+
+    assert "error" in out
+    assert "already rejected" in out["error"]
+
+
+async def test_propose_tool_still_allows_the_same_target_after_approval(
+    registry, make_ctx, approvals
+):
+    """Only a rejection blocks a repeat -- an approved proposal is not "no"."""
+    ctx = make_ctx()
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_todo_add",
+        payload={"item": "buy filters"},
+        reason="low stock",
+        topic="house-ops",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "white_check_mark")
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_todo_add",
+        payload={"item": "buy filters"},
+        reason="still low",
+        topic="house-ops",
+    )
+
+    assert out["ok"] is True
+
+
+async def test_propose_tool_stops_blocking_after_rejection_memory_days(
+    registry, make_ctx, approvals, moving_clock
+):
+    from datetime import timedelta
+
+    from ai_brain.config import load_settings
+
+    ctx = make_ctx()
+    ctx.settings = load_settings({"REJECTION_MEMORY_DAYS": "30"})
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_todo_add",
+        payload={"item": "buy filters"},
+        reason="low stock",
+        topic="house-ops",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "x")
+
+    moving_clock.state["now"] += timedelta(days=31)
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_todo_add",
+        payload={"item": "buy filters"},
+        reason="still low",
+        topic="house-ops",
+    )
+
+    assert out["ok"] is True
+
+
+async def test_propose_tool_guard_uses_the_moving_clock_not_wall_time(
+    registry, make_ctx, approvals, moving_clock
+):
+    """The guard must read the same clock approvals itself uses, not
+    datetime.now(), or a frozen-clock test suite would never trip it."""
+    ctx = make_ctx()
+    first = await call(
+        registry,
+        ctx,
+        kind="ha_todo_add",
+        payload={"item": "buy filters"},
+        reason="low stock",
+        topic="house-ops",
+    )
+    proposal = next(p for p in approvals.all() if p.id == first["id"])
+    await approvals.on_reaction(proposal.slack_ts, "x")
+
+    out = await call(
+        registry,
+        ctx,
+        kind="ha_todo_add",
+        payload={"item": "buy filters"},
+        reason="still low",
+        topic="house-ops",
+    )
+
+    assert "error" in out

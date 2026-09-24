@@ -1187,3 +1187,210 @@ async def test_bind_chat_repoints_where_chat_itself_replies(out, client):
     assert client.methods("chat_postMessage")[0]["thread_ts"] == "9.9"
 
 
+# -- normalize_topic ---------------------------------------------------
+
+
+def test_normalize_topic_lowercases_and_strips():
+    from ai_brain.slack_io import normalize_topic
+
+    assert normalize_topic("  Pool Pump  ") == "pool-pump"
+
+
+def test_normalize_topic_turns_spaces_and_underscores_into_dashes():
+    from ai_brain.slack_io import normalize_topic
+
+    assert normalize_topic("house_ops findings") == "house-ops-findings"
+
+
+def test_normalize_topic_strips_a_trailing_date():
+    from ai_brain.slack_io import normalize_topic
+
+    assert normalize_topic("think-cycle-2026-09-24") == "think-cycle"
+
+
+def test_normalize_topic_strips_a_trailing_index_when_a_segment_remains():
+    from ai_brain.slack_io import normalize_topic
+
+    # "pool-pump-2" has three segments -- stripping "-2" still leaves the real
+    # two-segment name "pool-pump", so the index is genuinely just an index.
+    assert normalize_topic("pool-pump-2") == "pool-pump"
+
+
+def test_normalize_topic_does_not_strip_a_trailing_index_that_would_erase_the_name():
+    from ai_brain.slack_io import normalize_topic
+
+    # "floor-1" has only two segments; stripping "-1" would leave the single
+    # segment "floor", indistinguishable from a topic that was always just
+    # called "floor" -- and would merge "floor-1" with "floor-2". So it does
+    # not strip at all.
+    assert normalize_topic("floor-1") == "floor-1"
+    assert normalize_topic("floor-2") == "floor-2"
+
+
+def test_normalize_topic_collapses_repeated_dashes():
+    from ai_brain.slack_io import normalize_topic
+
+    assert normalize_topic("think - cycle") == "think-cycle"
+
+
+def test_normalize_topic_variants_converge():
+    from ai_brain.slack_io import normalize_topic
+
+    variants = ["think", "Think Cycle", "think-cycle", "think_cycle", "think-cycle-2026-09-24"]
+    normalized = {normalize_topic(v) for v in variants}
+    # "think" alone normalizes to itself, distinct from the "think cycle"
+    # family -- normalize_topic only strips trailing dates/indices, it does
+    # not fold unrelated words together. The other four all agree.
+    assert normalized == {"think", "think-cycle"}
+
+
+def test_normalize_topic_does_not_treat_an_arbitrary_suffix_as_an_index():
+    from ai_brain.slack_io import normalize_topic
+
+    # "bug" is not a date or a bare numeric index, so it survives -- this is
+    # what makes the prefix match (not normalize_topic itself) responsible
+    # for folding "pool-pump-bug" into "pool-pump".
+    assert normalize_topic("pool-pump-bug") == "pool-pump-bug"
+
+
+def test_normalize_topic_strips_only_one_trailing_index_not_repeatedly():
+    from ai_brain.slack_io import normalize_topic
+
+    # A single trailing "-N" is an index; a second one behind it is just part
+    # of the name now -- unlike a date, an index suffix is not stripped
+    # repeatedly, so "a-1-2" only loses its final "-2".
+    assert normalize_topic("a-1-2") == "a-1"
+
+
+# -- resolve_topic -------------------------------------------------------
+
+
+async def test_resolve_topic_is_a_no_op_with_no_existing_sessions(out):
+    assert out.resolve_topic("pool-pump") == "pool-pump"
+
+
+async def test_resolve_topic_keeps_an_exact_match(out):
+    await out.post("pool-pump", "hi")
+    assert out.resolve_topic("pool-pump") == "pool-pump"
+
+
+async def test_resolve_topic_folds_a_normalized_variant_into_the_existing_topic(out):
+    await out.post("think", "hi")
+    assert out.resolve_topic("Think") == "think"
+
+
+async def test_resolve_topic_folds_a_dated_suffix_into_the_existing_topic(out):
+    await out.post("think-cycle", "hi")
+    assert out.resolve_topic("think-cycle-2026-09-24") == "think-cycle"
+
+
+async def test_resolve_topic_folds_a_longer_new_ask_into_a_shorter_existing_topic(out):
+    """The sprawl this exists to fix: 'pool-pump-bug' asked fresh, with
+    'pool-pump' already an active thread, lands in the existing one."""
+    await out.post("pool-pump", "hi")
+    assert out.resolve_topic("pool-pump-bug") == "pool-pump"
+
+
+async def test_resolve_topic_does_not_fold_a_shorter_new_ask_into_a_longer_existing_topic(out):
+    """The over-merge a code review caught: a new, short 'pool-pump' must not
+    be swallowed by a longer 'pool-pump-bug' that happened to exist first --
+    routing only ever goes new-is-longer, never the reverse."""
+    await out.post("pool-pump-bug", "hi")
+    assert out.resolve_topic("pool-pump") == "pool-pump"
+
+
+async def test_resolve_topic_does_not_let_a_single_word_topic_absorb_others(out):
+    """The other over-merge a code review caught: a generic single-segment
+    existing topic like 'house' or 'energy' must never be a match target, or
+    the first 'house-ops-findings' or 'energy-prices' post would vanish into
+    it. MIN_PREFIX_SEGMENTS requires the existing (shorter) side to have at
+    least two segments."""
+    await out.post("house", "hi")
+    assert out.resolve_topic("house-ops-findings") == "house-ops-findings"
+
+    await out.post("energy", "hi")
+    assert out.resolve_topic("energy-prices") == "energy-prices"
+
+
+async def test_resolve_topic_matches_a_whole_dash_segment_not_a_partial_word(out):
+    """'poo' must not fold into 'pool-pump' -- a whole '-' segment must match,
+    not a partial word."""
+    await out.post("pool-pump", "hi")
+    assert out.resolve_topic("poo") == "poo"
+
+
+async def test_resolve_topic_never_folds_into_chat(out):
+    out.bind_chat(channel="D1", thread_ts="1.1")
+    assert out.resolve_topic("chat-with-filip") == "chat-with-filip"
+
+
+async def test_resolve_topic_leaves_chat_itself_alone(out):
+    assert out.resolve_topic("chat") == "chat"
+
+
+async def test_resolve_topic_folds_a_bare_trailing_index_variant(out):
+    """'pool-pump-2' is the '-2'-style suffix normalize_topic strips, so it
+    folds into an existing 'pool-pump' the same way a dated suffix does."""
+    await out.post("pool-pump", "hi")
+    assert out.resolve_topic("pool-pump-2") == "pool-pump"
+
+
+async def test_resolve_topic_does_not_merge_two_distinct_indexed_topics(out):
+    """floor-1 and floor-2 are two segments each -- normalize_topic leaves
+    both alone (see its own tests), so neither folds into the other or into
+    a bare 'floor'."""
+    await out.post("floor-1", "hi")
+    assert out.resolve_topic("floor-2") == "floor-2"
+
+
+async def test_a_normalized_variant_actually_posts_into_the_existing_thread(out, client):
+    await out.post("pool-pump", "first")
+    await out.post("pool-pump-bug", "second")
+
+    assert [k["thread_ts"] for k in client.methods("chat_postMessage")] == [None, "1.1"]
+    sessions = out.sessions()
+    assert set(sessions) == {"pool-pump"}
+
+
+async def test_existing_on_disk_sessions_are_never_renamed_by_resolution(out, client, brain_dir):
+    """Routing a new post must not touch a session that already exists --
+    posting the shorter 'pool-pump' after 'pool-pump-bug' already exists
+    creates its own session rather than merging into the longer one."""
+    await out.post("pool-pump-bug", "first")
+    before = out.sessions()
+
+    await out.post("pool-pump", "second")
+
+    assert out.sessions()["pool-pump-bug"] == before["pool-pump-bug"]
+    assert set(out.sessions()) == {"pool-pump-bug", "pool-pump"}
+
+
+# -- recent_topics ---------------------------------------------------------
+
+
+async def test_recent_topics_lists_newest_first(out):
+    await out.post("pool", "a")
+    await out.post("energy", "b")
+    await out.post("house-ops", "c")
+
+    assert out.recent_topics() == ["house-ops", "energy", "pool"]
+
+
+async def test_recent_topics_excludes_chat(out):
+    out.bind_chat(channel="D1", thread_ts="1.1")
+    await out.post("pool", "a")
+
+    assert "chat" not in out.recent_topics()
+
+
+async def test_recent_topics_respects_the_limit(out):
+    for name in ["alpha", "bravo", "charlie", "delta", "echo"]:
+        await out.post(name, "hi")
+
+    assert len(out.recent_topics(limit=2)) == 2
+
+
+async def test_recent_topics_is_empty_on_a_fresh_brain(out):
+    assert out.recent_topics() == []
+
+

@@ -61,6 +61,39 @@ KINDS: dict[str, tuple[str, ...]] = {
     "docker_restart": ("container",),
 }
 
+# Which payload key names *what a proposal is about*, for a given kind -- the
+# thing rejection memory groups on. ``docker_restart`` names a concrete
+# target (a container); ``ha_todo_add`` and ``sonos_say`` have no such field,
+# so the free text itself is the closest thing to one. ``ha_service`` is
+# handled separately (see ``proposal_target``): the entity alone is too
+# coarse, since it would treat "turn off the living room light" and "turn on
+# the living room light" as the same rejected ask.
+TARGET_KEY: dict[str, str] = {
+    "sonos_say": "text",
+    "ha_todo_add": "item",
+    "docker_restart": "container",
+}
+
+# ha_service payload data keys whose *value* is excluded from the target, so
+# rejection memory groups on "this service on this entity" rather than "this
+# exact setpoint" -- a different brightness_pct on a rejected light.turn_on is
+# still the same ask, and should still be refused. Anything else in the data
+# dict (currently only hvac_mode -- see HA_ALLOWED_DATA_KEYS in executors.py)
+# is not a bare number and is part of what makes the ask what it is, so it
+# stays in the target: "set climate to heat" and "set climate to off" are
+# different asks even on the same entity.
+HA_SERVICE_TARGET_IGNORED_DATA_KEYS = frozenset(
+    {
+        "brightness_pct",
+        "color_temp_kelvin",
+        "transition",
+        "temperature",
+        "position",
+        "percentage",
+        "volume_level",
+    }
+)
+
 # The only status ``pending()`` reports and the only one a reaction may act on.
 # Everything else -- including the transient ``executing`` -- is terminal as far
 # as the gate is concerned.
@@ -434,3 +467,148 @@ def _iso(dt: datetime) -> str:
 
 def _parse(stamp: str) -> datetime:
     return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+# -- rejection memory ----------------------------------------------------
+#
+# "Filip has said no to this before" is easy to lose: each proposal is its own
+# file, nothing links a rejection to the next cycle's attempt at the same
+# thing, and a model rereading its own journal has no reason to connect a
+# vaguely-remembered no from four days ago to the payload it is about to send.
+# The functions below turn the outbox into that memory, in two places: a
+# summary injected into every brain cycle's opening context (read_context has
+# no notion of approvals, so this lives beside Proposal instead), and a guard
+# in propose.py that refuses a proposal outright when its kind+target matches
+# a recent rejection.
+
+
+def proposal_target(kind: str, payload: dict) -> str:
+    """The part of a payload that names what the proposal is *about*.
+
+    Grouping key for rejection memory: two proposals with the same kind and
+    the same target are "the same ask", regardless of the reason or the exact
+    wording around it. Falls back to the whole payload, stringified, for a
+    kind ``TARGET_KEY`` does not know about (future-proofing, not reachable
+    for any kind in ``KINDS`` today) or a payload missing its target key.
+
+    ``ha_service`` is not in ``TARGET_KEY``: the entity alone is too coarse,
+    since it would make "turn the light off" and "turn the light on" the same
+    rejected ask on the same entity. Its target is the service plus the
+    entity, plus any data value that is not a bare number (see
+    ``HA_SERVICE_TARGET_IGNORED_DATA_KEYS``) -- a different brightness_pct or
+    setpoint on an otherwise-identical call is still the same ask and should
+    still be refused, but a different ``hvac_mode`` is a different one.
+    """
+    if kind == "ha_service" and isinstance(payload, dict):
+        service = payload.get("service", "")
+        entity_id = payload.get("entity_id", "")
+        data = payload.get("data")
+        kept = {}
+        if isinstance(data, dict):
+            kept = {k: v for k, v in data.items() if k not in HA_SERVICE_TARGET_IGNORED_DATA_KEYS}
+        target = f"{service} {entity_id}"
+        if kept:
+            target += " " + json.dumps(kept, sort_keys=True)
+        return target
+    key = TARGET_KEY.get(kind)
+    if key is None:
+        return json.dumps(payload, sort_keys=True)
+    value = payload.get(key) if isinstance(payload, dict) else None
+    return str(value) if value is not None else json.dumps(payload, sort_keys=True)
+
+
+@dataclass(frozen=True)
+class RejectionGroup:
+    """One (kind, target, topic) Filip has rejected at least once."""
+
+    kind: str
+    target: str
+    topic: str
+    count: int
+    last_at: str
+    reason: str
+
+
+def rejected_groups(
+    proposals: list[Proposal], since: datetime | None = None
+) -> list[RejectionGroup]:
+    """Every rejected (kind, target, topic) among ``proposals``, newest first.
+
+    ``since`` -- when given -- drops a group whose *most recent* rejection is
+    older than the cutoff: a target rejected once, long ago, and never raised
+    again is no longer "Filip has said no to this", it is history. A group
+    that was rejected again more recently stays, however old its first
+    rejection was, because the count and the reason of the latest rejection
+    are what a model deciding whether to re-propose actually needs.
+    """
+    groups: dict[tuple[str, str, str], list[Proposal]] = {}
+    for p in proposals:
+        if p.status != "rejected":
+            continue
+        key = (p.kind, proposal_target(p.kind, p.payload), p.topic)
+        groups.setdefault(key, []).append(p)
+
+    out: list[RejectionGroup] = []
+    for (kind, target, topic), rejections in groups.items():
+        rejections.sort(key=lambda p: p.created)
+        last = rejections[-1]
+        if since is not None and _parse(last.created) < since:
+            continue
+        out.append(
+            RejectionGroup(
+                kind=kind,
+                target=target,
+                topic=topic,
+                count=len(rejections),
+                last_at=last.created,
+                reason=last.result,
+            )
+        )
+    out.sort(key=lambda g: g.last_at, reverse=True)
+    return out
+
+
+# Caps on the opening-context section, so a brain with months of rejections
+# does not crowd the journal and facts out of every cycle's prompt.
+REJECTION_MEMORY_MAX_ENTRIES = 10
+REJECTION_MEMORY_MAX_CHARS = 1500
+
+
+def rejection_memory_section(groups: list[RejectionGroup]) -> str:
+    """Render ``groups`` as the "Filip has said no to" block for the prompt.
+
+    Empty when there is nothing to say -- a heading with no rows under it
+    would cost prompt budget for zero information, the same reasoning
+    ``read_context`` uses for an empty gaps list.
+
+    The char cap drops whole trailing lines rather than cutting mid-line: a
+    line sliced in half reads as a truncated, possibly misleading claim about
+    a rejection ("rejected 2x, last 2026-09-1" -- 9th? 19th?), where a whole
+    line dropped is simply not there, and the "…and N more" line that
+    replaces it says so honestly instead of pretending the cut never
+    happened.
+    """
+    if not groups:
+        return ""
+    entries = groups[:REJECTION_MEMORY_MAX_ENTRIES]
+    lines = ["# Filip has said no to"]
+    for group in entries:
+        line = f"- {group.kind} / {group.target} (topic: {group.topic}): "
+        line += f"rejected {group.count}x, last {group.last_at}"
+        if group.reason:
+            line += f" -- {group.reason}"
+        lines.append(line)
+
+    def _render(kept: list[str], omitted: int) -> str:
+        body = list(kept)
+        if omitted:
+            body.append(f"…and {omitted} more")
+        return "\n".join(body)
+
+    text = _render(lines, 0)
+    dropped = 0
+    while len(text) > REJECTION_MEMORY_MAX_CHARS and len(lines) > 1:
+        lines.pop()
+        dropped += 1
+        text = _render(lines, dropped)
+    return text

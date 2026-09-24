@@ -284,6 +284,20 @@ first time is not tracked or matched against, so this is the model's own job,
 not a code-level dedup. A still-pending proposal getting asked again just
 means a second, redundant Slack message with nothing new for you to react to.
 
+A rejection *is* tracked, at the code level. Every one of the brain's own
+cycles (not an expert's — only the brain can call `propose`) gets a "Filip
+has said no to" section in its opening context, grouped by kind + target (a
+service+entity for `ha_service`, a todo item, a container) + topic — the
+count, the date of the last rejection, and its reason if one is on record.
+`propose` itself refuses a new proposal outright when its kind + target
+matches a rejection from the last `REJECTION_MEMORY_DAYS` days (default 30):
+the error names the earlier rejection and tells the model to ask in Slack
+instead if it genuinely has new evidence, rather than silently re-asking. For
+`ha_service`, the target ignores bare numeric arguments (a setpoint, a
+brightness level) so a different value on an otherwise-identical, already-
+rejected call is still refused — but a different service on the same entity
+(`light.turn_on` after a rejected `light.turn_off`) is a different ask.
+
 Two guarantees are worth knowing when reading logs:
 
 - **Exactly once.** Slack redelivers, and a human can double-tap. The status
