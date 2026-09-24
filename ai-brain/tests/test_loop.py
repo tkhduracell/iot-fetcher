@@ -27,6 +27,7 @@ from ai_brain.loop import (
     _angle_for,
 )
 from ai_brain.tools import Tool, ToolContext, ToolRegistry
+from ai_brain.tools.introspect import register_introspect
 from ai_brain.tools.memory_tools import register_memory_tools
 from ai_brain.tools.slack_tools import register_slack_tools
 
@@ -1263,6 +1264,16 @@ def test_cycle_instructions_set_the_bar_for_a_cycle():
     assert "The bar for speaking is a finding" in CYCLE_INSTRUCTIONS.replace("Otherwise the b", "The b")
 
 
+def test_cycle_instructions_point_at_introspection_tools():
+    assert "system_status" in CYCLE_INSTRUCTIONS
+    assert "code_overview" in CYCLE_INSTRUCTIONS
+
+
+def test_brain_angles_include_the_review_and_code_angles():
+    assert any("review_expert" in angle for angle in BRAIN_ANGLES)
+    assert any("code_overview" in angle for angle in BRAIN_ANGLES)
+
+
 async def test_the_turn_records_which_model_produced_it(make_loop):
     """Without it a provider cannot tell its own history from another's, which
     is what makes a mid-cycle model switch a 400 rather than a fallback."""
@@ -1278,3 +1289,89 @@ async def test_the_turn_records_which_model_produced_it(make_loop):
     convo, _ = provider.calls[-1]
     assistant = [m for m in convo if m.role == "assistant"]
     assert assistant and all(m.model == "fake:1" for m in assistant)
+
+
+# -- end-to-end: the review angle in one scripted cycle -----------------
+
+
+async def test_a_scripted_cycle_reviews_an_expert_and_the_note_lands_in_its_inbox(
+    brain_dir, expert_dir, wall, tmp_path
+):
+    """The plan's own local verification scenario: the brain calls
+    expert_overview, then review_expert(wrong), and the note reaches the
+    expert's inbox -- exercised through a real AgentLoop.run_cycle rather
+    than dispatching the tools directly, so the whole path (registry
+    allowlist, ctx.extras wiring, send_note-style delivery, wake) is proved
+    together."""
+    registry = ToolRegistry()
+    register_memory_tools(registry)
+    register_slack_tools(registry)
+    register_introspect(registry)
+
+    expert_dir.write_fact("heater", "Bedroom heater", "misconfigured, needs 18C floor")
+
+    memories = {"brain": brain_dir, "energy": expert_dir}
+    # call()'s own first parameter is named "name", which collides with the
+    # tool argument these two calls need to pass -- ToolCall built directly
+    # instead of going through that helper.
+    provider = FakeProvider(
+        "fake:1",
+        script=[
+            reply(
+                "checking energy",
+                ToolCall(id="a", name="expert_overview", args={"name": "energy"}),
+            ),
+            reply(
+                "found it",
+                ToolCall(
+                    id="b",
+                    name="review_expert",
+                    args={
+                        "name": "energy",
+                        "verdict": "wrong",
+                        "findings": "18C floor was corrected by Filip; fact is stale",
+                    },
+                ),
+            ),
+            reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="reviewed energy")),
+        ],
+    )
+    ledger = Ledger(
+        {"fake:1": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "ledger.json", clock=wall
+    )
+    chain = ProviderChain([provider], ledger, call_timeout_s=60)
+
+    woken: list[str] = []
+    loops: dict = {}
+    ctx = ToolContext(
+        loop="brain",
+        memory=brain_dir,
+        memories=memories,
+        settings=load_settings({}),
+        wake=woken.append,
+        extras={"loops": loops},
+    )
+    loop = AgentLoop(
+        name="brain",
+        memory=brain_dir,
+        chain=chain,
+        registry=registry,
+        ctx=ctx,
+        heartbeat_s=HEARTBEAT,
+        priority="brain",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+    loops["brain"] = loop
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    notes = expert_dir.unread_notes()
+    assert len(notes) == 1
+    assert notes[0].sender == "brain"
+    assert "Brain review: wrong" in notes[0].body
+    assert "stale" in notes[0].body
+    assert woken == ["energy"]
+    assert brain_dir.recent_reviews("energy", 1)[0]["verdict"] == "wrong"

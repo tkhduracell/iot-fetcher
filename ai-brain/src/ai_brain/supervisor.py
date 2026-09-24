@@ -35,6 +35,7 @@ from ai_brain.llm import PROVIDER_PREFIXES, ProviderChain, limits_from_settings
 from ai_brain.loop import AgentLoop
 from ai_brain.memory import MemoryDir
 from ai_brain.metrics import MetricsWriter, render
+from ai_brain.repo import RepoSnapshot
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.tools.backend import register_backend_tools
 from ai_brain.tools.memory_tools import register_memory_tools
@@ -71,6 +72,7 @@ class System:
     events: EventBus
     chain: ProviderChain | None = None
     slack_out: object | None = None
+    repo: RepoSnapshot | None = None
 
 
 def _read_constitution(settings: Settings) -> str:
@@ -158,6 +160,12 @@ def build(
 
     http = http or httpx.AsyncClient(timeout=HTTP_TIMEOUT_S)
 
+    # The brain's own view of the iot-fetcher source (code_* tools). Built
+    # eagerly like everything else here, but empty (RepoSnapshot.state is
+    # None) until the first refresh -- see repo_refresh_watcher, called once
+    # on boot and then every REPO_REFRESH_H by run().
+    repo = RepoSnapshot(settings.memory_root, settings.repo_slug, settings.repo_ref, http)
+
     registry = ToolRegistry()
     register_memory_tools(registry)
     register_backend_tools(registry)
@@ -186,7 +194,23 @@ def build(
             memories=memories,
             settings=settings,
             wake=wake,
-            extras={"http": http, "approvals": approvals, "ledger": ledger},
+            # ``loops`` is the same dict object as the one below, filled in
+            # after every AgentLoop is built -- so introspect.py's
+            # system_status can read every loop's live state (cycle_counts,
+            # last_cycle, trace) without System needing to hand tools a
+            # second, parallel reference to it. Every extra here is handed to
+            # every loop's ctx the same way ledger/approvals already are --
+            # the registry's loops=BRAIN_ONLY allowlist is what actually
+            # keeps the introspection tools brain-only, not what extras an
+            # expert's ctx happens to carry.
+            extras={
+                "http": http,
+                "approvals": approvals,
+                "ledger": ledger,
+                "loops": loops,
+                "chain": chain,
+                "repo": repo,
+            },
         )
         loops[name] = AgentLoop(
             name=name,
@@ -218,6 +242,7 @@ def build(
         wake=wake,
         events=events,
         chain=chain,
+        repo=repo,
     )
 
 
@@ -258,6 +283,28 @@ def day_roll_watcher(system: System) -> Callable[[], Awaitable[None]]:
         log.info("quota day rolled to %s; brain notified", today)
 
     return watch
+
+
+def repo_refresh_watcher(system: System) -> Callable[[], Awaitable[None]]:
+    """Keep the code_* tools' snapshot current, without ever taking it away.
+
+    A failed refresh (GitHub down, rate-limited, a malformed tarball) is
+    logged and leaves ``system.repo.state`` exactly as it was -- the brain
+    keeps reading the last snapshot that worked rather than losing code
+    access because of a transient network blip. Before the first successful
+    refresh ever completes, ``state`` is ``None`` and the code_* tools report
+    "snapshot unavailable" rather than raising into a cycle.
+    """
+
+    async def refresh() -> None:
+        if system.repo is None:
+            return
+        try:
+            await system.repo.refresh()
+        except Exception:
+            log.exception("[repo] refresh failed; keeping previous snapshot")
+
+    return refresh
 
 
 async def _supervise(name: str, loop) -> None:
@@ -315,6 +362,7 @@ async def run(settings: Settings) -> None:
 
     expire_proposals = expiry_watcher(system)
     watch_day_roll = day_roll_watcher(system)
+    refresh_repo = repo_refresh_watcher(system)
 
     finders = getattr(system.chain, "lan_finders", [])
     if finders:
@@ -326,10 +374,20 @@ async def run(settings: Settings) -> None:
         # its full timeout must not delay another's.
         await asyncio.gather(*(finder.scan() for finder in finders))
 
+    # Also before the loops, same reasoning as the LAN sweep: the brain's
+    # first cycle should see code_* tools that actually work rather than
+    # "snapshot unavailable" every boot. A failed refresh here still lets the
+    # process start -- repo_refresh_watcher logs it and the periodic retry
+    # below picks it up on its own schedule.
+    await refresh_repo()
+
     tasks = [asyncio.create_task(_supervise(name, agent)) for name, agent in system.loops.items()]
     tasks.append(asyncio.create_task(_every(METRICS_EVERY_S, publish_metrics)))
     tasks.append(asyncio.create_task(_every(EXPIRE_EVERY_S, expire_proposals)))
     tasks.append(asyncio.create_task(_every(DAY_ROLL_EVERY_S, watch_day_roll)))
+    tasks.append(
+        asyncio.create_task(_every(settings.repo_refresh_h * 3600, refresh_repo))
+    )
     for finder in finders:
         tasks.append(asyncio.create_task(_every(settings.lan_scan_s, finder.scan)))
     if system.slack_out is not None:

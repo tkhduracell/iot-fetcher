@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from ai_brain.introspection import proposal_loops, usefulness_rows
 from ai_brain.memory import safe_name
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -71,7 +72,9 @@ FEED_KEEPALIVE_S = 20
 #
 # ``AgentLoop.cycle_counts`` counts cycles by the ``Status`` literal in
 # ``loop.py``: ok, max_rounds, error, timeout, no_budget, paused, cancelled.
-# Rolled into four buckets by what the cycle actually left behind:
+# ``introspection.py`` rolls those into four buckets by what the cycle
+# actually left behind -- see its module docstring and ``CYCLE_BUCKETS`` for
+# the mapping. The four buckets, in order:
 #
 # * ``real``    -- ``ok``: the model called ``end_cycle``, so a cycle closed
 #                  with a summary and a chosen wake. The only status that
@@ -92,26 +95,15 @@ FEED_KEEPALIVE_S = 20
 # Any status not listed here also lands in ``nothing`` rather than being
 # dropped, so the four buckets always sum to ``total``: a status added to
 # ``loop.py`` later must not quietly make the numbers stop reconciling.
-CYCLE_BUCKETS: dict[str, str] = {
-    "ok": "real",
-    "max_rounds": "repeat",
-    "error": "note",
-    "timeout": "note",
-    "no_budget": "nothing",
-    "paused": "nothing",
-    "cancelled": "nothing",
-}
-BUCKETS = ("nothing", "note", "real", "repeat")
-
-# Which proposal statuses count as answered how. ``approvals.py`` stores seven:
-# pending, executing, executed, failed, rejected, blocked_quiet_hours, expired.
-# Only some of them record a human's answer -- ``failed`` is written both when
-# a proposal blew up after a checkmark *and* when Slack was unreachable at
-# propose time, and ``expired`` means nobody ever answered -- so neither is
-# counted as approved or rejected. The three counters are therefore a subset of
-# ``laps``, not a partition of it; the per-proposal ``status`` carries the rest.
-APPROVED_STATUSES = frozenset({"executing", "executed", "blocked_quiet_hours"})
-REJECTED_STATUSES = frozenset({"rejected"})
+#
+# Which proposal statuses count as answered how, also in ``introspection.py``:
+# ``approvals.py`` stores seven statuses -- pending, executing, executed,
+# failed, rejected, blocked_quiet_hours, expired. Only some of them record a
+# human's answer -- ``failed`` is written both when a proposal blew up after a
+# checkmark *and* when Slack was unreachable at propose time, and ``expired``
+# means nobody ever answered -- so neither is counted as approved or rejected.
+# The counters are therefore a subset of ``laps``, not a partition of it; the
+# per-proposal ``status`` carries the rest.
 
 
 def _json(payload: Any, status: int = 200) -> web.Response:
@@ -245,61 +237,15 @@ def _loops_json(system: System) -> dict:
     sharing one are the same loop coming round again. Four rejected
     ``ha_todo_add`` proposals on one topic is the signal: the brain keeps
     asking for something Filip keeps saying no to, and nothing else in the API
-    makes that visible.
-
-    ``Approvals.all()`` is oldest first (the ids are timestamped), so the first
-    and last member of each group are the first and last lap without sorting.
+    makes that visible. The grouping itself lives in ``introspection.py`` so
+    the brain's own ``system_status`` tool can render the same thing.
     """
-    groups: dict[str, list] = {}
-    for proposal in system.approvals.all():
-        groups.setdefault(proposal.topic, []).append(proposal)
-
-    loops = []
-    for topic, proposals in groups.items():
-        loops.append(
-            {
-                "topic": topic,
-                # One proposal is a loop of one: a subject that has come round
-                # once is still the unit this endpoint counts.
-                "laps": len(proposals),
-                "first_at": proposals[0].created,
-                "last_at": proposals[-1].created,
-                "pending": sum(1 for p in proposals if p.status == "pending"),
-                "approved": sum(1 for p in proposals if p.status in APPROVED_STATUSES),
-                "rejected": sum(1 for p in proposals if p.status in REJECTED_STATUSES),
-                "kinds": sorted({p.kind for p in proposals}),
-                "proposals": [
-                    {
-                        "id": p.id,
-                        "kind": p.kind,
-                        "created": p.created,
-                        "status": p.status,
-                        "result": p.result,
-                    }
-                    for p in proposals
-                ],
-            }
-        )
-    # Loudest loop first; topic breaks the tie so the order is stable between
-    # polls rather than dependent on dict insertion for equal lap counts.
-    loops.sort(key=lambda loop: (-loop["laps"], loop["topic"]))
-    return {"loops": loops}
+    return proposal_loops(system.approvals)
 
 
 def _usefulness_json(system: System) -> dict:
     """Every loop's cycles, rolled into the four buckets above."""
-    rows = []
-    totals = {"total": 0, **dict.fromkeys(BUCKETS, 0)}
-    for name in ["brain"] + sorted(n for n in system.loops if n != "brain"):
-        row = {"name": name, "total": 0, **dict.fromkeys(BUCKETS, 0)}
-        for status, count in system.loops[name].cycle_counts.items():
-            bucket = CYCLE_BUCKETS.get(status, "nothing")
-            row[bucket] += count
-            row["total"] += count
-        for key in ("total", *BUCKETS):
-            totals[key] += row[key]
-        rows.append(row)
-    return {"loops": rows, "totals": totals}
+    return usefulness_rows(system.loops)
 
 
 def _ledger_json(system: System) -> dict:
@@ -463,6 +409,12 @@ def build_app(
                 ],
             }
         )
+        if not memory.is_brain:
+            # The brain's own verdict on this expert (tools/introspect.py's
+            # review_expert), so Filip can see it in the web UI without
+            # reading brain/reviews/<name>.jsonl on the box directly.
+            reviews = system.memories["brain"].recent_reviews(name, n=1)
+            body["last_review"] = reviews[0] if reviews else None
         return _json(body)
 
     async def agent_journal(request: web.Request) -> web.Response:

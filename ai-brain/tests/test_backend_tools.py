@@ -99,6 +99,15 @@ def test_every_tool_is_registered(registry):
         "web_search",
         "web_fetch",
         "usage_status",
+        "system_status",
+        "expert_overview",
+        "read_expert",
+        "review_expert",
+        "code_overview",
+        "code_list",
+        "code_read",
+        "code_grep",
+        "code_log",
     }
 
 

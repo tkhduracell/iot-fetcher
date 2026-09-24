@@ -426,6 +426,24 @@ async def test_an_expert_has_no_goals(client, system):
     assert body["goals"] == ""
 
 
+async def test_an_expert_with_no_review_yet_has_a_null_last_review(client):
+    body = await get_json(client, "/api/agents/energy")
+    assert body["last_review"] is None
+
+
+async def test_an_expert_detail_carries_the_brains_last_review(client, system):
+    system.memories["brain"].append_review(
+        "energy", {"ts": 1.0, "verdict": "stale", "findings": "old tariff numbers"}
+    )
+    body = await get_json(client, "/api/agents/energy")
+    assert body["last_review"] == {"ts": 1.0, "verdict": "stale", "findings": "old tariff numbers"}
+
+
+async def test_the_brain_itself_has_no_last_review_field(client):
+    body = await get_json(client, "/api/agents/brain")
+    assert "last_review" not in body
+
+
 async def test_an_unknown_agent_is_a_404(client):
     body = await get_json(client, "/api/agents/nope", expect=404)
     assert body == {"error": "unknown agent: nope"}

@@ -81,6 +81,9 @@ class Settings:
     rpd: int
     call_timeout_s: int
     http_port: int
+    repo_slug: str
+    repo_ref: str
+    repo_refresh_h: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -171,4 +174,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         rpd=get_int("RPD", 200),
         call_timeout_s=get_int("CALL_TIMEOUT_S", 60),
         http_port=get_int("HTTP_PORT", 8091),
+        # The public repo the code_* tools read -- see repo.py. Defaults to
+        # this repo itself, on its main branch.
+        repo_slug=get("REPO_SLUG", "tkhduracell/iot-fetcher"),
+        repo_ref=get("REPO_REF", "main"),
+        repo_refresh_h=get_int("REPO_REFRESH_H", 6),
     )

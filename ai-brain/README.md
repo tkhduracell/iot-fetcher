@@ -34,11 +34,27 @@ The brain reads those notes, keeps a `goals.md` it is free to rewrite, and is
 the only loop that can call `propose` — which does not act either, it files a
 request for a human to approve (see [Approvals](#approvals)).
 
+The brain also has a read-only window onto the rest of the system that no
+expert gets: it can read (never write) any expert's persona, journal, facts
+and open gaps (`expert_overview`, `read_expert`), record a verdict on what it
+finds (`review_expert` — see [Reviewing the experts](#reviewing-the-experts)),
+see its own runtime state (`system_status` — cycle health, proposal loops, the
+ledger), and read the whole iot-fetcher repo's tracked source (`code_overview`,
+`code_list`, `code_read`, `code_grep`, `code_log` — see
+[Reading the repo](#reading-the-repo)). Nothing here mutates anything but the
+brain's own `reviews/` directory and a note in the reviewed expert's inbox —
+the brain never edits an expert's memory directly, it corrects through a
+review, the same way any other cross-loop message travels.
+
 **Emergent goals.** Nothing hard-codes what the agents should care about. The
 constitution (`seed/constitution.md`, copied to the volume on first boot and
-then owned by you) is the only fixed text; `goals.md` and every persona file
-are rewritten by the brain over time. Deleting the volume resets it to the
-seed; editing `constitution.md` on the volume is how you steer it.
+then owned by you) is the only fixed text; `goals.md` and the brain's own
+`identity.md` are rewritten by the brain over time (`rewrite_goals` and
+`rewrite_identity`, both brain-only). An expert's persona is not rewritten by
+anything at runtime — an expert has no tool for it, and the brain corrects an
+expert through a review note, never by editing its persona file. Deleting the
+volume resets it to the seed; editing `constitution.md` on the volume is how
+you steer it.
 
 **Best model first, local hardware as the fallback.** All inference runs
 through a provider chain (`LLM_CHAIN`), tried in order until one answers: the
@@ -68,14 +84,18 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
 │   ├── facts/<name>.md        long-lived notes (max 40 before compaction)
 │   ├── inbox/                 unread notes from experts and approvals
 │   │   └── done/              processed notes, purged after 30 days
+│   ├── reviews/<expert>.jsonl the brain's verdicts on each expert (max 50 lines each)
 │   └── outbox/
 │       ├── <proposal-id>.json pending/terminal proposals
 │       └── slack/<ts>.json    Slack posts that failed to send, retried later
-└── experts/<name>/
-    ├── persona.md
-    ├── journal/YYYY-MM-DD.md
-    ├── facts/<name>.md
-    └── inbox/ (+ done/)
+├── experts/<name>/
+│   ├── persona.md
+│   ├── journal/YYYY-MM-DD.md
+│   ├── facts/<name>.md
+│   └── inbox/ (+ done/)
+└── _repo/                     the code_* tools' snapshot of the public repo
+    ├── current -> <sha>/      symlink, swapped atomically after each refresh
+    └── <sha>/                 one extracted tarball per SHA (see below)
 ```
 
 Journals keep the last 30 files — older ones are deleted after every cycle —
@@ -124,6 +144,9 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
+| `REPO_SLUG` | `tkhduracell/iot-fetcher` | The public GitHub repo the `code_*` tools read (see [Reading the repo](#reading-the-repo)). |
+| `REPO_REF` | `main` | Branch or ref the snapshot tracks. |
+| `REPO_REFRESH_H` | `6` | Hours between snapshot refreshes. Refreshed once on boot too. |
 
 ## Slack app setup
 
@@ -271,6 +294,87 @@ Two guarantees are worth knowing when reading logs:
 - **Quiet hours.** `sonos_say` refuses between 22:00 and 07:00 Europe/Stockholm
   and records `blocked_quiet_hours`.
 
+## Reviewing the experts
+
+Every expert's memory is scoped to itself — it can only read and write its own
+facts, journal and gaps. The brain is the one loop that can see across all of
+them, and the only one whose job is to reflect on what it finds:
+
+- **`expert_overview(name?)`** — a one-line row per expert (facts, open gaps,
+  unread inbox, its last review verdict) when `name` is omitted, or one
+  expert's persona preview, fact list, gaps, unread count, last cycle, recent
+  journal and last review when it is given.
+- **`read_expert(name, what, fact?, days?)`** — read that expert's `persona`,
+  `journal` (`days` back, default 2), one named `fact`, or its `gaps`.
+  Read-only: there is no tool to write into another loop's memory, brain
+  included.
+- **`review_expert(name, verdict, findings)`** — record a verdict (`good`,
+  `stale`, `wrong`, `repetitive`, `off_goal`) in the brain's own
+  `reviews/<name>.jsonl` (capped at the last 50). Anything but `good` also
+  drops a note in the expert's inbox — "Brain review: `<verdict>` —
+  `<findings>`. Fix or delete the affected facts." — and wakes it, the same
+  delivery path `send_note` uses. The expert decides what to do with the note
+  on its own next cycle; the brain never edits the expert's memory itself.
+
+An hourly angle ("Review one expert...", see `BRAIN_ANGLES` in `loop.py`)
+puts this in the brain's own rotation, so a stale or contradicted fact gets
+caught even when nothing else prompts a look.
+
+## Reading the repo
+
+The brain can read the whole iot-fetcher source — its own code and every
+sibling service's — to reason about why something behaves the way it does,
+without guessing from logs and metrics alone.
+
+- **Why the source, not the rpi5 checkout.** The live checkout on rpi5 holds
+  untracked secrets — `.env` files, a service-account JSON, a password file —
+  that no agent may ever see, and there is no reliable way to tell "tracked"
+  from "untracked" by looking at a mounted directory. So the brain reads the
+  **public GitHub tarball** instead (`codeload.github.com/<REPO_SLUG>/tar.gz/<REPO_REF>`),
+  which by construction contains only what git has committed. It is
+  downloaded, resolved to a commit SHA via the GitHub API, and extracted to
+  `/memory/_repo/<sha>/` with a `current` symlink swapped in atomically once
+  extraction succeeds — a reader mid-refresh always sees a complete snapshot,
+  old or new, never a half-written one. Refreshed once on boot and then every
+  `REPO_REFRESH_H` (default 6h), skipping the download when the SHA is
+  unchanged; a failed refresh keeps the previous snapshot and logs the error.
+- **Tar safety.** Every member is checked before it touches disk: regular
+  files and directories only (no symlinks, hardlinks, devices), no absolute
+  path and no `..` segment, and the resolved path must stay under the
+  snapshot root. A total size cap (~50 MB) refuses an oversized archive before
+  extracting a single byte. See `ai_brain/repo.py` for the full policy.
+- **Sensitive-file denylist.** The snapshot already only contains what git
+  tracked, but `ai_brain/sensitive.py`'s `is_sensitive(path, content=None)`
+  is a second, independent gate against a secret-shaped file committed by
+  mistake — applied both at extraction (the file is never written to
+  `/memory/_repo` at all) and again in every `code_*` tool. `code_list` hides
+  a match entirely; `code_read`/`code_grep` answer exactly as if the path did
+  not exist, never a distinct "denied" that would itself confirm the file is
+  there. Denied: `.env`/`.env.*`/`*.env` (but not `*.example`/`*.template`/
+  `*.sample`); `*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`/`id_rsa*`/
+  `id_ed25519*`; a filename containing `password`/`secret`/`credential`/
+  `token` — except a source file (`.py`/`.ts`/`.tsx`/`.js`/`.go`/`.sh`/`.md`),
+  where those words are ordinary code names (`redact.py`,
+  `set-github-secrets.sh`); a small `.json` file whose content has a
+  `private_key` field or a `service_account` type marker, regardless of its
+  name; `.mcp.json`/`.netrc`/`.npmrc`/`.pypirc`/`.git-credentials`/
+  `.htpasswd`; and anything under `volumes/` or `.git/`.
+- **`code_overview()`** — call this first. Every top-level component with its
+  README's first paragraph, `docker-compose.yml`'s services (image/build,
+  depends_on, ports, networks, volumes and env var **names only, never
+  values**), the root `CLAUDE.md`/`README.md` headings, and the CI workflows
+  with the paths each triggers on.
+- **`code_list(path?)`**, **`code_read(path, start?, end?)`**,
+  **`code_grep(pattern, path?)`** — drill down. Repo-relative paths (e.g.
+  `pool-pump-planner/vm.go`), text files only, capped at 256 KB each; `grep`
+  is a Python regex capped at 100 hits. `node_modules` and lockfiles are
+  skipped everywhere.
+- **`code_log(n?)`** — the last N commits (sha, date, subject), so the brain
+  can say "this was fixed in #548" instead of re-diagnosing it.
+- **Deployed vs. main.** The snapshot tracks `REPO_REF` (`main` by default),
+  which can be ahead of whatever rpi5 is actually running. `code_overview`'s
+  result says so, and `code_log` is what makes the gap visible.
+
 ## Local models
 
 The chain spends the free tier first and falls back to hardware in the house:
@@ -391,7 +495,7 @@ brain carries on without it.
 | `GET /healthz` | `{ok, uptime_s, loops[]}` — is the process up, and which loops does it run. |
 | `GET /api/status` | Uptime, pause state, Slack, the quota ledger per model key, proposal counts and a fixed allowlist of settings. Never any token. |
 | `GET /api/agents` | One summary per agent, brain first: last cycle, next wake, cycle counts, whether a cycle is running now. |
-| `GET /api/agents/{name}` | That summary plus identity, goals, fact names, unread inbox, journal dates and the live trace. |
+| `GET /api/agents/{name}` | That summary plus identity, goals, fact names, unread inbox, journal dates and the live trace. For an expert, also the brain's most recent `review_expert` verdict on it (`last_review`, `null` if never reviewed). |
 | `GET /api/agents/{name}/journal?days=N` | The last `N` days it actually wrote, newest first. `days` defaults to 3 and is clamped to 1–30; a non-integer is a 400. |
 | `GET /api/agents/{name}/trace` | The current cycle's thoughts, or the last one's. `finished_at: null` means it is still thinking. |
 | `GET /api/agents/{name}/facts/{fact}` | One fact's markdown. |

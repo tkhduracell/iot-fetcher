@@ -15,7 +15,16 @@ from ai_brain import metrics, supervisor
 from ai_brain.config import load_settings
 from ai_brain.ledger import Ledger, Limits
 from ai_brain.metrics import MetricsWriter
+from ai_brain.repo import RepoSnapshot
 from ai_brain.supervisor import build
+
+
+async def _no_op_refresh(self, dest=None):
+    """A RepoSnapshot.refresh that touches no network -- run() calls this
+    once on boot, before the loops start, and several tests below drive
+    run() without wanting a real GitHub call. RepoSnapshot's own refresh
+    logic is exercised against a fake tarball in test_repo.py instead."""
+    return self.state
 
 
 def _free_port() -> int:
@@ -193,9 +202,29 @@ def test_build_wires_memories_registry_and_context(tmp_path):
     assert ctx.loop == "energy"
     assert ctx.extras["approvals"] is system.approvals
     assert ctx.extras["http"] is system.http
+    # introspect.py's system_status/code_* tools read these straight off
+    # ctx.extras -- the registry's brain-only allowlist is what actually
+    # keeps an expert from calling them, not what its ctx carries.
+    assert ctx.extras["loops"] is system.loops
+    assert ctx.extras["repo"] is system.repo
+    assert ctx.extras["chain"] is system.chain
     assert system.loops["brain"].pause_file == settings.memory_root / "PAUSE"
     assert system.loops["brain"].heartbeat_s == settings.brain_heartbeat_s
     assert system.loops["energy"].heartbeat_s == settings.expert_heartbeat_s
+
+
+def test_build_gives_every_loop_the_same_repo_snapshot_object(tmp_path):
+    """One RepoSnapshot per process, shared by every loop's ctx -- so a
+    refresh anywhere is visible everywhere, and the periodic job in run()
+    only has to refresh one object."""
+    settings = load_settings(env(tmp_path, EXPERTS="energy"))
+    system = build(settings, chain_factory=fake_chain)
+
+    assert system.repo is not None
+    assert system.repo.slug == settings.repo_slug
+    assert system.repo.ref == settings.repo_ref
+    assert system.loops["brain"].ctx.extras["repo"] is system.loops["energy"].ctx.extras["repo"]
+    assert system.repo.state is None  # nothing has refreshed it yet
 
 
 def test_build_wake_rings_the_named_loop_and_ignores_strangers(tmp_path):
@@ -429,6 +458,75 @@ async def test_expiring_nothing_does_not_wake(tmp_path):
     assert woken == []
 
 
+# -- the repo snapshot refresh job --------------------------------------
+
+
+def _repo_tarball(slug: str, sha: str) -> bytes:
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        name = f"{slug.split('/')[-1]}-{sha}/README.md"
+        content = b"# fake\n"
+        info = tarfile.TarInfo(name=name)
+        info.size = len(content)
+        tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+@respx.mock
+async def test_repo_refresh_watcher_populates_the_snapshot(tmp_path):
+    settings = load_settings(env(tmp_path))
+    system = build(settings, chain_factory=fake_chain)
+    slug = settings.repo_slug
+    sha = "deadbeef1234"
+    respx.get(f"https://api.github.com/repos/{slug}/commits/{settings.repo_ref}").mock(
+        return_value=httpx.Response(200, json={"sha": sha})
+    )
+    respx.get(f"https://api.github.com/repos/{slug}/commits").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get(f"https://codeload.github.com/{slug}/tar.gz/{sha}").mock(
+        return_value=httpx.Response(200, content=_repo_tarball(slug, sha))
+    )
+
+    refresh = supervisor.repo_refresh_watcher(system)
+    await refresh()
+
+    assert system.repo.state is not None
+    assert system.repo.state.sha == sha
+
+
+@respx.mock
+async def test_repo_refresh_watcher_keeps_the_previous_snapshot_on_failure(tmp_path, caplog):
+    settings = load_settings(env(tmp_path))
+    system = build(settings, chain_factory=fake_chain)
+    slug = settings.repo_slug
+    sha = "deadbeef1234"
+    respx.get(f"https://api.github.com/repos/{slug}/commits/{settings.repo_ref}").mock(
+        return_value=httpx.Response(200, json={"sha": sha})
+    )
+    respx.get(f"https://api.github.com/repos/{slug}/commits").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx.get(f"https://codeload.github.com/{slug}/tar.gz/{sha}").mock(
+        return_value=httpx.Response(200, content=_repo_tarball(slug, sha))
+    )
+    refresh = supervisor.repo_refresh_watcher(system)
+    await refresh()
+    good_state = system.repo.state
+
+    respx.get(f"https://api.github.com/repos/{slug}/commits/{settings.repo_ref}").mock(
+        return_value=httpx.Response(500)
+    )
+    with caplog.at_level(logging.ERROR):
+        await refresh()
+
+    assert system.repo.state is good_state
+    assert "refresh failed" in caplog.text
+
+
 # -- metrics with no VM configured ------------------------------------
 
 
@@ -462,6 +560,11 @@ async def test_run_starts_and_stops_the_api_and_serves_healthz(tmp_path, monkeyp
     port = _free_port()
     settings = load_settings(env(tmp_path, HTTP_PORT=str(port)))
     monkeypatch.setattr(supervisor, "build", lambda s: build(s, chain_factory=fake_chain))
+    # run() refreshes the repo snapshot once on boot, before the loops start --
+    # same reasoning as the LAN sweep below. That is a real network call this
+    # test must never make; RepoSnapshot itself is exercised against a fake
+    # tarball in test_repo.py.
+    monkeypatch.setattr(RepoSnapshot, "refresh", _no_op_refresh)
 
     stop = asyncio.Event()
     monkeypatch.setattr(supervisor.asyncio, "Event", lambda: stop)
@@ -492,6 +595,7 @@ async def test_run_survives_a_disabled_api_port(tmp_path, monkeypatch):
     """HTTP_PORT=0 must leave the loops running, not raise on the way up."""
     settings = load_settings(env(tmp_path, HTTP_PORT="0"))
     monkeypatch.setattr(supervisor, "build", lambda s: build(s, chain_factory=fake_chain))
+    monkeypatch.setattr(RepoSnapshot, "refresh", _no_op_refresh)
 
     stop = asyncio.Event()
     monkeypatch.setattr(supervisor.asyncio, "Event", lambda: stop)
@@ -552,6 +656,7 @@ async def test_the_lan_sweep_finishes_before_any_loop_starts(tmp_path, monkeypat
         return system
 
     monkeypatch.setattr(supervisor, "build", _build)
+    monkeypatch.setattr(RepoSnapshot, "refresh", _no_op_refresh)
 
     stop = asyncio.Event()
     monkeypatch.setattr(supervisor.asyncio, "Event", lambda: stop)

@@ -13,6 +13,7 @@ from ai_brain.tools import ToolRegistry
 from ai_brain.tools.docker_tools import register_docker_tools
 from ai_brain.tools.drive import register_drive_tools
 from ai_brain.tools.ha import register_ha_tools
+from ai_brain.tools.introspect import register_introspect
 from ai_brain.tools.usage import register_usage_tools
 from ai_brain.tools.vm import register_vm_tools
 from ai_brain.tools.web import register_web_tools
@@ -25,3 +26,4 @@ def register_backend_tools(registry: ToolRegistry) -> None:
     register_web_tools(registry)
     register_usage_tools(registry)
     register_docker_tools(registry)
+    register_introspect(registry)
