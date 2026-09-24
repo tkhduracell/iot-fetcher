@@ -3,15 +3,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type CycleTrace,
+  type ParsedResult,
   type RoundTrace,
   type ToolCall,
   type ToolResult,
+  decodeEscapes,
   fetchTrace,
   formatAgo,
   formatClock,
+  parseResultPreview,
   shortModel,
+  splitPreviewSuffix,
   statusTone,
-  truncate,
+  summarizeArgs,
+  summarizeResult,
 } from '../lib/aiBrain';
 import useAiBrain from '../hooks/useAiBrain';
 import { EmptyState, MONO, Pill, SANS, SERIF, WALL, toneColor } from './AiBrainWallTheme';
@@ -96,12 +101,56 @@ export function useTypewriter(text: string): string {
   return text.slice(0, shown);
 }
 
+/** Text clamped to two lines by default, click to read the rest — the
+ *  model's own words (a round's `thinking` or `text`) before its tool calls,
+ *  or during a live typewriter reveal. */
+export const ClampedText: React.FC<{ children: string; italic?: boolean; color?: string }> = ({
+  children,
+  italic = false,
+  color = WALL.ink,
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="flex flex-col items-start gap-1 min-w-0">
+      <pre
+        className={`text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0 w-full ${italic ? 'italic' : ''}`}
+        style={{
+          fontFamily: MONO,
+          color,
+          ...(expanded
+            ? {}
+            : {
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: 2,
+                overflow: 'hidden',
+              }),
+        }}
+      >
+        {children}
+      </pre>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        className="cursor-pointer bg-transparent border-0 p-0 underline text-[11px]"
+        style={{ fontFamily: SANS, color: WALL.amber }}
+      >
+        {expanded ? 'mindre' : 'mer'}
+      </button>
+    </div>
+  );
+};
+
 /** What the model reasoned before it answered, typed out as it is read.
  *
  *  Dimmed and italic, above the answer: this is the model talking to itself,
- *  and it must never read as something the house is telling you. */
+ *  and it must never read as something the house is telling you. Clamped to
+ *  two lines like any other thought text — expanding while still typing
+ *  simply shows the same in-progress string unclamped. */
 export const ThinkingView: React.FC<{ thinking: string }> = ({ thinking }) => {
   const shown = useTypewriter(thinking);
+  const typing = shown.length < thinking.length;
   return (
     <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.inkFaint}` }}>
       <div
@@ -110,65 +159,190 @@ export const ThinkingView: React.FC<{ thinking: string }> = ({ thinking }) => {
       >
         tänker
       </div>
-      <pre
-        className="text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0 italic"
-        style={{ fontFamily: MONO, color: WALL.inkFaint }}
-      >
-        {shown}
-        {shown.length < thinking.length && <span aria-hidden>▌</span>}
-      </pre>
+      <ClampedText italic color={WALL.inkFaint}>
+        {typing ? `${shown}▌` : shown}
+      </ClampedText>
     </div>
   );
 };
 
-/** One `key: value` argument. Long values are cut at 160 characters behind a
- *  toggle: a single `append_journal` body is taller than the viewport, which
- *  is what used to make one cycle several screens. */
-const ArgLine: React.FC<{ name: string; value: string }> = ({ name, value }) => {
-  const [expanded, setExpanded] = useState(false);
-  const { text, truncated } = truncate(value ?? '');
+/** A key/value pair in the expanded view's small property list — everything
+ *  in a parsed result that is not one of the long multi-line string fields
+ *  `ExpandedBody` renders separately. */
+const KeyValueRow: React.FC<{ name: string; value: unknown }> = ({ name, value }) => {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return (
+    <div className="text-[12px] leading-[1.5] break-words" style={{ fontFamily: MONO, color: WALL.inkDim }}>
+      <span style={{ color: WALL.inkFaint }}>{name}:</span> {text}
+    </div>
+  );
+};
+
+/** Field names whose string value is rendered as a scrollable multi-line
+ *  monospace block (tabs and newlines decoded) rather than an inline
+ *  key/value row — `code_read`'s `body`, `ha_context`'s `context`, and their
+ *  siblings across the other introspection tools. Any string field long
+ *  enough to actually contain a newline gets this treatment regardless of
+ *  name, so a tool added later needs no update here; this list only decides
+ *  which *short* string fields (that happen to share a name with a long one
+ *  elsewhere) are still worth checking. */
+const LONG_TEXT_FIELDS = new Set(['body', 'context', 'journal', 'persona', 'text']);
+
+/** ~20 lines of monospace before the box scrolls instead of growing — long
+ *  enough to read a real body, short enough that one huge result cannot push
+ *  the rest of the round off screen. */
+const ExpandedTextBlock: React.FC<{ text: string }> = ({ text }) => (
+  <div
+    className="overflow-auto rounded px-2 py-1"
+    style={{ background: WALL.ground, maxHeight: '20.5em' }}
+  >
+    <Pre>{decodeEscapes(text)}</Pre>
+  </div>
+);
+
+/** The parsed, pretty-printed form of a tool result: long text fields as
+ *  scrollable monospace blocks (tabs/newlines decoded), everything else as a
+ *  small key/value list, and the `…[+N]` truncation note carried over
+ *  verbatim rather than re-derived. Falls back to the raw text, monospace,
+ *  when the body did not parse as JSON at all. */
+const ExpandedBody: React.FC<{ parsed: ParsedResult }> = ({ parsed }) => {
+  if (!parsed.parsed || parsed.json === null || typeof parsed.json !== 'object') {
+    // The suffix is stripped here even in the raw-text fallback: a `…[+N]`
+    // cut landing mid-JSON-string still means "N characters were dropped",
+    // and that is worth saying as the same note rather than left glued onto
+    // unparsed text as a stray trailer.
+    const { body, droppedChars } = splitPreviewSuffix(parsed.raw);
+    return (
+      <div className="flex flex-col gap-1">
+        <ExpandedTextBlock text={body} />
+        {droppedChars !== null && <TruncationNote droppedChars={droppedChars} />}
+      </div>
+    );
+  }
+
+  if (Array.isArray(parsed.json)) {
+    return (
+      <div className="flex flex-col gap-1">
+        {parsed.json.map((item, i) => (
+          <KeyValueRow key={i} name={String(i)} value={item} />
+        ))}
+        {parsed.droppedChars !== null && (
+          <TruncationNote droppedChars={parsed.droppedChars} />
+        )}
+      </div>
+    );
+  }
+
+  const entries = Object.entries(parsed.json as Record<string, unknown>);
+  const longFields = entries.filter(
+    ([k, v]) => typeof v === 'string' && (LONG_TEXT_FIELDS.has(k) || v.includes('\\n')),
+  );
+  const shortFields = entries.filter(([k]) => !longFields.some(([lk]) => lk === k));
 
   return (
-    <div
-      className="text-[12px] leading-[1.5] break-words"
-      style={{ fontFamily: MONO, color: WALL.inkDim }}
-    >
-      <span style={{ color: WALL.inkFaint }}>{name}:</span> {expanded ? value : text}
-      {truncated && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="ml-2 cursor-pointer bg-transparent border-0 p-0 underline"
-          style={{ fontFamily: SANS, color: WALL.amber }}
+    <div className="flex flex-col gap-2">
+      {shortFields.length > 0 && (
+        <div className="flex flex-col gap-[1px]">
+          {shortFields.map(([k, v]) => (
+            <KeyValueRow key={k} name={k} value={v} />
+          ))}
+        </div>
+      )}
+      {longFields.map(([k, v]) => (
+        <div key={k} className="flex flex-col gap-[1px]">
+          <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
+            {k}:
+          </span>
+          <ExpandedTextBlock text={v as string} />
+        </div>
+      ))}
+      {parsed.droppedChars !== null && <TruncationNote droppedChars={parsed.droppedChars} />}
+    </div>
+  );
+};
+
+const TruncationNote: React.FC<{ droppedChars: number }> = ({ droppedChars }) => (
+  <p className="text-[12px] m-0 italic" style={{ fontFamily: MONO, color: WALL.inkFaint }}>
+    trunkerad, {droppedChars.toLocaleString('sv-SE')} tecken till
+  </p>
+);
+
+/** One tool call, collapsed to a single scannable line by default:
+ *  `→ code_read  pool-pump-planner/vm.go:200–250   ✓ 51 rader`. Clicking it
+ *  expands the args and the pretty-printed result beneath — this is the
+ *  entire fix for the old two-block-per-call, wall-of-escaped-JSON trace. */
+export const ToolCallLine: React.FC<{ call: ToolCall; result?: ToolResult }> = ({
+  call,
+  result,
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  const argsSummary = summarizeArgs(call.name, call.args);
+  const { ok, status, size } = result
+    ? summarizeResult(call.name, result)
+    : { ok: true, status: '', size: '' };
+  const parsed = result ? parseResultPreview(result.result_preview ?? '') : null;
+  const detailId = `tool-call-${call.name}-${argsSummary}`.replace(/[^a-zA-Z0-9_-]/g, '');
+
+  return (
+    <div className="flex flex-col gap-1 min-w-0">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-baseline gap-2 flex-wrap text-left cursor-pointer bg-transparent border-0 p-0 min-w-0 w-full"
+      >
+        <span className="text-[12px] whitespace-nowrap" style={{ fontFamily: MONO, color: WALL.amber }}>
+          → {call.name}
+        </span>
+        {argsSummary && (
+          <span className="text-[12px] break-words" style={{ fontFamily: MONO, color: WALL.inkDim }}>
+            {argsSummary}
+          </span>
+        )}
+        {result && (
+          <span
+            className="text-[12px] whitespace-nowrap"
+            style={{ fontFamily: MONO, color: ok ? WALL.sage : WALL.rose }}
+          >
+            {ok ? `✓ ${size}` : `✗ ${status}`}
+          </span>
+        )}
+        <span
+          className="text-[11px] ml-auto shrink-0"
+          style={{ fontFamily: SANS, color: WALL.inkFaint }}
+          aria-hidden
         >
-          {expanded ? 'mindre' : 'mer'}
-        </button>
+          {expanded ? '▾' : '▸'}
+        </span>
+      </button>
+
+      {expanded && (
+        <div
+          id={detailId}
+          className="pl-3 flex flex-col gap-2 min-w-0"
+          style={{ borderLeft: `2px solid ${WALL.amber}` }}
+        >
+          {Object.entries(call.args ?? {}).length > 0 && (
+            <div className="flex flex-col gap-[1px]">
+              {Object.entries(call.args ?? {}).map(([k, v]) => (
+                <KeyValueRow key={k} name={k} value={v} />
+              ))}
+            </div>
+          )}
+          {parsed && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.sage }}>
+                ← {call.name}
+              </span>
+              <ExpandedBody parsed={parsed} />
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
 };
-
-export const CallView: React.FC<{ call: ToolCall }> = ({ call }) => (
-  <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.amber}` }}>
-    <div className="text-[12px] break-words" style={{ fontFamily: MONO, color: WALL.amber }}>
-      → {call.name}
-    </div>
-    {Object.entries(call.args ?? {}).map(([k, v]) => (
-      <ArgLine key={k} name={k} value={String(v ?? '')} />
-    ))}
-  </div>
-);
-
-export const ResultView: React.FC<{ result: ToolResult }> = ({ result }) => (
-  <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.sage}` }}>
-    <div className="text-[12px] break-words" style={{ fontFamily: MONO, color: WALL.sage }}>
-      ← {result.name}
-    </div>
-    <div className="overflow-x-auto rounded px-2 py-1" style={{ background: WALL.raised }}>
-      <Pre>{result.result_preview}</Pre>
-    </div>
-  </div>
-);
 
 /** A round collapses to its tool names; the body only mounts when opened, so a
  *  30-round cycle costs one line each until you ask for more. */
@@ -197,14 +371,14 @@ const RoundView: React.FC<{ round: RoundTrace; index: number; defaultOpen: boole
         {!names && <span> · ingen verktygsanvändning</span>}
       </summary>
 
-      <div className="flex flex-col gap-2 min-w-0">
+      <div className="flex flex-col gap-1 min-w-0">
         {round.thinking && <ThinkingView thinking={round.thinking} />}
-        {round.text && <Pre className="opacity-90">{round.text}</Pre>}
+        {round.text && <ClampedText>{round.text}</ClampedText>}
         {calls.map((call, j) => (
-          <CallView key={`${call.name}-${j}`} call={call} />
-        ))}
-        {results.map((res, j) => (
-          <ResultView key={`${res.name}-${j}`} result={res} />
+          // Calls and results are appended in lockstep in loop.py (one
+          // result per call, same order, same round) -- index is the pairing
+          // key, since neither carries an id of its own across the wire.
+          <ToolCallLine key={`${call.name}-${j}`} call={call} result={results[j]} />
         ))}
       </div>
     </details>

@@ -38,6 +38,11 @@ import {
   lastRunLabel,
   normaliseSessionTopic,
   groupSlackSessions,
+  summarizeArgs,
+  decodeEscapes,
+  splitPreviewSuffix,
+  parseResultPreview,
+  summarizeResult,
   type AgentSummary,
   type FactStat,
   type LanState,
@@ -47,6 +52,7 @@ import {
   type Review,
   type SlackSession,
   type Status,
+  type ToolResult,
 } from './aiBrain';
 
 function stubFetch(resp: { ok?: boolean; status?: number; body?: unknown; text?: string }) {
@@ -936,5 +942,227 @@ describe('groupSlackSessions', () => {
     expect(groupSlackSessions([])).toEqual([]);
     expect(groupSlackSessions(null)).toEqual([]);
     expect(groupSlackSessions(undefined)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------- summarizeArgs
+
+describe('summarizeArgs', () => {
+  it('formats code_read as path:start–end', () => {
+    expect(summarizeArgs('code_read', { path: 'pool-pump-planner/vm.go', start: '200', end: '250' })).toBe(
+      'pool-pump-planner/vm.go:200–250',
+    );
+  });
+
+  it('formats code_read with only start as path:start', () => {
+    expect(summarizeArgs('code_read', { path: 'a.py', start: '10' })).toBe('a.py:10');
+  });
+
+  it('formats code_read with no start as bare path', () => {
+    expect(summarizeArgs('code_read', { path: 'a.py' })).toBe('a.py');
+  });
+
+  it('formats code_read with end <= start as path:start', () => {
+    expect(summarizeArgs('code_read', { path: 'a.py', start: '10', end: '10' })).toBe('a.py:10');
+    expect(summarizeArgs('code_read', { path: 'a.py', start: '10', end: '0' })).toBe('a.py:10');
+  });
+
+  it('formats code_grep as /pattern/ in path', () => {
+    expect(summarizeArgs('code_grep', { pattern: 'TODO', path: 'fetcher-core' })).toBe(
+      '/TODO/ in fetcher-core',
+    );
+  });
+
+  it('formats code_grep with no path as bare /pattern/', () => {
+    expect(summarizeArgs('code_grep', { pattern: 'TODO' })).toBe('/TODO/');
+  });
+
+  it('formats vm_query as promql plus range', () => {
+    expect(summarizeArgs('vm_query', { promql: 'up', range_minutes: '60' })).toBe('up 60min');
+  });
+
+  it('formats vm_query with no range as bare promql', () => {
+    expect(summarizeArgs('vm_query', { promql: 'up' })).toBe('up');
+  });
+
+  it('formats read_expert as name/what/fact', () => {
+    expect(summarizeArgs('read_expert', { name: 'pool', what: 'fact', fact: 'wattage' })).toBe(
+      'pool/fact/wattage',
+    );
+    expect(summarizeArgs('read_expert', { name: 'pool', what: 'journal' })).toBe('pool/journal');
+  });
+
+  it('formats ha_context as name', () => {
+    expect(summarizeArgs('ha_context', { name: 'climate.spa' })).toBe('climate.spa');
+  });
+
+  it('formats write_fact as name', () => {
+    expect(summarizeArgs('write_fact', { name: 'pool.wattage', title: 't', body: 'b' })).toBe(
+      'pool.wattage',
+    );
+  });
+
+  it('formats send_note as to', () => {
+    expect(summarizeArgs('send_note', { to: 'pool-pump-expert', body: 'hej' })).toBe('pool-pump-expert');
+  });
+
+  it('formats end_cycle as minutes', () => {
+    expect(summarizeArgs('end_cycle', { next_wake_minutes: '30', summary: 'done' })).toBe('30 min');
+  });
+
+  it('falls back to k=v pairs for an unknown tool', () => {
+    expect(summarizeArgs('web_search', { query: 'iot fetcher' })).toBe('query=iot fetcher');
+  });
+
+  it('truncates a long fallback value with an ellipsis', () => {
+    const long = 'x'.repeat(50);
+    expect(summarizeArgs('web_search', { query: long })).toContain('…');
+    expect(summarizeArgs('web_search', { query: long }).length).toBeLessThanOrEqual(72);
+  });
+
+  it('handles missing/undefined args without throwing', () => {
+    expect(summarizeArgs('code_read', undefined)).toBe('');
+    expect(summarizeArgs('unknown_tool', {})).toBe('');
+  });
+});
+
+// ---------------------------------------------------------- decodeEscapes
+
+describe('decodeEscapes', () => {
+  it('turns literal \\n into a real newline', () => {
+    expect(decodeEscapes('line1\\nline2')).toBe('line1\nline2');
+  });
+
+  it('turns literal \\t into a real tab', () => {
+    expect(decodeEscapes('a\\tb')).toBe('a\tb');
+  });
+
+  it('turns literal \\r\\n into a single newline', () => {
+    expect(decodeEscapes('a\\r\\nb')).toBe('a\nb');
+  });
+
+  it('unescapes quotes and backslashes', () => {
+    expect(decodeEscapes('say \\"hi\\"')).toBe('say "hi"');
+    expect(decodeEscapes('a\\\\b')).toBe('a\\b');
+  });
+
+  it('leaves text with no escapes unchanged', () => {
+    expect(decodeEscapes('plain text')).toBe('plain text');
+  });
+
+  it('handles an empty string', () => {
+    expect(decodeEscapes('')).toBe('');
+  });
+});
+
+// ------------------------------------------------------ splitPreviewSuffix
+
+describe('splitPreviewSuffix', () => {
+  it('splits a truncated preview from its …[+N] suffix', () => {
+    const { body, droppedChars } = splitPreviewSuffix('{"ok":true,"body":"abc"…[+1479]');
+    expect(body).toBe('{"ok":true,"body":"abc"');
+    expect(droppedChars).toBe(1479);
+  });
+
+  it('returns the whole string with null droppedChars when not truncated', () => {
+    const { body, droppedChars } = splitPreviewSuffix('{"ok":true}');
+    expect(body).toBe('{"ok":true}');
+    expect(droppedChars).toBeNull();
+  });
+
+  it('handles an empty string', () => {
+    expect(splitPreviewSuffix('')).toEqual({ body: '', droppedChars: null });
+  });
+});
+
+// ------------------------------------------------------ parseResultPreview
+
+describe('parseResultPreview', () => {
+  it('parses a well-formed JSON object result', () => {
+    const r = parseResultPreview('{"ok":true,"result":"hej"}');
+    expect(r.parsed).toBe(true);
+    expect(r.json).toEqual({ ok: true, result: 'hej' });
+    expect(r.droppedChars).toBeNull();
+  });
+
+  it('parses an error result', () => {
+    const r = parseResultPreview('{"error":"unknown tool: foo"}');
+    expect(r.parsed).toBe(true);
+    expect(r.json).toEqual({ error: 'unknown tool: foo' });
+  });
+
+  it('falls back to unparsed when truncation cuts mid-token', () => {
+    const r = parseResultPreview('{"ok":true,"body":"abc…[+50]');
+    expect(r.parsed).toBe(false);
+    expect(r.json).toBeNull();
+    expect(r.droppedChars).toBe(50);
+  });
+
+  it('falls back to unparsed for non-JSON text', () => {
+    const r = parseResultPreview('not json at all');
+    expect(r.parsed).toBe(false);
+    expect(r.json).toBeNull();
+  });
+
+  it('handles an empty string', () => {
+    const r = parseResultPreview('');
+    expect(r.parsed).toBe(false);
+    expect(r.json).toBeNull();
+  });
+});
+
+// ----------------------------------------------------------- summarizeResult
+
+function result(name: string, previewObj: unknown, suffix = ''): ToolResult {
+  return { name, result_preview: JSON.stringify(previewObj) + suffix };
+}
+
+describe('summarizeResult', () => {
+  it('reads code_read as a line count', () => {
+    const r = summarizeResult(
+      'code_read',
+      result('code_read', { path: 'a.py', start: 1, end: 51, total_lines: 51, body: Array(51).fill('x').join('\n') }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.size).toBe('51 rader');
+  });
+
+  it('reads code_grep as a hit count', () => {
+    const r = summarizeResult(
+      'code_grep',
+      result('code_grep', { hits: [{ path: 'a.py', line: 1, text: 'x' }, { path: 'b.py', line: 2, text: 'y' }], truncated: false }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.size).toBe('2 träffar');
+  });
+
+  it('reads vm_query as a series count', () => {
+    const r = summarizeResult('vm_query', result('vm_query', { series: [{ metric: {}, values: [] }, { metric: {}, values: [] }, { metric: {}, values: [] }], truncated: false }));
+    expect(r.ok).toBe(true);
+    expect(r.size).toBe('3 serier');
+  });
+
+  it('reads an error result as not ok, with the message as status', () => {
+    const r = summarizeResult('code_read', result('code_read', { error: 'code_read: no such file: x.py' }));
+    expect(r.ok).toBe(false);
+    expect(r.status).toContain('no such file');
+  });
+
+  it('falls back to a byte-size hint for a tool with no dedicated shape', () => {
+    const r = summarizeResult('write_fact', result('write_fact', { written: 'pool.wattage' }));
+    expect(r.ok).toBe(true);
+    expect(r.size).toMatch(/tecken|kB/);
+  });
+
+  it('mentions dropped characters when the preview was truncated', () => {
+    const preview = '{"ok":true,"body":"' + 'x'.repeat(30) + '…[+1479]';
+    const r = summarizeResult('write_fact', { name: 'write_fact', result_preview: preview });
+    expect(r.size).toContain('1479 tecken trunkerade');
+  });
+
+  it('renders a large body as kB rather than raw character count', () => {
+    const big = 'x'.repeat(2000);
+    const r = summarizeResult('ha_context', result('ha_context', { context: big, truncated: false }));
+    expect(r.size).toMatch(/kB$/);
   });
 });

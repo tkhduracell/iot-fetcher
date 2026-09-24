@@ -419,6 +419,199 @@ export function truncate(value: string, max: number = 160): { text: string; trun
   return { text: s.slice(0, max), truncated: true };
 }
 
+// ------------------------------------------------- compact tool call line
+//
+// A round's tool calls used to render as one `→ tool` block per argument and
+// one `← tool` block dumping raw JSON — several screens for what should be a
+// scannable line. Everything below turns a `ToolCall`/`ToolResult` pair into
+// that one line (name, a short args summary, a result status and size hint),
+// plus the pretty-printed view behind the expander. Mirrors
+// `ai_brain/loop.py`'s `_trunc`/`_safe_args`/`ok`/`err` shapes field-for-field
+// — keep in sync if those change.
+
+/** How many characters an inline one-line summary (args or result) may use
+ *  before it is cut with an ellipsis. Generous enough for a path:range or a
+ *  short promql, tight enough that the line never wraps. */
+const SUMMARY_MAX = 72;
+
+/** Cut `s` to `max` chars, ellipsis-terminated, never longer than `max`. */
+function ellipsize(s: string, max: number = SUMMARY_MAX): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/** `code_read`/`code_grep`'s line ranges are strings on the wire (every
+ *  `ToolCall.args` value is `_safe_args`-coerced to `str` server-side) — this
+ *  reads one back as a finite integer, or `null` for anything else (missing,
+ *  "", non-numeric). */
+function argInt(args: Record<string, string>, key: string): number | null {
+  const raw = args[key];
+  if (raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** One `key=value value2=…` fallback for a tool with no dedicated formatter
+ *  below — every argument, short values bare, longer ones quoted, the whole
+ *  line capped so it still fits one row. */
+function genericArgsSummary(args: Record<string, string>): string {
+  const parts = Object.entries(args).map(([k, v]) => {
+    const val = String(v ?? '');
+    const short = val.length > 24 ? `${val.slice(0, 23)}…` : val;
+    return `${k}=${short}`;
+  });
+  return ellipsize(parts.join(' '));
+}
+
+/** Per-tool inline summaries for the calls common enough to earn one. Each
+ *  entry mirrors that tool's actual argument names in
+ *  `ai_brain/tools/*.py`'s `ToolSpec.parameters`. Anything not listed here
+ *  falls back to `genericArgsSummary`. */
+const ARG_FORMATTERS: Record<string, (args: Record<string, string>) => string> = {
+  code_read: (args) => {
+    const path = args.path ?? '';
+    const start = argInt(args, 'start');
+    const end = argInt(args, 'end');
+    if (start === null) return ellipsize(path);
+    if (end === null || end <= 0 || end === start) return ellipsize(`${path}:${start}`);
+    return ellipsize(`${path}:${start}–${end}`);
+  },
+  code_grep: (args) => {
+    const pattern = args.pattern ?? '';
+    const path = args.path;
+    return ellipsize(path ? `/${pattern}/ in ${path}` : `/${pattern}/`);
+  },
+  vm_query: (args) => {
+    const promql = args.promql ?? '';
+    const range = argInt(args, 'range_minutes');
+    return ellipsize(range && range > 0 ? `${promql} ${range}min` : promql);
+  },
+  read_expert: (args) => {
+    const bits = [args.name, args.what, args.fact].filter(Boolean);
+    return ellipsize(bits.join('/'));
+  },
+  ha_context: (args) => ellipsize(args.name || args.domain || args.area || ''),
+  write_fact: (args) => ellipsize(args.name ?? ''),
+  send_note: (args) => ellipsize(args.to ?? ''),
+  end_cycle: (args) => {
+    const minutes = args.next_wake_minutes ?? '';
+    return ellipsize(minutes ? `${minutes} min` : '');
+  },
+};
+
+/** The one-line args summary shown next to `→ toolName` in the collapsed
+ *  row, e.g. `pool-pump-planner/vm.go:200–250`. */
+export function summarizeArgs(name: string, args: Record<string, string> | undefined): string {
+  const a = args ?? {};
+  const formatter = ARG_FORMATTERS[name];
+  const summary = formatter ? formatter(a) : genericArgsSummary(a);
+  return summary || '';
+}
+
+/** Undo the literal backslash-escapes left behind when a JSON string
+ *  (already valid JSON text, with `\n` etc. as two source characters) is
+ *  shown as plain text instead of being parsed — the wall-of-text bug this
+ *  whole module exists to fix. Only used for the raw-text fallback path;
+ *  `JSON.parse` already does this correctly for anything that parses. */
+export function decodeEscapes(text: string): string {
+  return text
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\r/g, '\n')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+/** `result_preview` is `_trunc(json.dumps(...), 500)` server-side: valid JSON
+ *  text, optionally cut mid-string with a literal `…[+N]` suffix saying how
+ *  many characters were dropped. Splits the two apart so the JSON half can be
+ *  parsed on its own. */
+export function splitPreviewSuffix(preview: string): { body: string; droppedChars: number | null } {
+  const m = /…\[\+(\d+)\]$/.exec(preview);
+  if (!m) return { body: preview, droppedChars: null };
+  return { body: preview.slice(0, m.index), droppedChars: Number(m[1]) };
+}
+
+/** The parsed form of a tool result, used by both the one-line status and the
+ *  expanded pretty-print. `json` is `null` when the (possibly truncated) body
+ *  did not parse — a `…[+N]` cut can land mid-token, which is expected and
+ *  handled by falling back to the raw text rather than treated as an error. */
+export type ParsedResult = {
+  json: Record<string, unknown> | unknown[] | string | number | boolean | null;
+  parsed: boolean;
+  raw: string;
+  droppedChars: number | null;
+};
+
+export function parseResultPreview(preview: string): ParsedResult {
+  const { body, droppedChars } = splitPreviewSuffix(preview ?? '');
+  try {
+    const json = JSON.parse(body);
+    return { json, parsed: true, raw: preview, droppedChars };
+  } catch {
+    return { json: null, parsed: false, raw: preview, droppedChars };
+  }
+}
+
+/** A byte/row/series count rendered the way a reader wants it, not the way
+ *  the API named it — "51 rader", "3 serier", "12 träffar", "1.5 kB". Falls
+ *  back to a byte-size hint (`raw.length`, which is UTF-16 code units, close
+ *  enough for a rough "how much text is this" hint) when the tool has no
+ *  countable shape of its own. */
+function sizeHint(name: string, json: ParsedResult['json'], raw: string): string {
+  if (json && typeof json === 'object' && !Array.isArray(json)) {
+    const obj = json as Record<string, unknown>;
+    if (name === 'code_read') {
+      const body = typeof obj.body === 'string' ? obj.body : '';
+      const lines = body.length ? body.split('\n').length : 0;
+      return `${lines} ${lines === 1 ? 'rad' : 'rader'}`;
+    }
+    if (name === 'code_grep' && Array.isArray(obj.hits)) {
+      const n = obj.hits.length;
+      return `${n} ${n === 1 ? 'träff' : 'träffar'}`;
+    }
+    if (name === 'vm_query' && Array.isArray(obj.series)) {
+      const n = obj.series.length;
+      return `${n} ${n === 1 ? 'serie' : 'serier'}`;
+    }
+    if (typeof obj.context === 'string') return byteHint(obj.context.length);
+    if (typeof obj.journal === 'string') return byteHint(obj.journal.length);
+    if (typeof obj.persona === 'string') return byteHint(obj.persona.length);
+    if (typeof obj.body === 'string') return byteHint(obj.body.length);
+    if (Array.isArray(obj.gaps)) return `${obj.gaps.length} luckor`;
+  }
+  if (Array.isArray(json)) return `${json.length} rader`;
+  return byteHint(raw.length);
+}
+
+function byteHint(chars: number): string {
+  if (chars < 1000) return `${chars} tecken`;
+  return `${(chars / 1000).toFixed(1).replace(/\.0$/, '')} kB`;
+}
+
+/** The `✓`/`✗` status and size hint shown after `←` on the collapsed line,
+ *  e.g. `✓ 51 rader` or `✗ unknown tool: foo`. An `{"error": …}` result (see
+ *  `err()` in `ai_brain/tools/__init__.py`) always reads as `✗`; anything
+ *  else — including a result that failed to parse at all, since only a
+ *  truncated *success* body is expected to do that — reads as `✓`. */
+export function summarizeResult(
+  name: string,
+  result: ToolResult,
+): { ok: boolean; status: string; size: string } {
+  const { json, parsed, raw, droppedChars } = parseResultPreview(result.result_preview ?? '');
+
+  if (parsed && json && typeof json === 'object' && !Array.isArray(json) && 'error' in json) {
+    const msg = String((json as Record<string, unknown>).error ?? '');
+    return { ok: false, status: ellipsize(msg, 96), size: byteHint(raw.length) };
+  }
+
+  const size = sizeHint(name, json, raw);
+  const withDrop = droppedChars ? `${size} (${droppedChars} tecken trunkerade)` : size;
+  return { ok: true, status: '', size: withDrop };
+}
+
 // ------------------------------------------------- wall view (additive)
 //
 // Everything below is used by the always-on wall tablet at /ai-brain/wall.

@@ -16,7 +16,7 @@ import {
   WALL,
   WallShell,
 } from './AiBrainWallTheme';
-import { CallView, Pre, ResultView, ThinkingView } from './AiBrainAgentTrace';
+import { ClampedText, Pre, ThinkingView, ToolCallLine } from './AiBrainAgentTrace';
 
 /** `/ai-brain/feed` — every loop's rounds, merged into one live stream.
  *
@@ -75,14 +75,17 @@ function loopColor(loop: string): string {
  *  live "tänker…" line instead — real content, not a skeleton, since it is
  *  telling the truth about a loop that is genuinely waiting on the model
  *  right now. */
-const FeedEntry: React.FC<{ entry: FeedRound }> = ({ entry }) => {
+const FeedEntry: React.FC<{ entry: FeedRound; sameAsPrev: boolean }> = ({ entry, sameAsPrev }) => {
   const { loop, round, inProgress, pending } = entry;
   const calls = round.tool_calls ?? [];
   const results = round.tool_results ?? [];
   const color = loopColor(loop);
 
   return (
-    <div className="flex flex-col gap-2 min-w-0 rounded px-3 py-2" style={{ background: WALL.raised }}>
+    <div
+      className={`flex flex-col gap-1 min-w-0 rounded px-3 ${sameAsPrev ? 'py-1' : 'py-2'}`}
+      style={{ background: WALL.raised }}
+    >
       <div className="flex items-center gap-2 flex-wrap text-[12px]" style={{ fontFamily: MONO }}>
         <span style={{ color, fontWeight: 600 }}>{loop}</span>
         <span style={{ color: WALL.inkFaint }} className="tabular-nums">
@@ -99,12 +102,11 @@ const FeedEntry: React.FC<{ entry: FeedRound }> = ({ entry }) => {
       ) : (
         <>
           {round.thinking && <ThinkingView thinking={round.thinking} />}
-          {round.text && <Pre className="opacity-90">{round.text}</Pre>}
+          {round.text && <ClampedText>{round.text}</ClampedText>}
           {calls.map((call, j) => (
-            <CallView key={`${call.name}-${j}`} call={call} />
-          ))}
-          {results.map((res, j) => (
-            <ResultView key={`${res.name}-${j}`} result={res} />
+            // Same lockstep pairing as AiBrainAgentTrace's RoundView -- one
+            // result per call, same order, same round.
+            <ToolCallLine key={`${call.name}-${j}`} call={call} result={results[j]} />
           ))}
           {!round.text && !round.thinking && calls.length === 0 && results.length === 0 && (
             <Pre className="opacity-60">…</Pre>
@@ -301,7 +303,11 @@ const AiBrainFeed: React.FC = () => {
       ) : (
         <div className="flex flex-col gap-2 min-w-0 overflow-y-auto">
           {rounds.map((entry, i) => (
-            <FeedEntry key={`${entry.loop}-${entry.round.at}-${i}`} entry={entry} />
+            <FeedEntry
+              key={`${entry.loop}-${entry.round.at}-${i}`}
+              entry={entry}
+              sameAsPrev={i > 0 && rounds[i - 1].loop === entry.loop}
+            />
           ))}
         </div>
       )}
