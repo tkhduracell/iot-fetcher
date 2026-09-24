@@ -26,7 +26,7 @@ import httpx
 
 from ai_brain.discovery import OllamaFinder
 from ai_brain.llm import Message, Provider, ProviderError, Reply, ToolSpec
-from ai_brain.llm.ollama import DEFAULT_NUM_CTX, OllamaProvider
+from ai_brain.llm.ollama import OllamaProvider
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,14 @@ LAN_ATTEMPTS = 3
 LAN_CONNECT_TIMEOUT_S = 3.0
 LAN_REQUEST_TIMEOUT_S = 900.0
 
+# The lan: host is a desktop machine discovered on the network, not the rpi5
+# running the rest of this stack -- its own hardware, not the constrained
+# in-compose ollama service, so its own num_ctx default is larger than
+# ai_brain.llm.ollama.DEFAULT_NUM_CTX. 32768 matches what this deployment's
+# LAN Ollama servers are themselves configured for. Overridable via
+# LAN_OLLAMA_NUM_CTX -- see ai_brain.config.
+LAN_DEFAULT_NUM_CTX = 32768
+
 
 class LanOllamaProvider(Provider):
     max_attempts = LAN_ATTEMPTS
@@ -49,7 +57,7 @@ class LanOllamaProvider(Provider):
         finder: OllamaFinder,
         client: httpx.AsyncClient | None = None,
         timeout_s: httpx.Timeout | None = None,
-        num_ctx: int = DEFAULT_NUM_CTX,
+        num_ctx: int = LAN_DEFAULT_NUM_CTX,
     ) -> None:
         self.finder = finder
         self.model = finder.model

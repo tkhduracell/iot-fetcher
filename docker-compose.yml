@@ -170,10 +170,12 @@ services:
     restart: unless-stopped
     environment:
       # Belt-and-braces default alongside ai-brain's own OLLAMA_NUM_CTX
-      # (ai-brain/.env, passed as options.num_ctx on every /api/chat call):
-      # this is the server's own fallback for any client that does not set
-      # options.num_ctx explicitly. Keep it in step with OLLAMA_NUM_CTX --
-      # see ai-brain/README.md's Configuration section.
+      # (ai-brain/.env, passed as options.num_ctx on every /api/chat call to
+      # this service specifically -- not the lan: provider, which talks to a
+      # separate desktop machine on the LAN, configured with its own larger
+      # window; see LAN_OLLAMA_NUM_CTX in ai-brain/README.md). This is the
+      # server's own fallback for any client that does not set
+      # options.num_ctx explicitly. Keep it in step with OLLAMA_NUM_CTX.
       - OLLAMA_CONTEXT_LENGTH=16384
     volumes:
       - ollama-models:/root/.ollama

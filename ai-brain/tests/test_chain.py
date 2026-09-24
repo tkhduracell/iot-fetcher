@@ -380,7 +380,6 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
     ollama_stub = types.ModuleType("ai_brain.llm.ollama")
     ollama_stub.OllamaProvider = StubOllama
-    ollama_stub.DEFAULT_NUM_CTX = 16384
     monkeypatch.setitem(sys.modules, "ai_brain.llm.ollama", ollama_stub)
 
     env = parse_env_file(ENV_EXAMPLE)

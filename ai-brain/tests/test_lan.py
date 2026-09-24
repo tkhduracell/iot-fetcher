@@ -9,7 +9,7 @@ from ai_brain.discovery import OllamaFinder, OllamaHost, subnets_for
 from ai_brain.ledger import Ledger, Limits
 from ai_brain.llm import Message, ProviderChain, ProviderError, Reply, Usage
 from ai_brain.llm.fake import FakeProvider
-from ai_brain.llm.lan import LAN_ATTEMPTS, LanOllamaProvider
+from ai_brain.llm.lan import LAN_ATTEMPTS, LAN_DEFAULT_NUM_CTX, LanOllamaProvider
 
 MODEL = "qwen3-coder:30b"
 MSGS = [Message(role="user", content="hi")]
@@ -179,6 +179,21 @@ async def test_provider_forwards_its_num_ctx_to_the_discovered_host():
     assert sent["options"]["num_ctx"] == 12345
 
 
+def test_lan_provider_defaults_num_ctx_larger_than_the_local_ollama_default():
+    # The lan: host is a desktop machine on the network, not the
+    # RAM-constrained rpi5 running the in-compose ollama: service, so it gets
+    # its own, larger, default context window rather than sharing
+    # ai_brain.llm.ollama.DEFAULT_NUM_CTX.
+    from ai_brain.llm.ollama import DEFAULT_NUM_CTX
+
+    assert LAN_DEFAULT_NUM_CTX == 32768
+    assert LAN_DEFAULT_NUM_CTX > DEFAULT_NUM_CTX
+
+    finder = finder_for()
+    provider = LanOllamaProvider(finder)
+    assert provider._num_ctx == LAN_DEFAULT_NUM_CTX
+
+
 @respx.mock
 async def test_the_host_is_forgotten_after_its_attempts_run_out():
     respx.post("http://192.168.68.9:11434/api/chat").mock(
@@ -269,6 +284,28 @@ def test_the_lan_provider_keeps_its_place_in_the_chain(tmp_path):
     assert [p.key for p in chain.providers] == ["fake:x", f"lan:{MODEL}"]
     # The supervisor drives the sweep through these handles.
     assert [f.model for f in chain.lan_finders] == [MODEL]
+
+
+def test_from_settings_gives_the_lan_provider_its_own_num_ctx(tmp_path):
+    """LAN_OLLAMA_NUM_CTX, not OLLAMA_NUM_CTX, drives the lan: provider.
+
+    The lan: host is a desktop machine on the network, not the
+    RAM-constrained rpi5 running the in-compose ollama: service -- the two
+    must not be conflated.
+    """
+    from ai_brain.ledger import Ledger
+
+    settings = load_settings(
+        {
+            "LLM_CHAIN": f"lan:{MODEL}",
+            "OLLAMA_NUM_CTX": "4096",
+            "LAN_OLLAMA_NUM_CTX": "65536",
+        }
+    )
+    ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
+    chain = ProviderChain.from_settings(settings, ledger)
+
+    assert chain.providers[0]._num_ctx == 65536
 
 
 def test_a_chain_without_a_lan_entry_has_no_finders(tmp_path):

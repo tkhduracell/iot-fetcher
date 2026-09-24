@@ -236,9 +236,9 @@ def test_build_request_sends_num_ctx_with_a_default():
 
 def test_build_request_honours_an_explicit_num_ctx():
     payload = build_request(
-        "llama3.2:3b", [Message(role="user", content="hi")], [], 64, num_ctx=16384
+        "llama3.2:3b", [Message(role="user", content="hi")], [], 64, num_ctx=32768
     )
-    assert payload["options"]["num_ctx"] == 16384
+    assert payload["options"]["num_ctx"] == 32768
 
 
 @respx.mock

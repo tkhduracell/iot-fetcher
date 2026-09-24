@@ -53,6 +53,7 @@ class Settings:
     gemini_api_key: str
     ollama_url: str
     ollama_num_ctx: int
+    lan_ollama_num_ctx: int
     experts: list[str]
     brain_heartbeat_s: int
     expert_heartbeat_s: int
@@ -133,10 +134,16 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # 4096 is Ollama's own server default and far smaller than a cycle's
         # persona+memory+tool-result prompt (observed ~9.7k tokens in
         # practice); the server truncates silently from the front when a
-        # prompt overflows it, which is why this has a bigger default. 16384
-        # clears that with headroom on an rpi5 (8GB). See
-        # ai_brain.llm.ollama.build_request.
+        # prompt overflows it, which is why this has a bigger default. This
+        # is the rpi5's own in-compose ollama service (RAM-constrained, 8GB)
+        # -- the LAN desktop's own Ollama gets its own, larger,
+        # LAN_OLLAMA_NUM_CTX below. See ai_brain.llm.ollama.build_request.
         ollama_num_ctx=get_int("OLLAMA_NUM_CTX", 16384),
+        # The lan: provider's host is a desktop machine, not the rpi5, and
+        # this deployment's LAN Ollama servers are themselves configured for
+        # a 32k context window -- so its default is larger than the local
+        # ollama: provider's, rather than shared with it.
+        lan_ollama_num_ctx=get_int("LAN_OLLAMA_NUM_CTX", 32768),
         experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,

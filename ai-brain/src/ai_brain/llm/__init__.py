@@ -238,7 +238,7 @@ class ProviderChain:
                 )
                 lan_finders.append(lan_finder)
                 providers.append(
-                    LanOllamaProvider(lan_finder, num_ctx=settings.ollama_num_ctx)
+                    LanOllamaProvider(lan_finder, num_ctx=settings.lan_ollama_num_ctx)
                 )
             elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without

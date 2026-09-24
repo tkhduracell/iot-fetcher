@@ -149,4 +149,19 @@ def test_ollama_num_ctx_defaults_to_a_pi5_sized_value():
 
 
 def test_ollama_num_ctx_is_read_from_the_environment():
-    assert load_settings({"OLLAMA_NUM_CTX": "16384"}).ollama_num_ctx == 16384
+    assert load_settings({"OLLAMA_NUM_CTX": "8192"}).ollama_num_ctx == 8192
+
+
+def test_lan_ollama_num_ctx_defaults_larger_than_the_local_ollama_default():
+    # The lan: host is a desktop machine, not the RAM-constrained rpi5
+    # running the in-compose ollama: service, so it gets its own, larger,
+    # default rather than sharing OLLAMA_NUM_CTX.
+    s = load_settings({})
+    assert s.lan_ollama_num_ctx == 32768
+    assert s.lan_ollama_num_ctx > s.ollama_num_ctx
+
+
+def test_lan_ollama_num_ctx_is_read_from_the_environment():
+    assert (
+        load_settings({"LAN_OLLAMA_NUM_CTX": "65536"}).lan_ollama_num_ctx == 65536
+    )

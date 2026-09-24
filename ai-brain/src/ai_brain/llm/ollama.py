@@ -52,8 +52,12 @@ CALL_TIMEOUT_S = 600.0
 # fit, dropping exactly the persona/system context a truncated prompt most
 # needs. Observed prompts from a real cycle run ~9.7k tokens, so 16384 is the
 # default rather than a smaller number: it clears that with headroom on a
-# Raspberry Pi 5 (8GB), at the cost of more RAM per loaded model. See
-# ai-brain/README.md's Configuration section for the tradeoff.
+# Raspberry Pi 5 (8GB), at the cost of more RAM per loaded model. This is the
+# base default for OllamaProvider itself; the lan: provider (a desktop
+# machine on the LAN, not the rpi5) is configured with its own, larger
+# default -- see LAN_OLLAMA_NUM_CTX in ai_brain.config and
+# ai_brain.llm.lan.LanOllamaProvider. See ai-brain/README.md's Configuration
+# section for the tradeoff.
 DEFAULT_NUM_CTX = 16384
 
 # Rough tokens-per-character used only to decide whether to warn/trim before
