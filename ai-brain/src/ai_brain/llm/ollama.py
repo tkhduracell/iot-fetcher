@@ -182,6 +182,7 @@ class OllamaProvider(Provider):
             ),
             model=self.model,
             thinking=thinking,
+            key=self.key,
         )
 
 

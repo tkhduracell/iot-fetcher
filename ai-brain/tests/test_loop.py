@@ -38,12 +38,13 @@ from ai_brain.tools.slack_tools import register_slack_tools
 HEARTBEAT = 900
 
 
-def reply(text: str = "", *calls: ToolCall, model: str = "fake:1") -> Reply:
+def reply(text: str = "", *calls: ToolCall, model: str = "fake:1", key: str = "") -> Reply:
     return Reply(
         text=text,
         tool_calls=tuple(calls),
         usage=Usage(prompt_tokens=10, completion_tokens=5),
         model=model,
+        key=key,
     )
 
 
@@ -175,7 +176,7 @@ async def test_two_tool_rounds_then_end_cycle(make_loop, brain_dir):
     assert result.next_wake_s == 30 * 60
     assert len(provider.calls) == 3
     journal = brain_dir.journal_text(1)
-    assert "[ok] model=fake:1 rounds=3 all quiet" in journal
+    assert "[ok] model=fake:1 rounds=3/8 all quiet" in journal
     assert "checked the pool" in journal
     assert loop.last_cycle is result
     assert loop.cycle_counts["ok"] == 1
@@ -477,6 +478,141 @@ async def test_max_rounds_stops_a_model_that_never_ends(make_loop, brain_dir):
     assert result.next_wake_s == HEARTBEAT
     assert "[max_rounds]" in brain_dir.journal_text(1)
     assert loop.cycle_counts == {"max_rounds": 1}
+
+
+# -- per-model max rounds -----------------------------------------------
+
+
+async def test_a_strong_model_is_allowed_past_the_global_max_rounds(make_loop, brain_dir):
+    """A cycle answered throughout by a model matching CYCLE_MAX_ROUNDS_BY_MODEL
+    keeps going well past the global max_rounds (8 here)."""
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), key="gemini:gemini-3.8-flash")
+        for i in range(11)
+    ]
+    script.append(
+        reply(
+            "done",
+            call("end_cycle", "end", next_wake_minutes=30, summary="deep dive"),
+            key="gemini:gemini-3.8-flash",
+        )
+    )
+    loop, provider = make_loop(
+        script,
+        max_rounds=8,
+        max_rounds_by_model=[("gemini:*3.8*", 20)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert result.rounds == 12
+    assert result.cap == 20
+    assert "rounds=12/20" in brain_dir.journal_text(1)
+
+
+async def test_a_mid_cycle_fallback_to_a_weak_model_is_cut_at_its_own_limit(
+    make_loop, brain_dir
+):
+    """A cycle that opens on a strong model (limit 20) and falls back to a weak
+    one partway through is cut at the weak model's limit (the global default,
+    8) as soon as that model answers -- even though the strong model had
+    already carried the cycle past 8 rounds while its own, higher limit was in
+    force."""
+    strong = [
+        reply(f"strong {i}", call("list_facts", f"s{i}"), key="gemini:gemini-3.8-flash")
+        for i in range(10)
+    ]
+    weak = [reply(f"weak {i}", call("list_facts", f"w{i}"), key="ollama:llama3.2:3b") for i in range(10)]
+    loop, provider = make_loop(
+        strong + weak,
+        max_rounds=8,
+        max_rounds_by_model=[("gemini:*3.8*", 20)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    # 10 rounds on the strong model (cap 20, never hit) are already in the
+    # bank when round 11 -- the first weak one -- lands and drops the
+    # effective cap straight back to 8: rounds(10) < cap(8) is already false,
+    # so the loop stops there without dispatching a 12th round.
+    assert result.rounds == 11
+    assert len(provider.calls) == 11
+    assert result.cap == 8
+    assert "rounds=11/8" in brain_dir.journal_text(1)
+
+
+async def test_the_hard_ceiling_clamps_a_too_generous_per_model_cap(make_loop, brain_dir):
+    """CYCLE_MAX_ROUNDS_HARD_CEILING (64) wins even over a matched, larger cap --
+    belt and braces against a typo'd env value that validation let through."""
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), key="gemini:gemini-3.8-flash")
+        for i in range(65)
+    ]
+    loop, provider = make_loop(
+        script,
+        max_rounds=8,
+        max_rounds_by_model=[("gemini:*3.8*", 1000)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    assert result.rounds == 64
+    assert result.cap == 64
+
+
+async def test_wrap_up_nudge_is_sent_once_two_rounds_before_the_cap(make_loop, brain_dir):
+    """The nudge is appended to the conversation exactly once, the round the
+    cycle first comes within WRAP_UP_ROUNDS_BEFORE_CAP of its effective cap --
+    not once per round after that, even though the full conversation (and so
+    the nudge, once added) is resent to the model on every later round."""
+    script = [reply(f"round {i}", call("list_facts", f"c{i}")) for i in range(5)]
+    script.append(reply("done", call("end_cycle", "end", next_wake_minutes=30, summary="s")))
+    loop, provider = make_loop(script, max_rounds=6)
+
+    result = await loop.run_cycle()
+
+    assert result.rounds == 6
+    # FakeProvider records (messages, tools) by reference, and the loop keeps
+    # appending to that same list object -- so every recorded call ends up
+    # showing the *final* conversation, not a snapshot from when it was sent.
+    # The one list that is safe to inspect is therefore the last call's, and
+    # the nudge must appear in it exactly once however many rounds resent it.
+    final_messages = provider.calls[-1][0]
+    nudge_indices = [
+        i
+        for i, msg in enumerate(final_messages)
+        if msg.role == "user" and "You have 2 rounds left" in msg.content
+    ]
+    assert len(nudge_indices) == 1
+    # It must have landed after round 4's tool results (cap 6 - 2) and before
+    # round 6's assistant turn (the end_cycle call that ends the cycle):
+    # messages run system, opening-user, then one assistant+tool(s) pair per
+    # round, so the 4th assistant turn is at index 2 + (4-1)*2 = 8 and the
+    # 6th at 2 + (6-1)*2 = 12.
+    assistant_indices = [i for i, msg in enumerate(final_messages) if msg.role == "assistant"]
+    assert assistant_indices[3] < nudge_indices[0] < assistant_indices[5]
+
+
+async def test_wrap_up_nudge_not_sent_when_the_cycle_ends_well_before_the_cap(
+    make_loop, brain_dir
+):
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=10, summary="s"))],
+        max_rounds=8,
+    )
+
+    await loop.run_cycle()
+
+    final_messages = provider.calls[-1][0]
+    nudges = [
+        msg
+        for msg in final_messages
+        if msg.role == "user" and "You have 2 rounds left" in msg.content
+    ]
+    assert nudges == []
 
 
 async def test_chain_exhausted_backs_off_until_retry_at(make_loop, wall, brain_dir):
@@ -1040,7 +1176,7 @@ async def test_pause_created_mid_cycle_stops_before_the_next_round(
     assert result.status == "paused"
     assert result.rounds == 1
     assert len(provider.calls) == 1
-    assert _last_journal_line(brain_dir) == "[paused] model=fake:1 rounds=1 paused mid-cycle"
+    assert _last_journal_line(brain_dir) == "[paused] model=fake:1 rounds=1/8 paused mid-cycle"
 
 
 async def test_a_note_arriving_mid_context_is_not_rendered_or_consumed(make_loop, brain_dir):

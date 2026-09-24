@@ -45,6 +45,7 @@ async def test_text_reply():
     assert reply.usage.prompt_tokens == 11
     assert reply.usage.completion_tokens == 3
     assert reply.model == "llama3.2:3b"
+    assert reply.key == "ollama:llama3.2:3b"
 
 
 @respx.mock

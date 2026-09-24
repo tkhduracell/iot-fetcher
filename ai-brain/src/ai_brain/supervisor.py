@@ -230,6 +230,7 @@ def build(
             clock=clock,
             pause_file=settings.memory_root / "PAUSE",
             max_rounds=settings.max_rounds,
+            max_rounds_by_model=settings.max_rounds_by_model,
             max_tokens=settings.max_tokens,
             call_timeout_s=settings.call_timeout_s,
             events=events,

@@ -299,6 +299,7 @@ async def test_agents_reports_the_last_cycle_and_the_next_wake(client, system):
         "status": "ok",
         "model": "fake:1",
         "rounds": 3,
+        "cap": 16,
         "next_wake_s": 1800,
     }
     assert brain["last_cycle_at"] == NOW - 60

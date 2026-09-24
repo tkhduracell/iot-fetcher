@@ -108,4 +108,8 @@ class LanOllamaProvider(Provider):
             usage=reply.usage,
             model=f"{self.model} @ {host.base_url}",
             thinking=reply.thinking,
+            # Not reply.key: the inner OllamaProvider's own key is
+            # ollama:{model}, and CYCLE_MAX_ROUNDS_BY_MODEL needs to tell a
+            # LAN host apart from the rpi5's in-compose ollama: one.
+            key=self.key,
         )

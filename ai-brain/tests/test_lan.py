@@ -162,6 +162,9 @@ async def test_provider_calls_the_discovered_host():
     assert reply.text == "from-the-lan"
     # The trace has to say where the answer came from, not just which model.
     assert reply.model == f"{MODEL} @ http://192.168.68.9:11434"
+    # CYCLE_MAX_ROUNDS_BY_MODEL matches this (lan:<model>), not the inner
+    # OllamaProvider's own ollama:<model> key -- see lan.py.
+    assert reply.key == f"lan:{MODEL}"
 
 
 @respx.mock

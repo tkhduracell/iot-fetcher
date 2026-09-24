@@ -149,6 +149,7 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
         "status": trace.status,
         "model": trace.model,
         "summary": trace.summary,
+        "cap": trace.cap,
         "rounds": [
             {
                 "at": round_.at,
@@ -182,6 +183,7 @@ def _agent_summary(name: str, loop: AgentLoop, memory: MemoryDir) -> dict:
                 "status": last.status,
                 "model": last.model,
                 "rounds": last.rounds,
+                "cap": last.cap,
                 "next_wake_s": last.next_wake_s,
             }
         ),
