@@ -156,6 +156,7 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
                 "text": round_.text,
                 "thinking": round_.thinking,
                 "model": round_.model,
+                "duration_s": round_.duration_s,
                 "tool_calls": round_.tool_calls,
                 # Each entry already carries "stats" (loop.py's
                 # _tool_result_stats) alongside "name"/"result_preview" --

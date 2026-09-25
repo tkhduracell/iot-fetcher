@@ -146,19 +146,22 @@ const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string 
             {loop}
           </span>
         )}
-        <span style={{ color: WALL.inkFaint }} className="tabular-nums">
-          {formatClock(round.at)}
-        </span>
-        {round.model && (
-          <span style={{ color: WALL.inkFaint }} title={round.model}>
-            {round.model}
-          </span>
-        )}
         {pending ? (
           <Pill tone="busy">tänker…</Pill>
         ) : (
           inProgress && <Pill tone="busy">pågår</Pill>
         )}
+        {/* Who answered and when, pinned right so the left edge stays the
+            agent's name and state. */}
+        <span className="ml-auto flex items-center gap-2" style={{ color: WALL.inkFaint }}>
+          {round.model && <span title={round.model}>{round.model}</span>}
+          {round.duration_s ? (
+            <span className="tabular-nums" title="modellanropets tid, inklusive kö">
+              {formatDuration(round.duration_s)}
+            </span>
+          ) : null}
+          <span className="tabular-nums">{formatClock(round.at)}</span>
+        </span>
       </div>
       {pending ? (
         <Pre className="opacity-60">väntar på modellen…</Pre>
@@ -207,6 +210,9 @@ const groupRuns = (rounds: FeedRound[]): FeedGroup[] => {
   for (const g of groups) g.key = g.entries[g.entries.length - 1].id;
   return groups;
 };
+
+const formatDuration = (s: number) =>
+  s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
 
 const roundId = (loop: string, at: number) => `${loop}-${at}`;
 
