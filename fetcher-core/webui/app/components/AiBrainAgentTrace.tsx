@@ -382,10 +382,14 @@ export const ToolCallLine: React.FC<{ call: ToolCall; result?: ToolResult }> = (
             </div>
           )}
           {parsed && (
-            <div className="flex flex-col gap-1">
-              <span className="text-[12px]" style={{ fontFamily: MONO, color: WALL.sage }}>
-                ← {call.name}
-              </span>
+            // The tool's name is already on the line above; a hairline is
+            // enough to separate the arguments from what came back.
+            <div
+              className={`flex flex-col gap-1 ${
+                Object.keys(call.args ?? {}).length > 0 ? 'pt-2 border-t' : ''
+              }`}
+              style={{ borderColor: WALL.rule }}
+            >
               <ExpandedBody parsed={parsed} />
             </div>
           )}
