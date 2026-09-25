@@ -42,6 +42,11 @@ const MAX_ROUNDS = 60;
 const FEED_URL = '/api/ai-brain/api/feed';
 
 type FeedRound = {
+  /** Stable React key for the row's whole life. Never derived from list
+   *  position -- a prepended round would shift every index and remount every
+   *  row, replaying each one's animations -- and kept when a pending entry
+   *  resolves, whose `round.at` changes. */
+  id: string;
   loop: string;
   round: RoundTrace;
   inProgress: boolean;
@@ -75,7 +80,7 @@ function loopColor(loop: string): string {
  *  live "tänker…" line instead — real content, not a skeleton, since it is
  *  telling the truth about a loop that is genuinely waiting on the model
  *  right now. */
-const FeedEntry: React.FC<{ entry: FeedRound; sameAsPrev: boolean }> = ({ entry, sameAsPrev }) => {
+const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean }> = ({ entry, first }) => {
   const { loop, round, inProgress, pending } = entry;
   const calls = round.tool_calls ?? [];
   const results = round.tool_results ?? [];
@@ -83,11 +88,11 @@ const FeedEntry: React.FC<{ entry: FeedRound; sameAsPrev: boolean }> = ({ entry,
 
   return (
     <div
-      className={`flex flex-col gap-1 min-w-0 rounded px-3 ${sameAsPrev ? 'py-1' : 'py-2'}`}
-      style={{ background: WALL.raised }}
+      className={`flex flex-col gap-1 min-w-0 ${first ? '' : 'pt-2 border-t'}`}
+      style={first ? undefined : { borderColor: WALL.rule }}
     >
       <div className="flex items-center gap-2 flex-wrap text-[12px]" style={{ fontFamily: MONO }}>
-        <span style={{ color, fontWeight: 600 }}>{loop}</span>
+        {first && <span style={{ color, fontWeight: 600 }}>{loop}</span>}
         <span style={{ color: WALL.inkFaint }} className="tabular-nums">
           {formatClock(round.at)}
         </span>
@@ -121,6 +126,30 @@ const FeedEntry: React.FC<{ entry: FeedRound; sameAsPrev: boolean }> = ({ entry,
     </div>
   );
 };
+
+// Entries are replaced, never mutated, so reference equality is enough to
+// skip re-rendering every untouched row on each update.
+const FeedEntry = React.memo(FeedEntryImpl);
+
+/** Consecutive rounds from the same loop, newest first -- one box per run, so
+ *  a loop working through a cycle reads as one flow and a box only breaks
+ *  when a different loop takes a turn. */
+type FeedGroup = { key: string; loop: string; entries: FeedRound[] };
+
+const groupRuns = (rounds: FeedRound[]): FeedGroup[] => {
+  const groups: FeedGroup[] = [];
+  for (const entry of rounds) {
+    const last = groups[groups.length - 1];
+    if (last && last.loop === entry.loop) last.entries.push(entry);
+    else groups.push({ key: '', loop: entry.loop, entries: [entry] });
+  }
+  // Keyed by the run's *oldest* entry: new rounds arrive at the top, so the
+  // bottom of a run is what stays put while it grows.
+  for (const g of groups) g.key = g.entries[g.entries.length - 1].id;
+  return groups;
+};
+
+const roundId = (loop: string, at: number) => `${loop}-${at}`;
 
 const AiBrainFeed: React.FC = () => {
   const [agents, setAgents] = useState<AgentSummary[] | null>(null);
@@ -162,16 +191,22 @@ const AiBrainFeed: React.FC = () => {
       const lastIndex = allRounds.length - 1;
       newRounds.forEach((round, j) => {
         const isLast = already + j === lastIndex;
-        fresh.push({ loop: agent, round, inProgress: trace.in_progress && isLast });
+        fresh.push({
+          id: roundId(agent, round.at),
+          loop: agent,
+          round,
+          inProgress: trace.in_progress && isLast,
+        });
       });
     }
 
     if (fresh.length === 0) return;
-    setRounds((prev) =>
-      [...prev, ...fresh]
+    setRounds((prev) => {
+      const have = new Set(prev.map((e) => e.id));
+      return [...prev, ...fresh.filter((e) => !have.has(e.id))]
         .sort((a, b) => b.round.at - a.round.at)
-        .slice(0, MAX_ROUNDS),
-    );
+        .slice(0, MAX_ROUNDS);
+    });
   }, []);
 
   // A loop can only ever have one round in flight, so the pending "tänker…"
@@ -200,6 +235,7 @@ const AiBrainFeed: React.FC = () => {
           setRounds((prev) =>
             [
               {
+                id: `${roundId(raw.loop, raw.at)}-live`,
                 loop: raw.loop,
                 round: { at: raw.at, text: '', tool_calls: [], tool_results: [] },
                 inProgress: true,
@@ -211,7 +247,12 @@ const AiBrainFeed: React.FC = () => {
           break;
         case 'round_complete':
           seenRef.current.set(raw.loop, (seenRef.current.get(raw.loop) ?? 0) + 1);
-          resolvePending(raw.loop, () => ({ loop: raw.loop, round: raw.round, inProgress: false }));
+          resolvePending(raw.loop, (prev) => ({
+            id: prev.id,
+            loop: raw.loop,
+            round: raw.round,
+            inProgress: false,
+          }));
           break;
         case 'cycle_ended':
           // Nothing more is coming for this loop this cycle. A pending entry
@@ -307,12 +348,16 @@ const AiBrainFeed: React.FC = () => {
         </EmptyState>
       ) : (
         <div className="flex flex-col gap-2 min-w-0 overflow-y-auto">
-          {rounds.map((entry, i) => (
-            <FeedEntry
-              key={`${entry.loop}-${entry.round.at}-${i}`}
-              entry={entry}
-              sameAsPrev={i > 0 && rounds[i - 1].loop === entry.loop}
-            />
+          {groupRuns(rounds).map((group) => (
+            <div
+              key={group.key}
+              className="flex flex-col gap-2 min-w-0 rounded px-3 py-2"
+              style={{ background: WALL.raised }}
+            >
+              {group.entries.map((entry, i) => (
+                <FeedEntry key={entry.id} entry={entry} first={i === 0} />
+              ))}
+            </div>
           ))}
         </div>
       )}
