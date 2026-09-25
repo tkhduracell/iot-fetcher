@@ -291,6 +291,13 @@ class RoundTrace:
     # from Gemini, the real thing from a thinking model on the LAN. Empty for
     # every model that does not think out loud, which is most of them.
     thinking: str = ""
+    # The chain key that answered this round (``gemini:gemini-3.8-flash``,
+    # ``lan:qwen3-coder:30b``) -- the chain can fall through mid-cycle, so
+    # the cycle's model alone does not say who wrote a given round.
+    model: str = ""
+    # Seconds the chain took to answer, queueing for a shared model included --
+    # what a reader waiting on this round actually waited.
+    duration_s: float = 0.0
 
 
 @dataclass
@@ -399,6 +406,8 @@ def _round_event(loop_name: str, round_: RoundTrace) -> dict:
             "at": round_.at,
             "text": round_.text,
             "thinking": round_.thinking,
+            "model": round_.model,
+            "duration_s": round_.duration_s,
             "tool_calls": round_.tool_calls,
             "tool_results": round_.tool_results,
         },
@@ -624,6 +633,7 @@ class AgentLoop:
                     self.events.publish(
                         {"type": "round_started", "loop": self.name, "at": self.clock()}
                     )
+                call_started = self.clock()
                 reply = await asyncio.wait_for(
                     self.chain.complete(
                         messages,
@@ -635,6 +645,7 @@ class AgentLoop:
                     timeout=self.chain_timeout_s,
                 )
                 rounds += 1
+                call_duration = self.clock() - call_started
                 model = reply.model
                 self.token_counts["prompt"] += reply.usage.prompt_tokens
                 self.token_counts["completion"] += reply.usage.completion_tokens
@@ -697,6 +708,8 @@ class AgentLoop:
                         at=self.clock(),
                         text=_trunc(reply.text or "", TRACE_TEXT_CHARS),
                         thinking=_trunc(reply.thinking or "", TRACE_TEXT_CHARS),
+                        model=reply.key or reply.model,
+                        duration_s=round(call_duration, 1),
                         tool_calls=[
                             {"name": c.name, "args": _safe_args(c.args)} for c in reply.tool_calls
                         ],

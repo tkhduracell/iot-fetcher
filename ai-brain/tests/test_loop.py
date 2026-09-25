@@ -229,7 +229,16 @@ async def test_a_round_with_no_tool_calls_publishes_started_then_complete(make_l
     assert kinds == ["round_started", "round_complete", "cycle_ended"]
     assert events[0]["loop"] == "brain"
     assert events[1]["round"]["text"] == "done"
+    assert events[1]["round"]["model"] == "fake:1"  # no key: falls back to model
     assert events[2]["status"] == "ok"
+
+
+async def test_round_records_the_chain_key_that_answered(make_loop):
+    end = call("end_cycle", "c", next_wake_minutes=10, summary="s")
+    loop, _ = make_loop([reply("done", end, key="lan:qwen3-coder:30b")])
+    await loop.run_cycle()
+    assert loop.trace.rounds[0].model == "lan:qwen3-coder:30b"
+    assert loop.trace.rounds[0].duration_s >= 0
 
 
 async def test_a_round_with_tool_calls_publishes_complete_after_dispatch(make_loop):

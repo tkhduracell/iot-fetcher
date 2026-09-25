@@ -30,6 +30,12 @@ export type RoundTrace = {
    *  does not think out loud, and missing entirely from a round served by an
    *  ai-brain older than the field — hence optional. */
   thinking?: string;
+  /** Chain key that answered this round, e.g. "lan:qwen3-coder:30b".
+   *  Missing from an older ai-brain. */
+  model?: string;
+  /** Seconds the model call took, queueing included. Missing from an older
+   *  ai-brain. */
+  duration_s?: number;
   tool_calls: ToolCall[];
   tool_results: ToolResult[];
 };
