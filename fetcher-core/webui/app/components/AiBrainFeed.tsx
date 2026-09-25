@@ -121,12 +121,14 @@ const ThoughtAsText: React.FC<{ text: string; animate: boolean }> = ({ text, ani
   return <FullText>{shown.length < text.length ? `${shown}▌` : shown}</FullText>;
 };
 
-const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string }> = ({
-  entry,
-  first,
-  emoji,
-}) => {
-  const { loop, round, inProgress, pending } = entry;
+const FeedEntryImpl: React.FC<{
+  entry: FeedRound;
+  first: boolean;
+  emoji: string;
+  /** This loop's cycle is still running -- shown once, on its newest box. */
+  running?: boolean;
+}> = ({ entry, first, emoji, running = false }) => {
+  const { loop, round } = entry;
   const animate = useEntrance(entry.id, entry.fresh);
   const calls = round.tool_calls ?? [];
   const results = round.tool_results ?? [];
@@ -146,24 +148,30 @@ const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string 
             {loop}
           </span>
         )}
-        {pending ? (
-          <Pill tone="busy">tänker…</Pill>
-        ) : (
-          inProgress && <Pill tone="busy">pågår</Pill>
+        {running && (
+          <Pill tone="busy" title="cykeln är aktiv – fler rundor kan komma">
+            aktiv
+          </Pill>
         )}
         {/* Who answered and when, pinned right so the left edge stays the
             agent's name and state. */}
         <span className="ml-auto flex items-center gap-2" style={{ color: WALL.inkFaint }}>
           {round.model && <span title={round.model}>{round.model}</span>}
-          {round.duration_s ? (
-            <span className="tabular-nums" title="modellanropets tid, inklusive kö">
-              {formatDuration(round.duration_s)}
-            </span>
-          ) : null}
-          <span className="tabular-nums">{formatClock(round.at)}</span>
+          {/* The call's duration, with the clock time on hover; an older
+              ai-brain with no duration falls back to the clock time. */}
+          <span
+            className="tabular-nums"
+            title={
+              round.duration_s
+                ? `${formatClock(round.at)} · modellanropets tid, inklusive kö`
+                : undefined
+            }
+          >
+            {round.duration_s ? formatDuration(round.duration_s) : formatClock(round.at)}
+          </span>
         </span>
       </div>
-      {pending ? (
+      {entry.pending ? (
         <Pre className="opacity-60">väntar på modellen…</Pre>
       ) : (
         <>
@@ -211,14 +219,35 @@ const groupRuns = (rounds: FeedRound[]): FeedGroup[] => {
   return groups;
 };
 
-const formatDuration = (s: number) =>
-  s < 60 ? `${s.toFixed(s < 10 ? 1 : 0)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+/** "4 s", "2 min 5 s", "1 h 3 min" -- read at a glance, not parsed. */
+const formatDuration = (seconds: number) => {
+  const s = Math.round(seconds);
+  if (s < 60) return `${Math.max(1, s)} s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rest = s % 60;
+  if (h) return m ? `${h} h ${m} min` : `${h} h`;
+  return rest ? `${m} min ${rest} s` : `${m} min`;
+};
 
 const roundId = (loop: string, at: number) => `${loop}-${at}`;
 
 const AiBrainFeed: React.FC = () => {
   const [agents, setAgents] = useState<AgentSummary[] | null>(null);
   const [rounds, setRounds] = useState<FeedRound[]>([]);
+  // Loops whose cycle has not ended: set by a snapshot's in_progress and by
+  // round_started, cleared by cycle_ended. A property of the cycle, not of
+  // any one (already finished) round.
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  const setLoopRunning = useCallback((loop: string, on: boolean) => {
+    setRunning((prev) => {
+      if (prev.has(loop) === on) return prev;
+      const next = new Set(prev);
+      if (on) next.add(loop);
+      else next.delete(loop);
+      return next;
+    });
+  }, []);
   const [error, setError] = useState<Error | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
 
@@ -238,7 +267,8 @@ const AiBrainFeed: React.FC = () => {
     return list;
   }, []);
 
-  const loadTraces = useCallback(async (list: AgentSummary[], signal: AbortSignal) => {
+  const loadTraces = useCallback(
+    async (list: AgentSummary[], signal: AbortSignal) => {
     const results = await Promise.allSettled(
       list.map((a) => fetchTrace(a.name, signal)),
     );
@@ -248,6 +278,7 @@ const AiBrainFeed: React.FC = () => {
       if (res.status !== 'fulfilled') continue;
       const { agent, trace } = res.value;
       if (!trace) continue;
+      setLoopRunning(agent, trace.in_progress);
       const allRounds = trace.rounds ?? [];
       const already = seenRef.current.get(agent) ?? 0;
       // A compaction or restart can shrink a loop's round count under what
@@ -276,7 +307,9 @@ const AiBrainFeed: React.FC = () => {
         .sort((a, b) => b.round.at - a.round.at)
         .slice(0, MAX_ROUNDS);
     });
-  }, []);
+    },
+    [setLoopRunning],
+  );
 
   // A loop can only ever have one round in flight, so the pending "tänker…"
   // entry a round_started creates is found again by loop name alone — there
@@ -301,6 +334,7 @@ const AiBrainFeed: React.FC = () => {
     (raw: FeedEvent) => {
       switch (raw.type) {
         case 'round_started':
+          setLoopRunning(raw.loop, true);
           setRounds((prev) =>
             [
               {
@@ -331,10 +365,11 @@ const AiBrainFeed: React.FC = () => {
           // (timeout, no budget, raised) -- resolved here rather than left
           // showing "tänker…" forever.
           resolvePending(raw.loop, () => null);
+          setLoopRunning(raw.loop, false);
           break;
       }
     },
-    [resolvePending],
+    [resolvePending, setLoopRunning],
   );
 
   useEffect(() => {
@@ -438,7 +473,7 @@ const AiBrainFeed: React.FC = () => {
               ))}
             </div>
           )}
-          {groupRuns(done).map((group) => (
+          {groupRuns(done).map((group, gi, groups) => (
             <div
               key={group.key}
               className="flex flex-col gap-2 min-w-0 rounded px-3 py-2"
@@ -450,6 +485,11 @@ const AiBrainFeed: React.FC = () => {
                   entry={entry}
                   first={i === 0}
                   emoji={emojiFor(entry.loop)}
+                  running={
+                    i === 0 &&
+                    running.has(group.loop) &&
+                    !groups.slice(0, gi).some((g) => g.loop === group.loop)
+                  }
                 />
               ))}
             </div>
