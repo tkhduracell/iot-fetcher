@@ -53,6 +53,9 @@ type FeedRound = {
   /** Set on a `round_started` entry with no round body yet — the "tänker…"
    *  placeholder a `round_complete` for the same loop replaces in place. */
   pending?: boolean;
+  /** Arrived after first paint (live event or reconnect snapshot) -- only
+   *  these fade in; the initial snapshot renders still. */
+  fresh?: boolean;
 };
 
 type FeedEvent =
@@ -80,7 +83,11 @@ function loopColor(loop: string): string {
  *  live "tänker…" line instead — real content, not a skeleton, since it is
  *  telling the truth about a loop that is genuinely waiting on the model
  *  right now. */
-const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean }> = ({ entry, first }) => {
+const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string }> = ({
+  entry,
+  first,
+  emoji,
+}) => {
   const { loop, round, inProgress, pending } = entry;
   const calls = round.tool_calls ?? [];
   const results = round.tool_results ?? [];
@@ -88,11 +95,18 @@ const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean }> = ({ entry, 
 
   return (
     <div
-      className={`flex flex-col gap-1 min-w-0 ${first ? '' : 'pt-2 border-t'}`}
+      className={`flex flex-col gap-1 min-w-0 ${first ? '' : 'pt-2 border-t'} ${
+        entry.fresh ? 'animate-fade-in' : ''
+      }`}
       style={first ? undefined : { borderColor: WALL.rule }}
     >
       <div className="flex items-center gap-2 flex-wrap text-[12px]" style={{ fontFamily: MONO }}>
-        {first && <span style={{ color, fontWeight: 600 }}>{loop}</span>}
+        {first && (
+          <span style={{ color, fontWeight: 600 }}>
+            {emoji && <span className="mr-1">{emoji}</span>}
+            {loop}
+          </span>
+        )}
         <span style={{ color: WALL.inkFaint }} className="tabular-nums">
           {formatClock(round.at)}
         </span>
@@ -111,7 +125,11 @@ const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean }> = ({ entry, 
         <Pre className="opacity-60">väntar på modellen…</Pre>
       ) : (
         <>
-          {round.thinking && <ThinkingView thinking={round.thinking} />}
+          {round.thinking && (
+            // Typed out only for a round that just arrived; a page load
+            // shows the backlog as-is rather than retyping all of it.
+            <ThinkingView thinking={round.thinking} animate={!!entry.fresh} />
+          )}
           {round.text && <ClampedText>{round.text}</ClampedText>}
           {calls.map((call, j) => (
             // Same lockstep pairing as AiBrainAgentTrace's RoundView -- one
@@ -163,6 +181,8 @@ const AiBrainFeed: React.FC = () => {
   // as a best-effort hint, since `loadTraces` always overwrites it with the
   // server's true count on its next run.
   const seenRef = useRef<Map<string, number>>(new Map());
+  // Flips after the first snapshot lands; later rounds are the "new" ones.
+  const paintedRef = useRef(false);
 
   const loadAgents = useCallback(async (signal: AbortSignal) => {
     const { agents: list } = await fetchAgents(signal);
@@ -196,10 +216,12 @@ const AiBrainFeed: React.FC = () => {
           loop: agent,
           round,
           inProgress: trace.in_progress && isLast,
+          fresh: paintedRef.current,
         });
       });
     }
 
+    paintedRef.current = true;
     if (fresh.length === 0) return;
     setRounds((prev) => {
       const have = new Set(prev.map((e) => e.id));
@@ -240,6 +262,7 @@ const AiBrainFeed: React.FC = () => {
                 round: { at: raw.at, text: '', tool_calls: [], tool_results: [] },
                 inProgress: true,
                 pending: true,
+                fresh: true,
               },
               ...prev,
             ].slice(0, MAX_ROUNDS),
@@ -252,6 +275,7 @@ const AiBrainFeed: React.FC = () => {
             loop: raw.loop,
             round: raw.round,
             inProgress: false,
+            fresh: true,
           }));
           break;
         case 'cycle_ended':
@@ -321,6 +345,10 @@ const AiBrainFeed: React.FC = () => {
     };
   }, [loadAgents, loadTraces, onFeedEvent]);
 
+  const thinking = rounds.filter((e) => e.pending);
+  const done = rounds.filter((e) => !e.pending);
+  const emojiFor = (loop: string) => agents?.find((a) => a.name === loop)?.emoji ?? '';
+
   return (
     <WallShell
       density="read"
@@ -348,14 +376,34 @@ const AiBrainFeed: React.FC = () => {
         </EmptyState>
       ) : (
         <div className="flex flex-col gap-2 min-w-0 overflow-y-auto">
-          {groupRuns(rounds).map((group) => (
+          {thinking.length > 0 && (
+            // Loops waiting on the model are a status, not content: one inline
+            // row of badges rather than a box each saying the same thing.
+            <div className="flex flex-wrap gap-2">
+              {thinking.map((entry) => (
+                <Pill key={entry.id} tone="busy" className="animate-fade-in">
+                  <span className="mr-1">{emojiFor(entry.loop)}</span>
+                  <span style={{ color: loopColor(entry.loop), fontWeight: 600 }}>
+                    {entry.loop}
+                  </span>
+                  <span className="ml-1">tänker…</span>
+                </Pill>
+              ))}
+            </div>
+          )}
+          {groupRuns(done).map((group) => (
             <div
               key={group.key}
               className="flex flex-col gap-2 min-w-0 rounded px-3 py-2"
               style={{ background: WALL.raised }}
             >
               {group.entries.map((entry, i) => (
-                <FeedEntry key={entry.id} entry={entry} first={i === 0} />
+                <FeedEntry
+                  key={entry.id}
+                  entry={entry}
+                  first={i === 0}
+                  emoji={emojiFor(entry.loop)}
+                />
               ))}
             </div>
           ))}

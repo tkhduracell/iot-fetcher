@@ -65,7 +65,7 @@ const TYPE_TICK_MS = 50;
  *  Re-reveals only when the text itself changes, so a re-render (a sibling
  *  round arriving, a poll landing) never restarts a thought mid-sentence.
  *  Honours `prefers-reduced-motion` by showing everything at once. */
-export function useTypewriter(text: string): string {
+export function useTypewriter(text: string, animate = true): string {
   const [shown, setShown] = useState(text.length);
   const doneRef = useRef<string | null>(null);
 
@@ -77,7 +77,7 @@ export function useTypewriter(text: string): string {
     const reduced =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reduced || text.length === 0) {
+    if (!animate || reduced || text.length === 0) {
       doneRef.current = text;
       setShown(text.length);
       return;
@@ -97,7 +97,7 @@ export function useTypewriter(text: string): string {
       });
     }, TYPE_TICK_MS);
     return () => clearInterval(id);
-  }, [text]);
+  }, [text, animate]);
 
   return text.slice(0, shown);
 }
@@ -190,8 +190,11 @@ export const ClampedText: React.FC<{ children: string; italic?: boolean; color?:
  *  and it must never read as something the house is telling you. Clamped to
  *  two lines like any other thought text — expanding while still typing
  *  simply shows the same in-progress string unclamped. */
-export const ThinkingView: React.FC<{ thinking: string }> = ({ thinking }) => {
-  const shown = useTypewriter(thinking);
+export const ThinkingView: React.FC<{ thinking: string; animate?: boolean }> = ({
+  thinking,
+  animate = true,
+}) => {
+  const shown = useTypewriter(thinking, animate);
   const typing = shown.length < thinking.length;
   return (
     <div className="pl-3 flex flex-col gap-[1px]" style={{ borderLeft: `2px solid ${WALL.inkFaint}` }}>
