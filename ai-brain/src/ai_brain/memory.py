@@ -299,6 +299,23 @@ class MemoryDir:
         self._keep_revision("goals", self.goals_path, body)
         _atomic_write(self.goals_path, body)
 
+    def rewrite_persona(self, body: str) -> None:
+        """Replace any agent's persona (the brain's identity, an expert's
+        persona) from outside the loop -- the MCP's edit, not the agent's own,
+        so no brain-only guard. Same revision trail as ``rewrite_identity``."""
+        self._keep_revision("identity", self.persona_path, body)
+        _atomic_write(self.persona_path, body)
+
+    def keep_fact_revision(self, name: str) -> None:
+        """Park a fact's current body before an outside edit replaces or
+        deletes it. The agents' own fact writes stay unversioned (they rewrite
+        constantly); an MCP refactor is the edit worth being able to undo."""
+        path = self.facts_dir / f"{safe_name(name)}.md"
+        self._keep_revision(f"fact-{name}"[:64], path, "")
+
+    def fact_history(self, name: str, limit: int = 10) -> list[Revision]:
+        return self._history(f"fact-{safe_name(name)}"[:64], limit)
+
     def identity_history(self, limit: int = 10) -> list[Revision]:
         return self._history("identity", limit)
 

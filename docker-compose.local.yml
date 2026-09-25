@@ -47,6 +47,8 @@ services:
     # base compose file, exactly like gdrive-rag's 8090.
     ports:
       - "8091:8091"
+      # Memory MCP for a coding agent; writes need MCP_TOKEN (ai-brain/.env).
+      - "8092:8092"
     volumes:
       - ./volumes/ai-brain-memory:/memory
 

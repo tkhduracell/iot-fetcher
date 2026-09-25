@@ -21,6 +21,8 @@ def env(tmp_path: Path, **extra) -> dict[str, str]:
         "EXPERTS": "none",
         "VM_URL": "http://vm.test",
         "INFLUX_TOKEN": "tok",
+        # No MCP listener: tests that start the supervisor must not bind 8092.
+        "MCP_PORT": "0",
     }
     base.update(extra)
     return base

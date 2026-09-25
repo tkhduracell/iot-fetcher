@@ -390,6 +390,12 @@ async def run(settings: Settings) -> None:
     await refresh_repo()
 
     tasks = [asyncio.create_task(_supervise(name, agent)) for name, agent in system.loops.items()]
+    if settings.mcp_port:
+        from ai_brain.mcp_server import serve as serve_mcp
+
+        tasks.append(
+            asyncio.create_task(serve_mcp(system, settings.mcp_port, settings.mcp_token))
+        )
     tasks.append(asyncio.create_task(_every(METRICS_EVERY_S, publish_metrics)))
     tasks.append(asyncio.create_task(_every(EXPIRE_EVERY_S, expire_proposals)))
     tasks.append(asyncio.create_task(_every(DAY_ROLL_EVERY_S, watch_day_roll)))
