@@ -183,9 +183,7 @@ async def test_vm_query_instant(registry, ctx):
     out = await call(registry, ctx, "vm_query", promql="pool_temp")
 
     assert out["ok"] is True
-    assert out["series"] == [
-        {"metric": {"__name__": "pool_temp"}, "values": [[1757000000, "27.5"]]}
-    ]
+    assert out["series"] == [{"labels": {"__name__": "pool_temp"}, "value": 27.5}]
     assert out["truncated"] is False
     assert route.calls.last.request.url.params["query"] == "pool_temp"
     assert route.calls.last.request.headers["authorization"] == "Bearer vm-token"
@@ -196,38 +194,113 @@ async def test_vm_query_range_builds_query_range_url(registry, ctx):
     route = respx.get("http://vm:8427/api/v1/query_range").mock(
         return_value=httpx.Response(200, json=vm_matrix([[1757000000, "1"]]))
     )
-    out = await call(
-        registry, ctx, "vm_query", promql="up", range_minutes=60, step_seconds=120
-    )
+    out = await call(registry, ctx, "vm_query", promql="up", window="1h")
 
     assert out["ok"] is True
     params = route.calls.last.request.url.params
     assert params["query"] == "up"
-    assert params["step"] == "120"
-    assert int(params["end"]) - int(params["start"]) == 3600
+    assert params["step"] == "300"
+    assert int(params["end"]) - int(params["start"]) == 3300
+    assert int(params["end"]) % 300 == 0
 
 
 @respx.mock
-async def test_vm_query_caps_points_and_series(registry, ctx):
-    many = [
-        {"metric": {"i": str(i)}, "values": [[j, str(j)] for j in range(250)]}
-        for i in range(25)
-    ]
+async def test_vm_query_caps_series(registry, ctx):
+    many = [{"metric": {"i": str(i)}, "value": [1, str(i)]} for i in range(25)]
     respx.get("http://vm:8427/api/v1/query").mock(
         return_value=httpx.Response(
             200,
             json={
                 "status": "success",
-                "data": {"resultType": "matrix", "result": many},
+                "data": {"resultType": "vector", "result": many},
             },
         )
     )
     out = await call(registry, ctx, "vm_query", promql="x")
 
     assert len(out["series"]) == 20
-    assert len(out["series"][0]["values"]) == 200
-    assert out["series"][0]["values"][0] == [50, "50"]  # last 200 kept
     assert out["truncated"] is True
+
+
+@respx.mock
+async def test_vm_query_range_compact_whole_window(registry, ctx):
+    def respond(request):
+        start = int(request.url.params["start"])
+        step = int(request.url.params["step"])
+        end = int(request.url.params["end"])
+        values = [[t, "20.123456"] for t in range(start, end + 1, step)]
+        values[-1][1] = "25"
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": {
+                    "resultType": "matrix",
+                    "result": [
+                        {"metric": {"__name__": "t", "room": "a"}, "values": values},
+                        {
+                            "metric": {"__name__": "t", "room": "b"},
+                            "values": values[:3],
+                        },
+                    ],
+                },
+            },
+        )
+
+    route = respx.get("http://vm:8427/api/v1/query_range").mock(side_effect=respond)
+    out = await call(registry, ctx, "vm_query", promql="t", window="7d")
+
+    params = route.calls.last.request.url.params
+    step = int(params["step"])
+    assert (int(params["end"]) - int(params["start"])) // step <= 27
+    assert int(params["end"]) - int(params["start"]) >= 7 * 86400 - step
+    assert out["common_labels"] == {"__name__": "t"}
+    assert out["step"] == "6h"
+    assert len(out["times"]) == len(out["series"][0]["values"]) == 28
+    assert out["times"][0][:3] in {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+    assert out["from"][-6:] in {"+01:00", "+02:00"}
+    assert "start" not in out
+    a = out["series"][0]
+    assert a["labels"] == {"room": "a"}
+    assert a["values"][0] == 20.12
+    assert a["last"] == 25 and a["max"] == 25 and a["min"] == 20.12
+    assert out["series"][1]["values"] == [20.12] * 3
+    assert out["truncated"] is False
+
+
+@respx.mock
+async def test_vm_query_drops_values_over_budget(registry, ctx):
+    def respond(request):
+        start = int(request.url.params["start"])
+        step = int(request.url.params["step"])
+        vals = [[start + i * step, str(1000 + i + 0.5)] for i in range(14)]
+        return httpx.Response(
+            200,
+            json={
+                "status": "success",
+                "data": {
+                    "resultType": "matrix",
+                    "result": [
+                        {"metric": {"e": f"s.{i}" + "x" * 150}, "values": vals}
+                        for i in range(20)
+                    ],
+                },
+            },
+        )
+
+    respx.get("http://vm:8427/api/v1/query_range").mock(side_effect=respond)
+    out = await call(registry, ctx, "vm_query", promql="x", window="6h")
+
+    assert out["values_dropped"] is True
+    assert "values" not in out["series"][0]
+    assert "times" not in out
+    assert out["series"][0]["max"] == 1014
+
+
+@respx.mock
+async def test_vm_query_rejects_unknown_window(registry, ctx):
+    out = await call(registry, ctx, "vm_query", promql="up", window="3h")
+    assert "window must be one of" in out["error"]
 
 
 @respx.mock
@@ -1240,7 +1313,9 @@ def test_wrap_external_rejects_a_bad_source():
 
 
 def test_wrap_external_redacts_a_secret_before_fencing():
-    wrapped = wrap_external("web", "leaked key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q here")
+    wrapped = wrap_external(
+        "web", "leaked key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q here"
+    )
     assert "AIzaFAKE" not in wrapped
     assert "[REDACTED]" in wrapped
     assert wrapped.startswith('<external source="web">')
