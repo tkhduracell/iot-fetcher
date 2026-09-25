@@ -91,6 +91,11 @@ const FeedEntry: React.FC<{ entry: FeedRound; sameAsPrev: boolean }> = ({ entry,
         <span style={{ color: WALL.inkFaint }} className="tabular-nums">
           {formatClock(round.at)}
         </span>
+        {round.model && (
+          <span style={{ color: WALL.inkFaint }} title={round.model}>
+            {round.model}
+          </span>
+        )}
         {pending ? (
           <Pill tone="busy">tänker…</Pill>
         ) : (
