@@ -376,6 +376,12 @@ def _tool_result_stats(result: str) -> dict:
     hits = parsed.get("hits")
     if isinstance(hits, list):
         stats["hits"] = len(hits)
+    # drive_search groups its chunks by file; a hit is still one chunk.
+    files = parsed.get("files")
+    if isinstance(files, list):
+        stats["hits"] = sum(
+            len(f.get("chunks") or []) for f in files if isinstance(f, dict)
+        )
     return stats
 
 
