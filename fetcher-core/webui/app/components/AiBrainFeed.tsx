@@ -396,10 +396,11 @@ const AiBrainFeed: React.FC = () => {
       }
     };
 
-    (async () => {
-      await snapshot();
-      if (cancelled) return;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let backoffMs = 2000;
 
+    const connect = () => {
+      if (cancelled) return;
       source = new EventSource(FEED_URL);
       source.onmessage = (ev) => {
         try {
@@ -410,19 +411,41 @@ const AiBrainFeed: React.FC = () => {
           // connection the rest of the stream is still healthy on.
         }
       };
+      source.onopen = () => {
+        backoffMs = 2000;
+        setError(null);
+      };
       source.onerror = () => {
         if (cancelled) return;
-        // `EventSource` retries on its own; the gap this reconnect might
-        // have left is what the snapshot below is for.
         setError(new Error('live-flödet bröts, återansluter…'));
+        // A dropped connection is retried by EventSource itself, but an HTTP
+        // error (the proxy's 502 while ai-brain restarts) closes it for good
+        // -- that case needs a fresh EventSource, with backoff.
+        if (source?.readyState === EventSource.CLOSED) {
+          source.close();
+          clearTimeout(retry);
+          retry = setTimeout(async () => {
+            await snapshot();
+            connect();
+          }, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+          return;
+        }
+        // Still retrying on its own; the gap it may leave is what the
+        // snapshot is for.
         snapshot().catch(() => {});
       };
-      source.onopen = () => setError(null);
+    };
+
+    (async () => {
+      await snapshot();
+      connect();
     })();
 
     return () => {
       cancelled = true;
       controller.abort();
+      clearTimeout(retry);
       source?.close();
     };
   }, [loadAgents, loadTraces, onFeedEvent]);
