@@ -57,7 +57,7 @@ type FeedRound = {
   /** Set on a `round_started` entry with no round body yet — the "tänker…"
    *  placeholder a `round_complete` for the same loop replaces in place. */
   pending?: boolean;
-  /** Arrived after first paint (live event or reconnect snapshot) -- only
+  /** Arrived as a live event (never from a snapshot) -- only
    *  these fade in; the initial snapshot renders still. */
   fresh?: boolean;
 };
@@ -257,8 +257,6 @@ const AiBrainFeed: React.FC = () => {
   // as a best-effort hint, since `loadTraces` always overwrites it with the
   // server's true count on its next run.
   const seenRef = useRef<Map<string, number>>(new Map());
-  // Flips after the first snapshot lands; later rounds are the "new" ones.
-  const paintedRef = useRef(false);
 
   const loadAgents = useCallback(async (signal: AbortSignal) => {
     const { agents: list } = await fetchAgents(signal);
@@ -294,12 +292,13 @@ const AiBrainFeed: React.FC = () => {
           loop: agent,
           round,
           inProgress: trace.in_progress && isLast,
-          fresh: paintedRef.current,
+          // A snapshot -- first paint or a reconnect -- is backlog, never
+          // "new": only live events animate.
+          fresh: false,
         });
       });
     }
 
-    paintedRef.current = true;
     if (fresh.length === 0) return;
     setRounds((prev) => {
       const have = new Set(prev.map((e) => e.id));
@@ -351,8 +350,10 @@ const AiBrainFeed: React.FC = () => {
           break;
         case 'round_complete':
           seenRef.current.set(raw.loop, (seenRef.current.get(raw.loop) ?? 0) + 1);
-          resolvePending(raw.loop, (prev) => ({
-            id: prev.id,
+          resolvePending(raw.loop, () => ({
+            // The same id a snapshot would give this round, so a reconnect
+            // snapshot dedupes it instead of adding (and animating) a copy.
+            id: roundId(raw.loop, raw.round.at),
             loop: raw.loop,
             round: raw.round,
             inProgress: false,
@@ -396,10 +397,11 @@ const AiBrainFeed: React.FC = () => {
       }
     };
 
-    (async () => {
-      await snapshot();
-      if (cancelled) return;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let backoffMs = 2000;
 
+    const connect = () => {
+      if (cancelled) return;
       source = new EventSource(FEED_URL);
       source.onmessage = (ev) => {
         try {
@@ -410,19 +412,41 @@ const AiBrainFeed: React.FC = () => {
           // connection the rest of the stream is still healthy on.
         }
       };
+      source.onopen = () => {
+        backoffMs = 2000;
+        setError(null);
+      };
       source.onerror = () => {
         if (cancelled) return;
-        // `EventSource` retries on its own; the gap this reconnect might
-        // have left is what the snapshot below is for.
         setError(new Error('live-flödet bröts, återansluter…'));
+        // A dropped connection is retried by EventSource itself, but an HTTP
+        // error (the proxy's 502 while ai-brain restarts) closes it for good
+        // -- that case needs a fresh EventSource, with backoff.
+        if (source?.readyState === EventSource.CLOSED) {
+          source.close();
+          clearTimeout(retry);
+          retry = setTimeout(async () => {
+            await snapshot();
+            connect();
+          }, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+          return;
+        }
+        // Still retrying on its own; the gap it may leave is what the
+        // snapshot is for.
         snapshot().catch(() => {});
       };
-      source.onopen = () => setError(null);
+    };
+
+    (async () => {
+      await snapshot();
+      connect();
     })();
 
     return () => {
       cancelled = true;
       controller.abort();
+      clearTimeout(retry);
       source?.close();
     };
   }, [loadAgents, loadTraces, onFeedEvent]);
