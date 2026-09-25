@@ -143,7 +143,7 @@ const FeedEntryImpl: React.FC<{
     >
       <div className="flex items-center gap-2 flex-wrap text-[12px]" style={{ fontFamily: MONO }}>
         {first && (
-          <span style={{ color, fontWeight: 600 }}>
+          <span className="text-[14px]" style={{ color, fontWeight: 600 }}>
             {emoji && <span className="mr-1">{emoji}</span>}
             {loop}
           </span>
