@@ -16,7 +16,11 @@ import {
   WALL,
   WallShell,
 } from './AiBrainWallTheme';
-import { ClampedText, Pre, ThinkingView, ToolCallLine } from './AiBrainAgentTrace';
+import {
+  Pre,
+  ToolCallLine,
+  useTypewriter,
+} from './AiBrainAgentTrace';
 
 /** `/ai-brain/feed` — every loop's rounds, merged into one live stream.
  *
@@ -83,12 +87,47 @@ function loopColor(loop: string): string {
  *  live "tänker…" line instead — real content, not a skeleton, since it is
  *  telling the truth about a loop that is genuinely waiting on the model
  *  right now. */
+/** Round ids that have already had their entrance. Module-level so it
+ *  outlives any one mounted row: React may remount a row (its box regroups,
+ *  a key changes) and that must not replay the typewriter or fade. */
+const animated = new Set<string>();
+
+/** Whether this mount should animate -- decided once, on first render, and
+ *  recorded so no later mount of the same id animates again. */
+const useEntrance = (id: string, fresh: boolean | undefined): boolean => {
+  const [animate] = useState(() => {
+    const first = !!fresh && !animated.has(id);
+    animated.add(id);
+    return first;
+  });
+  return animate;
+};
+
+/** A round's thinking promoted to its main text, for rounds that thought but
+ *  said nothing else -- otherwise the only words in the row would be the
+ *  dimmed aside. */
+/** A round's words, always in full -- no clamp, no "mer". */
+const FullText: React.FC<{ children: string }> = ({ children }) => (
+  <pre
+    className="text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0 w-full"
+    style={{ fontFamily: MONO, color: WALL.ink }}
+  >
+    {children}
+  </pre>
+);
+
+const ThoughtAsText: React.FC<{ text: string; animate: boolean }> = ({ text, animate }) => {
+  const shown = useTypewriter(text, animate);
+  return <FullText>{shown.length < text.length ? `${shown}▌` : shown}</FullText>;
+};
+
 const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string }> = ({
   entry,
   first,
   emoji,
 }) => {
   const { loop, round, inProgress, pending } = entry;
+  const animate = useEntrance(entry.id, entry.fresh);
   const calls = round.tool_calls ?? [];
   const results = round.tool_results ?? [];
   const color = loopColor(loop);
@@ -96,7 +135,7 @@ const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string 
   return (
     <div
       className={`flex flex-col gap-1 min-w-0 ${first ? '' : 'pt-2 border-t'} ${
-        entry.fresh ? 'animate-fade-in' : ''
+        animate ? 'animate-fade-in' : ''
       }`}
       style={first ? undefined : { borderColor: WALL.rule }}
     >
@@ -125,12 +164,14 @@ const FeedEntryImpl: React.FC<{ entry: FeedRound; first: boolean; emoji: string 
         <Pre className="opacity-60">väntar på modellen…</Pre>
       ) : (
         <>
-          {round.thinking && (
-            // Typed out only for a round that just arrived; a page load
-            // shows the backlog as-is rather than retyping all of it.
-            <ThinkingView thinking={round.thinking} animate={!!entry.fresh} />
+          {/* Thinking is hidden when the round has its own text -- the text is
+              the round's point, the thinking mostly restates it at length.
+              A round that only thought shows that thinking as its text. */}
+          {round.text ? (
+            <FullText>{round.text}</FullText>
+          ) : (
+            round.thinking && <ThoughtAsText text={round.thinking} animate={animate} />
           )}
-          {round.text && <ClampedText>{round.text}</ClampedText>}
           {calls.map((call, j) => (
             // Same lockstep pairing as AiBrainAgentTrace's RoundView -- one
             // result per call, same order, same round.
