@@ -604,6 +604,24 @@ the tool's full, untruncated result, so it stays accurate even once
 curl -s http://localhost:8091/api/agents/brain/trace
 ```
 
+## Memory MCP
+
+A streamable-HTTP MCP server on `:8092/mcp` (`MCP_PORT`, `0` disables) for a
+coding agent to read and refactor the agents' memory in bulk: facts, journals,
+gaps, personas (the "soul"), the brain's goals and the constitution. It runs
+in-process, so writes go through the same `MemoryDir` as the loops (atomic,
+redacted) and land on each agent's next cycle.
+
+Without `MCP_TOKEN` it is read-only and open, like the HTTP API. With it, every
+request needs `Authorization: Bearer <token>` and the write tools appear. Every
+outside overwrite or delete of a fact, persona, goals or constitution keeps the
+previous body -- the `history` tool reads them back.
+
+```sh
+claude mcp add --transport http ai-brain http://192.168.68.87:8092/mcp \
+  --header "Authorization: Bearer $AI_BRAIN_MCP_TOKEN"
+```
+
 ## Development
 
 ```sh

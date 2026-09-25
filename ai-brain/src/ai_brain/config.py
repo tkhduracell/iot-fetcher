@@ -138,6 +138,8 @@ class Settings:
     rpd: int
     call_timeout_s: int
     http_port: int
+    mcp_port: int
+    mcp_token: str
     repo_slug: str
     repo_ref: str
     repo_refresh_h: int
@@ -264,6 +266,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         rpd=get_int("RPD", 200),
         call_timeout_s=get_int("CALL_TIMEOUT_S", 60),
         http_port=get_int("HTTP_PORT", 8091),
+        # The memory MCP (see mcp_server.py). 0 turns it off; a blank token
+        # makes it read-only.
+        mcp_port=get_int("MCP_PORT", 8092),
+        mcp_token=get("MCP_TOKEN"),
         # The public repo the code_* tools read -- see repo.py. Defaults to
         # this repo itself, on its main branch. repo_refresh_h floors at 1:
         # supervisor.py multiplies it by 3600 for _every()'s sleep interval,
