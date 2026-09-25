@@ -1,17 +1,32 @@
 """VictoriaMetrics reads: run PromQL, and find out what metrics exist.
 
-Both results are capped hard. A range query over a week at a fine step is a
-megabyte of numbers the model cannot use and would pay for twice, so a series
-keeps its most recent 200 points -- the recent end is the interesting one --
-and a query keeps 20 series. Whenever anything was dropped the result says
-``truncated: true`` so the model knows to narrow its query rather than trust a
-partial picture.
+Results are shaped for small models with short context windows. VM's raw
+``[[ts, "12.3456789"], ...]`` pairs cost ~25 chars a point, so a week-long
+range over a few series blew past the loop's tool-result cap and arrived cut
+mid-JSON. Instead:
+
+* the model picks one of a fixed set of ``WINDOWS`` (2m..7d), each with a
+  step that keeps it within ``MAX_POINTS`` -- the whole window, coarsely;
+* each series is ``start``/``step`` plus a flat list of rounded numbers
+  (``null`` for gaps), with min/max/avg/last precomputed so the model does no
+  arithmetic over the list;
+* labels shared by every series are hoisted into ``common_labels``;
+* if the result still exceeds ``MAX_RESULT_CHARS`` the per-point values are
+  dropped and only the stats kept (``values_dropped: true``).
+
+``truncated: true`` still means series were dropped past ``MAX_SERIES`` -- a
+cue to narrow the query (aggregate with ``sum by``/``topk``) rather than trust
+a partial picture.
 """
 
 from __future__ import annotations
 
+import json
+import math
 import re
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ai_brain.llm import ToolSpec
 from ai_brain.regex_safety import check_pattern
@@ -20,9 +35,27 @@ from ai_brain.tools.http import decode_json, request
 
 VM_LOOPS = frozenset({"brain", "energy", "health"})
 
-MAX_POINTS = 200
+# Fixed windows, each 10-28 buckets. Points multiply by series (one per label
+# combination), so a tight per-series count is what keeps 20 series small.
+# A small model picks a label reliably; free-form minutes/steps it got wrong.
+WINDOWS: dict[str, tuple[int, int]] = {
+    "now": (0, 0),
+    "2m": (120, 10),  # 12 points
+    "5m": (300, 30),  # 10
+    "1h": (3600, 300),  # 12
+    "6h": (6 * 3600, 1800),  # 12
+    "1d": (86400, 3600),  # 24
+    "7d": (7 * 86400, 6 * 3600),  # 28
+}
+MAX_POINTS = 28
+# The house's clock. Models mis-convert UTC by hand (DST especially), so
+# every time the model sees is already local, with the offset spelled out.
+LOCAL_TZ = ZoneInfo("Europe/Stockholm")
+STEP_LABELS = {10: "10s", 30: "30s", 300: "5m", 1800: "30m", 3600: "1h", 6 * 3600: "6h"}
 MAX_SERIES = 20
 MAX_METRICS = 200
+# Well under loop.MAX_TOOL_RESULT_CHARS so the loop's blunt cut never fires.
+MAX_RESULT_CHARS = 6_000
 
 
 def _auth(ctx: ToolContext) -> dict[str, str]:
@@ -30,36 +63,141 @@ def _auth(ctx: ToolContext) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def _series_from(result: list) -> tuple[list[dict], bool]:
-    truncated = len(result) > MAX_SERIES
+def _num(raw: object) -> float | None:
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _round(value: float) -> float | int:
+    """Four significant digits -- plenty for reasoning, a third of the chars."""
+    if value == 0:
+        return 0
+    digits = max(0, 3 - int(math.floor(math.log10(abs(value)))))
+    rounded = round(value, digits)
+    return int(rounded) if rounded == int(rounded) and abs(rounded) < 1e15 else rounded
+
+
+def _stats(values: list[float]) -> dict:
+    if not values:
+        return {}
+    return {
+        "min": _round(min(values)),
+        "max": _round(max(values)),
+        "avg": _round(sum(values) / len(values)),
+        "last": _round(values[-1]),
+    }
+
+
+def _local(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, tz=LOCAL_TZ)
+
+
+def _times(start: int, step: int, n: int) -> list[str]:
+    """Bucket labels aligned with each series' ``values``: ``HH:MM``, with the
+    weekday prefixed when the window spans more than a day."""
+    fmt = "%a %H:%M" if step * n > 86400 else "%H:%M:%S" if step < 60 else "%H:%M"
+    return [_local(start + i * step).strftime(fmt) for i in range(n)]
+
+
+def _hoist_labels(entries: list[dict]) -> tuple[dict, list[dict]]:
+    labels = [
+        e.get("metric") if isinstance(e.get("metric"), dict) else {} for e in entries
+    ]
+    if len(labels) < 2:
+        return {}, labels
+    common = {
+        k: v for k, v in labels[0].items() if all(lab.get(k) == v for lab in labels[1:])
+    }
+    return common, [{k: v for k, v in lab.items() if k not in common} for lab in labels]
+
+
+def _shape(
+    result: list, start: int | None, step: int | None, window: str = "now"
+) -> dict:
+    entries = [e for e in result if isinstance(e, dict)]
+    truncated = len(entries) > MAX_SERIES
+    entries = entries[:MAX_SERIES]
+    common, labels = _hoist_labels(entries)
+
     series = []
-    for entry in result[:MAX_SERIES]:
-        if not isinstance(entry, dict):
-            continue
-        # instant queries return a single "value", range queries a "values" list
-        values = entry.get("values")
-        if values is None:
+    for entry, own in zip(entries, labels):
+        if start is None or step is None:
             single = entry.get("value")
-            values = [single] if single is not None else []
-        if len(values) > MAX_POINTS:
-            values = values[-MAX_POINTS:]
-            truncated = True
-        series.append({"metric": entry.get("metric", {}), "values": values})
-    return series, truncated
+            value = (
+                _num(single[1])
+                if isinstance(single, list) and len(single) == 2
+                else None
+            )
+            series.append(
+                {"labels": own, "value": None if value is None else _round(value)}
+            )
+            continue
+        slots: list[float | None] = [None] * MAX_POINTS
+        present: list[float] = []
+        for point in entry.get("values") or []:
+            if not (isinstance(point, list) and len(point) == 2):
+                continue
+            value = _num(point[1])
+            idx = round((float(point[0]) - start) / step)
+            if value is None or not 0 <= idx < MAX_POINTS:
+                continue
+            slots[idx] = value
+        # trim trailing slots past the end of the window
+        n = max((i + 1 for i, v in enumerate(slots) if v is not None), default=0)
+        present = [v for v in slots[:n] if v is not None]
+        series.append(
+            {
+                "labels": own,
+                **_stats(present),
+                "values": [None if v is None else _round(v) for v in slots[:n]],
+            }
+        )
+
+    shaped: dict = {"series": series, "truncated": truncated}
+    if start is None:
+        shaped["at"] = _local(time.time()).isoformat(timespec="seconds")
+    if common:
+        shaped["common_labels"] = common
+    if start is not None:
+        n = max((len(x.get("values", [])) for x in series), default=0)
+        shaped["window"] = window
+        shaped["step"] = STEP_LABELS.get(step, f"{step}s")
+        shaped["from"] = _local(start).isoformat(timespec="minutes")
+        shaped["to"] = _local(start + WINDOWS[window][0] - step).isoformat(
+            timespec="minutes"
+        )
+        shaped["times"] = _times(start, step, n)
+        if len(json.dumps(shaped)) > MAX_RESULT_CHARS:
+            for s in series:
+                s.pop("values", None)
+            shaped.pop("times")
+            shaped["values_dropped"] = True
+    return shaped
 
 
 async def _vm_query(ctx: ToolContext, args: dict) -> str:
     promql = str(args["promql"])
-    range_minutes = int(args.get("range_minutes") or 0)
-    step_seconds = int(args.get("step_seconds") or 300)
+    window = str(args.get("window") or "now")
+    if window not in WINDOWS:
+        return err(f"vm_query: window must be one of {', '.join(WINDOWS)}")
     base = ctx.settings.vm_url.rstrip("/")
 
-    if range_minutes > 0:
+    start: int | None = None
+    step_seconds: int | None = None
+    if window != "now":
+        span, step_seconds = WINDOWS[window]
         end = int(time.time())
+        end -= end % step_seconds  # aligned buckets: same window, same timestamps
+        start = end - span + step_seconds
         url = f"{base}/api/v1/query_range"
         params = {
             "query": promql,
-            "start": str(end - range_minutes * 60),
+            "start": str(start),
             "end": str(end),
             "step": str(step_seconds),
         }
@@ -83,8 +221,14 @@ async def _vm_query(ctx: ToolContext, args: dict) -> str:
 
     data = body.get("data")
     result = data.get("result") if isinstance(data, dict) else None
-    series, truncated = _series_from(result if isinstance(result, list) else [])
-    return ok({"series": series, "truncated": truncated})
+    return ok(
+        _shape(
+            result if isinstance(result, list) else [],
+            start,
+            step_seconds,
+            window,
+        )
+    )
 
 
 async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
@@ -100,7 +244,9 @@ async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
         return err(f"vm_metrics: invalid regex {pattern!r}: {exc}")
 
     url = f"{ctx.settings.vm_url.rstrip('/')}/api/v1/label/__name__/values"
-    response, problem = await request(ctx, "GET", url, label="vm_metrics", headers=_auth(ctx))
+    response, problem = await request(
+        ctx, "GET", url, label="vm_metrics", headers=_auth(ctx)
+    )
     if problem is not None:
         return err(problem)
 
@@ -112,7 +258,9 @@ async def _vm_metrics(ctx: ToolContext, args: dict) -> str:
         return err("vm_metrics: backend returned a non-object body")
     data = body.get("data")
     candidates = [
-        name for name in (data if isinstance(data, list) else []) if isinstance(name, str)
+        name
+        for name in (data if isinstance(data, list) else [])
+        if isinstance(name, str)
     ]
 
     names = [name for name in candidates if matcher.search(name)]
@@ -125,16 +273,17 @@ def register_vm_tools(registry: ToolRegistry) -> None:
             spec=ToolSpec(
                 name="vm_query",
                 description=(
-                    "Run a PromQL query against VictoriaMetrics. Omit range_minutes for the "
-                    "current value; set it to look back over that many minutes at step_seconds "
-                    "resolution. Results are capped at 20 series and the newest 200 points each."
+                    "Run a PromQL query against VictoriaMetrics. window='now' (default) gives "
+                    "the current value; 2m/5m/1h/6h/1d/7d give the whole window in <=28 "
+                    "buckets (10s/30s/5m/30m/1h/6h) with min/max/avg/last per series. Max 20 "
+                    "series -- aggregate with sum by/avg by/topk instead of raw "
+                    "high-cardinality metrics."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "promql": {"type": "string"},
-                        "range_minutes": {"type": "integer"},
-                        "step_seconds": {"type": "integer"},
+                        "window": {"type": "string", "enum": list(WINDOWS)},
                     },
                     "required": ["promql"],
                 },
