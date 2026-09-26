@@ -31,6 +31,13 @@ For anything involving metrics, PromQL, or series shape, use the `victoria-metri
 - Cloud APIs here return `objectResult: null` rather than omitting the key, so `.get('objectResult', [])` does **not** protect you — the default only applies when the key is absent. Use `.get('objectResult') or []`.
 - The AquaTemp pool pump is a **shared** device: `deviceList` returns `[]` and it only appears via `getMyAppectDeviceShareDataList`. On shared devices `deviceNickName`, `custModel`, `deviceName` and `model` are all null, and `nickName` holds the **account's email address** — never fall back to it for a metric tag. Use `deviceCode` as the identity.
 
+# Spa (Balboa, Utö)
+- To read the spa directly when HA/rpi5 are down, use `scripts/balboa-probe.py`. It talks to the BP2100G0 WiFi module at `192.168.68.53:4257` over the BWA protocol and doesn't need the cloud, HA or the Pi. Run it with no args to see the usage; `status <ip>` is the usual starting point.
+- The module accepts **one TCP client at a time**. When HA's Balboa integration holds the socket, the probe fails to connect. That means the socket is taken, not that the spa is offline.
+- `discover` uses UDP broadcast, so it only works on the same LAN (not over VPN). Use `scan` from elsewhere.
+- Only temps, heat mode/state, range and clock are verified. The pump and circulation fields are guesses, so confirm them against HA before building on them.
+- The script only listens. `info` sends read-only queries, and nothing sends control frames. Keep it that way.
+
 # Grafana
 - In Grafana dashboards, use `$__interval` with `spanNulls` instead of hardcoded lookback windows
 - Update the Grafana dashboard via the conversion script (`convert_dashboard.py`), not by editing JSON directly
