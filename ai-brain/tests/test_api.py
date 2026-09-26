@@ -38,7 +38,7 @@ INFLUX = "influx-super-secret"
 
 @pytest.fixture
 def system(tmp_path):
-    settings = load_settings(env(tmp_path, EXPERTS="energy"))
+    settings = load_settings(env(tmp_path, EXPERTS="energy", BRAIN_HEARTBEAT_MIN="30"))
     return build(settings, chain_factory=fake_chain, clock=lambda: NOW)
 
 

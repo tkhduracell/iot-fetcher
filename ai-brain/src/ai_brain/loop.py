@@ -203,27 +203,24 @@ day -- but a week of them means you are not looking hard enough."""
 # the code: the model can always override one when it is mid-investigation,
 # which is the behaviour we actually want.
 BRAIN_ANGLES: tuple[str, ...] = (
-    "Find the thing that looks wrong. One anomaly, chased until you can explain "
-    "it or say precisely why you cannot.",
-    "Build a baseline. Pick one device or series and write down what normal "
-    "looks like for it, in enough detail that a departure would be obvious.",
-    "Pick up an open thread. Read your recent journal, find something you left "
-    "unexplained, and take it further.",
-    "Look at something you have never looked at. Name it, measure it, write one "
-    "fact about it.",
-    "Earn your keep. Find something that would genuinely help Filip and, if it "
-    "touches the house, propose it.",
-    "Read, do not measure. Take a question the data raised and look for the "
-    "answer in the household documents or on the web.",
-    "Tend your own memory. Merge facts that say the same thing, delete what is "
-    "no longer true, and rewrite goals that have gone stale.",
     "Review one expert. Use expert_overview, pick the one you trust least, read "
     "its journal and facts, check one or two claims against data or what Filip "
-    "has told you, then record it with review_expert. Contradictions with your "
-    "own facts count as findings.",
-    "Understand the machine. Use code_overview, then read the code of one "
-    "service whose data you rely on, and write a fact on how it works and how "
-    "it fails.",
+    "has told you, then record it with review_expert.",
+    "Hunt contradictions. Compare what two experts (or an expert and you) "
+    "believe about the same device or question; when they disagree, find out "
+    "which is right and review the one that is wrong.",
+    "Check ground truth. For each thing Filip has told you, find any expert "
+    "still reasoning against it, and correct it with review_expert.",
+    "Find re-litigation. Look for questions an expert keeps re-raising after they "
+    "were settled, or the same anomaly flagged cycle after cycle, and tell it to stop.",
+    "Judge method. Pick one confident conclusion an expert reached and check how "
+    "it got there: one data point, correlation read as cause, a cost claim "
+    "without price data. Review it if the reasoning does not hold.",
+    "Tend your own memory. Keep only Filip's ground truth, who owns what, and "
+    "your open corrections; delete domain facts an expert already holds.",
+    "Understand the machine. Use code_overview, then read how one expert's "
+    "tools or data sources work, so you can tell a data problem from a "
+    "reasoning problem.",
 )
 
 EXPERT_ANGLES: tuple[str, ...] = (
