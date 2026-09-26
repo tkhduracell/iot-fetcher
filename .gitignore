@@ -7,6 +7,7 @@
 !.env.template
 !.env.example
 !.env.test
+
 # Bare-password files for services whose config can't take a KEY=VALUE env
 # file directly (e.g. VictoriaMetrics' basic_auth.password_file).
 wud/metrics_password
@@ -70,3 +71,6 @@ backup-dashboard/
 # --- misc ------------------------------------------------------------------
 esp32-*/
 pinout.png
+
+# --- ignore MCP local config ------------------------------------------------
+.mcp.local.json
