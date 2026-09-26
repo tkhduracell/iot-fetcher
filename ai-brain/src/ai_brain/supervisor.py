@@ -121,6 +121,18 @@ def _check_chain(settings: Settings) -> None:
         )
         raise SystemExit(2)
 
+    chain = set(settings.llm_chain)
+    for var, models in (("BRAIN_MODELS", settings.brain_models), ("EXPERT_MODELS", settings.expert_models)):
+        if models is None:
+            continue
+        unknown = sorted(models - chain)
+        if unknown:
+            log.error("%s names %s, which LLM_CHAIN does not have; refusing to start", var, ", ".join(unknown))
+            raise SystemExit(2)
+        if not models:
+            log.error("%s leaves that loop no model in LLM_CHAIN; refusing to start", var)
+            raise SystemExit(2)
+
 
 def _expert_names(settings: Settings) -> list[str]:
     names = []
