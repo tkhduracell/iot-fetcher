@@ -233,7 +233,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # ollama: provider's, rather than shared with it.
         lan_ollama_num_ctx=get_int("LAN_OLLAMA_NUM_CTX", 32768),
         experts=_experts(get("EXPERTS")),
-        brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 30) * 60,
+        brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 240) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
         vm_url=get("VM_URL", "http://database-auth:8427"),
         influx_token=get("INFLUX_TOKEN"),

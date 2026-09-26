@@ -39,7 +39,7 @@ from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 from ai_brain.tools.http import decode_json, request, stream
 
-WEB_LOOPS = frozenset({"brain", "researcher"})
+WEB_LOOPS = frozenset({"researcher"})
 
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 MAX_RESULTS = 5
