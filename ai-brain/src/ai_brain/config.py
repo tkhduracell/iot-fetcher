@@ -37,6 +37,14 @@ DEFAULT_LLM_CHAIN = (
 # the whole set, for a blank value as much as an absent one -- a deployment
 # that copied .env.example during the rollout has a literal ``EXPERTS=`` line,
 # and that line silently pinning it to brain-only is a default nobody chose.
+# The brain dreams: it reviews how the experts reason rather than watching the
+# house itself, so it runs on the strongest model or not at all, and the
+# experts keep the rest of the chain. gemini-3.8-flash's free tier is ~11
+# requests a day, so this means roughly one brain cycle a day -- by design.
+# ``all`` lifts the restriction for either side.
+DEFAULT_BRAIN_MODELS = "gemini:gemini-3.8-flash"
+ALL_MODELS = "all"
+
 DEFAULT_EXPERTS = "energy,health,house-ops,researcher,infra"
 
 # The explicit opt-out, since blank no longer is one. Case-insensitive, and
@@ -100,11 +108,29 @@ def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
     return entries
 
 
+def _model_set(raw: str, default: str | None) -> frozenset[str] | None:
+    """A BRAIN_MODELS / EXPERT_MODELS value: chain keys, or None for ``all``."""
+    value = raw.strip() or (default or "")
+    if not value or value.lower() == ALL_MODELS:
+        return None
+    return frozenset(_csv(value))
+
+
+def _experts_default(chain: list[str], brain: frozenset[str] | None) -> frozenset[str] | None:
+    """Unset EXPERT_MODELS: every chain key the brain has not claimed."""
+    if brain is None:
+        return None
+    return frozenset(key for key in chain if key not in brain)
+
+
 @dataclass(frozen=True)
 class Settings:
     memory_root: Path
     seed_root: Path
     llm_chain: list[str]
+    # Chain keys each kind of loop may use; None means the whole chain.
+    brain_models: frozenset[str] | None
+    expert_models: frozenset[str] | None
     gemini_api_key: str
     ollama_url: str
     ollama_num_ctx: int
@@ -213,10 +239,21 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         raw = get(key).strip()
         return int(raw) if raw else default
 
+    llm_chain = _dedupe(_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN))
+    brain_models = _model_set(get("BRAIN_MODELS"), DEFAULT_BRAIN_MODELS)
+    if not get("BRAIN_MODELS").strip() and brain_models and not brain_models & set(llm_chain):
+        # A custom chain without the default brain model: keep the old
+        # everyone-shares-everything behaviour rather than refuse to start.
+        brain_models = None
+
     return Settings(
         memory_root=Path(get("MEMORY_ROOT", "/memory")),
         seed_root=Path(get("SEED_ROOT")) if get("SEED_ROOT") else DEFAULT_SEED_ROOT,
-        llm_chain=_dedupe(_csv(get("LLM_CHAIN")) or _csv(DEFAULT_LLM_CHAIN)),
+        llm_chain=llm_chain,
+        brain_models=brain_models,
+        expert_models=_model_set(get("EXPERT_MODELS"), None)
+        if get("EXPERT_MODELS").strip()
+        else _experts_default(llm_chain, brain_models),
         gemini_api_key=get("GEMINI_API_KEY"),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
         # 4096 is Ollama's own server default and far smaller than a cycle's

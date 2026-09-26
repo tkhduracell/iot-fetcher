@@ -40,6 +40,10 @@ class Limits:
     rpm: int
     tpm: int
     rpd: int
+    # Which priorities may spend on this key; None means everyone. This is how
+    # a model is reserved for the brain (or kept away from it) -- see
+    # BRAIN_MODELS / EXPERT_MODELS in config.py.
+    loops: frozenset[str] | None = None
 
     @property
     def daily_tokens(self) -> int:
@@ -219,6 +223,9 @@ class Ledger:
             return Decision(False, bucket.blocked_until, reason)
 
         limits = bucket.limits
+        if limits.loops is not None and priority not in limits.loops:
+            return Decision(False, None, "reserved")
+
         if bucket.requests_day >= limits.rpd or bucket.tokens_day >= limits.daily_tokens:
             return Decision(False, _next_midnight(now), "rpd")
 
