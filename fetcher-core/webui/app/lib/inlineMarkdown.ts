@@ -4,13 +4,16 @@
  *  just inside each star, so `* bullet` and `2 * 3` stay literal. */
 export type InlineSpan = { kind: 'text' | 'bold' | 'italic' | 'code'; text: string };
 
-const PATTERN = /`([^`\n]+)`|\*\*([^*\n](?:[^\n]*?[^*\n])?)\*\*|(?<!\*)\*([^*\s](?:[^*\n]*?[^*\s])?)\*(?!\*)/g;
+const PATTERN = /`([^`\n]+)`|\*\*([^*\n](?:[^\n]*?[^*\n])?)\*\*|\*([^*\s](?:[^*\n]*?[^*\s])?)\*(?!\*)/g;
 
 export const parseInlineMarkdown = (src: string): InlineSpan[] => {
   const spans: InlineSpan[] = [];
   let last = 0;
   for (const m of src.matchAll(PATTERN)) {
     const at = m.index ?? 0;
+    // A star glued to another star is not italic. Checked here, not with a
+    // regex lookbehind: older iOS Safari can't parse one and the page dies.
+    if (m[3] !== undefined && src[at - 1] === '*') continue;
     if (at > last) spans.push({ kind: 'text', text: src.slice(last, at) });
     spans.push(
       m[1] !== undefined

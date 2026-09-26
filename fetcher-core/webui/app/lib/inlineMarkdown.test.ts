@@ -27,4 +27,8 @@ describe('parseInlineMarkdown', () => {
     ]);
     expect(p('* item\n2 * 3 * 4')).toEqual([{ kind: 'text', text: '* item\n2 * 3 * 4' }]);
   });
+  it('has no lookbehind (old iOS Safari)', async () => {
+    const src = (await import('node:fs')).readFileSync(__dirname + '/inlineMarkdown.ts', 'utf8');
+    expect(src).not.toMatch(/\(\?<[!=]/);
+  });
 });
