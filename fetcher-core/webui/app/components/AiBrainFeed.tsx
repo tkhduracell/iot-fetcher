@@ -21,6 +21,7 @@ import {
   ToolCallLine,
   useTypewriter,
 } from './AiBrainAgentTrace';
+import { parseInlineMarkdown } from '../lib/inlineMarkdown';
 
 /** `/ai-brain/feed` — every loop's rounds, merged into one live stream.
  *
@@ -106,13 +107,24 @@ const useEntrance = (id: string, fresh: boolean | undefined): boolean => {
 /** A round's thinking promoted to its main text, for rounds that thought but
  *  said nothing else -- otherwise the only words in the row would be the
  *  dimmed aside. */
-/** A round's words, always in full -- no clamp, no "mer". */
+/** A round's words, always in full -- no clamp, no "mer" -- with `**bold**`
+ *  and `code` rendered. */
 const FullText: React.FC<{ children: string }> = ({ children }) => (
   <pre
     className="text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0 w-full"
     style={{ fontFamily: MONO, color: WALL.ink }}
   >
-    {children}
+    {parseInlineMarkdown(children).map((s, i) =>
+      s.kind === 'bold' ? (
+        <strong key={i} style={{ fontWeight: 600 }}>{s.text}</strong>
+      ) : s.kind === 'code' ? (
+        <code key={i} className="rounded px-1" style={{ background: WALL.rule }}>
+          {s.text}
+        </code>
+      ) : (
+        <React.Fragment key={i}>{s.text}</React.Fragment>
+      ),
+    )}
   </pre>
 );
 
