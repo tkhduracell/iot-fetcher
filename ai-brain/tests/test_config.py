@@ -21,7 +21,7 @@ def test_defaults_from_empty_env():
         "ollama:llama3.2:3b",
     ]
     assert s.experts == ["energy", "health", "house-ops", "researcher", "infra"]
-    assert s.brain_heartbeat_s == 30 * 60
+    assert s.brain_heartbeat_s == 240 * 60
     assert s.expert_heartbeat_s == 120 * 60
     assert s.vm_url == "http://database-auth:8427"
     assert s.ha_url == "http://192.168.68.87:8123"

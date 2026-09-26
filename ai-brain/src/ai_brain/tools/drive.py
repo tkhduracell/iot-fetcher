@@ -21,7 +21,7 @@ from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 from ai_brain.tools.http import decode_json, request
 
-DRIVE_LOOPS = frozenset({"brain", "researcher"})
+DRIVE_LOOPS = frozenset({"researcher"})
 
 SOURCE = "google-drive"
 

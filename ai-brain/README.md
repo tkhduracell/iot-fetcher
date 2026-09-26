@@ -12,7 +12,7 @@ One **brain** loop plus up to five **expert** loops:
 
 | Loop | Persona | Wakes every |
 | --- | --- | --- |
-| `brain` | `seed/personas/brain.md` | `BRAIN_HEARTBEAT_MIN` (default 30 min) |
+| `brain` | `seed/personas/brain.md` | `BRAIN_HEARTBEAT_MIN` (default 240 min) |
 | `energy` | `seed/personas/energy.md` | `EXPERT_HEARTBEAT_MIN` (default 120 min) |
 | `health` | `seed/personas/health.md` | `EXPERT_HEARTBEAT_MIN` |
 | `house-ops` | `seed/personas/house-ops.md` | `EXPERT_HEARTBEAT_MIN` |
@@ -119,7 +119,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `OLLAMA_NUM_CTX` | `16384` | Context window (tokens) requested per call, via `options.num_ctx` on Ollama's native `/api/chat` endpoint, for the **`ollama:`** provider -- the rpi5's own in-compose `ollama` service (8GB RAM). Ollama's own server default is 4096 and it truncates an oversized prompt silently **from the front** -- dropping the persona/system turn a cycle needs most -- so this is set explicitly rather than left to that default. Observed cycle prompts run ~9.7k tokens, so 16384 clears that with headroom. The `ollama` service in `docker-compose.yml` also sets `OLLAMA_CONTEXT_LENGTH` to the same value as a server-side fallback for any client that does not set `options.num_ctx` -- keep the two in step. Note this option is native-API-only: the OpenAI-compatible `/v1/chat/completions` endpoint ignores per-request `options`, which is why this module talks to `/api/chat`. When a prompt is estimated to exceed the budget, the provider logs a warning and trims the oldest tool-result messages rather than letting the server truncate the persona/system turn off the front. |
 | `LAN_OLLAMA_NUM_CTX` | `32768` | Same as `OLLAMA_NUM_CTX`, but for the **`lan:`** provider's host -- a desktop machine discovered on the network, not the rpi5, so a separate and larger default rather than sharing `OLLAMA_NUM_CTX`. 32768 matches what this deployment's LAN Ollama servers are themselves configured for; raise or lower to match a different LAN host's actual context window. |
 | `EXPERTS` | `energy,health,house-ops,researcher,infra` | Which expert loops to start. Unset **or blank** means all five; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
-| `BRAIN_HEARTBEAT_MIN` | `30` | Minutes between brain cycles. |
+| `BRAIN_HEARTBEAT_MIN` | `240` | Minutes between brain cycles. The brain reflects on the experts rather than watching the house, so it wakes rarely. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
 | `INFLUX_TOKEN` | — | Bearer token for VM reads and for writing its own metrics. |

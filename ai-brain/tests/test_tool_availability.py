@@ -19,11 +19,11 @@ def test_web_search_hidden_without_brave_key_web_fetch_stays():
     reg = ToolRegistry()
     register_web_tools(reg)
 
-    without_key = _names(reg, "brain", load_settings({}))
+    without_key = _names(reg, "researcher", load_settings({}))
     assert "web_search" not in without_key
     assert "web_fetch" in without_key
 
-    with_key = _names(reg, "brain", load_settings({"BRAVE_API_KEY": "secret"}))
+    with_key = _names(reg, "researcher", load_settings({"BRAVE_API_KEY": "secret"}))
     assert "web_search" in with_key
     assert "web_fetch" in with_key
 
@@ -32,10 +32,10 @@ def test_drive_search_hidden_without_gdrive_url():
     reg = ToolRegistry()
     register_drive_tools(reg)
 
-    without_url = _names(reg, "brain", load_settings({"GDRIVE_RAG_URL": ""}))
+    without_url = _names(reg, "researcher", load_settings({"GDRIVE_RAG_URL": ""}))
     assert "drive_search" not in without_url
 
-    with_url = _names(reg, "brain", load_settings({}))  # config.py defaults it
+    with_url = _names(reg, "researcher", load_settings({}))  # config.py defaults it
     assert "drive_search" in with_url
 
 
