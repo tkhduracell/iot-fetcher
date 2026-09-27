@@ -20,16 +20,20 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # rather than the other way round: the flash models answer until the ledger
 # says their quota is gone, and only then does the chain reach for a machine in
 # the house -- ``lan:`` on whatever LAN box is awake and has it pulled (see
-# ai_brain.discovery), then the small model on the rpi5 itself.
+# ai_brain.discovery), nothing on the rpi5 itself.
 #
 # The lan: model is a tool-calling one on purpose. A cycle is nothing but tool
 # calls -- every round ends in end_cycle -- so a reasoning model that answers
 # in prose burns its rounds and writes nothing, however well it reasons.
 DEFAULT_LLM_CHAIN = (
     "gemini:gemini-3.8-flash,"
+    "lan:qwen3.8:27b-mlx,"
     "gemini:gemini-3.5-flash-lite,"
     "lan:qwen3-coder:30b"
 )
+# qwen3.8 ranks above flash-lite: it tool-calls reliably and works a cycle,
+# where flash-lite tends to spend rounds restating its persona. Flash-lite
+# stays as the cloud fallback for when the LAN boxes are asleep.
 # No ollama: (rpi5-local) entry. llama3.2:3b was tried there: ~70% of calls hit
 # the 600 s timeout on the Pi's CPU, prompts overran its context, and the rest
 # often wrote tool calls as JSON text. A skipped cycle beats that.
