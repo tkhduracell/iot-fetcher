@@ -16,6 +16,7 @@ def test_defaults_from_empty_env():
     assert s.seed_root == DEFAULT_SEED_ROOT
     assert s.llm_chain == [
         "gemini:gemini-3.8-flash",
+        "lan:qwen3.8:27b-mlx",
         "gemini:gemini-3.5-flash-lite",
         "lan:qwen3-coder:30b",
     ]
