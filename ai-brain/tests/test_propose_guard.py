@@ -14,7 +14,7 @@ from ai_brain.tools.propose import junk_proposal_reason
 # loop.py's BRAIN_ANGLES/CYCLE_INSTRUCTIONS rather than imported verbatim, so
 # the test does not silently stop testing anything if the prompt wording
 # changes -- it still has to overlap enough to trip the guard.
-_ANGLE_ECHO = "Earn your keep. Find something that would genuinely help Filip and, if it touches the house, propose it."
+_ANGLE_ECHO = "Hunt contradictions. Compare what two experts believe about the same device or question, and find out which is right."
 _THREAD_ECHO = "Pick up an open thread. Read your recent journal, find something you left unexplained, and take it further."
 
 
@@ -70,8 +70,8 @@ def test_rejects_a_paraphrased_angle():
     # Same content, reworded -- the token-overlap check should still catch a
     # close paraphrase, not just an exact quote.
     paraphrase = (
-        "Find something that would genuinely help Filip, and propose it if it "
-        "touches the house"
+        "Compare what two experts believe about the same device and find out "
+        "which one is right"
     )
     reason = junk_proposal_reason("ha_todo_add", {"item": paraphrase}, "helping")
     assert reason is not None

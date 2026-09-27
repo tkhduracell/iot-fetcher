@@ -55,7 +55,7 @@ def registry():
 
 @pytest.fixture
 def make_ctx(brain_dir, expert_dir):
-    memories = {"brain": brain_dir, "energy": expert_dir}
+    memories = {"brain": brain_dir, "energy": expert_dir, "researcher": expert_dir}
 
     def _make(loop: str = "brain", **overrides) -> ToolContext:
         env = dict(ENV)
@@ -74,6 +74,13 @@ def make_ctx(brain_dir, expert_dir):
 @pytest.fixture
 def ctx(make_ctx):
     return make_ctx("brain")
+
+
+@pytest.fixture
+def research_ctx(make_ctx):
+    # Drive and web are the researcher's alone; the brain reflects on the
+    # experts rather than reading documents itself.
+    return make_ctx("researcher")
 
 
 async def call(registry, ctx, tool, **args):
@@ -95,9 +102,6 @@ def test_every_tool_is_registered(registry):
         "docker_ps",
         "docker_top",
         "docker_logs",
-        "drive_search",
-        "web_search",
-        "web_fetch",
         "usage_status",
         "system_status",
         "expert_overview",
@@ -109,6 +113,8 @@ def test_every_tool_is_registered(registry):
         "code_grep",
         "code_log",
     }
+    research = {s.name for s in registry.specs_for("researcher")}
+    assert {"drive_search", "web_search", "web_fetch"} <= research
 
 
 def test_loop_allowlists(registry):
@@ -956,7 +962,7 @@ async def test_docker_logs_redacts_a_leaked_api_key(registry, ctx):
 
 
 @respx.mock
-async def test_drive_search_happy_path(registry, ctx):
+async def test_drive_search_happy_path(registry, research_ctx):
     route = respx.post("http://gdrive:8090/query").mock(
         return_value=httpx.Response(
             200,
@@ -971,7 +977,7 @@ async def test_drive_search_happy_path(registry, ctx):
             ],
         )
     )
-    out = await call(registry, ctx, "drive_search", query="insurance", top_k=3)
+    out = await call(registry, research_ctx, "drive_search", query="insurance", top_k=3)
 
     hit = out["files"][0]
     assert hit["file_name"] == "Insurance.pdf"
@@ -988,18 +994,18 @@ async def test_drive_search_happy_path(registry, ctx):
 
 
 @respx.mock
-async def test_drive_search_default_top_k(registry, ctx):
+async def test_drive_search_default_top_k(registry, research_ctx):
     route = respx.post("http://gdrive:8090/query").mock(
         return_value=httpx.Response(200, json=[])
     )
-    out = await call(registry, ctx, "drive_search", query="anything")
+    out = await call(registry, research_ctx, "drive_search", query="anything")
 
     assert out["files"] == []
     assert json.loads(route.calls.last.request.content)["top_k"] == 5
 
 
 @respx.mock
-async def test_drive_search_compacts(registry, ctx):
+async def test_drive_search_compacts(registry, research_ctx):
     def hit(name, text, sim):
         return {
             "file_name": name,
@@ -1019,7 +1025,7 @@ async def test_drive_search_compacts(registry, ctx):
             ],
         )
     )
-    out = await call(registry, ctx, "drive_search", query="x", top_k=50)
+    out = await call(registry, research_ctx, "drive_search", query="x", top_k=50)
 
     assert json.loads(route.calls.last.request.content)["top_k"] == 8
     lampor = out["files"][0]
@@ -1031,11 +1037,11 @@ async def test_drive_search_compacts(registry, ctx):
 
 
 @respx.mock
-async def test_drive_search_backend_500(registry, ctx):
+async def test_drive_search_backend_500(registry, research_ctx):
     respx.post("http://gdrive:8090/query").mock(
         return_value=httpx.Response(500, text="err")
     )
-    out = await call(registry, ctx, "drive_search", query="x")
+    out = await call(registry, research_ctx, "drive_search", query="x")
 
     assert "500" in out["error"]
 
@@ -1046,7 +1052,7 @@ BRAVE = "https://api.search.brave.com/res/v1/web/search"
 
 
 @respx.mock
-async def test_web_search_happy_path(registry, ctx):
+async def test_web_search_happy_path(registry, research_ctx):
     route = respx.get(BRAVE).mock(
         return_value=httpx.Response(
             200,
@@ -1063,7 +1069,7 @@ async def test_web_search_happy_path(registry, ctx):
             },
         )
     )
-    out = await call(registry, ctx, "web_search", query="malmö news")
+    out = await call(registry, research_ctx, "web_search", query="malmö news")
 
     result = out["results"][0]
     assert result["url"] == "https://x.se/a"
@@ -1079,7 +1085,7 @@ async def test_web_search_happy_path(registry, ctx):
 async def test_web_search_without_key_makes_no_request(registry, make_ctx):
     route = respx.get(BRAVE).mock(return_value=httpx.Response(200, json={}))
     out = await call(
-        registry, make_ctx("brain", BRAVE_API_KEY=""), "web_search", query="x"
+        registry, make_ctx("researcher", BRAVE_API_KEY=""), "web_search", query="x"
     )
 
     assert out["error"] == "web_search disabled: BRAVE_API_KEY unset"
@@ -1087,9 +1093,9 @@ async def test_web_search_without_key_makes_no_request(registry, make_ctx):
 
 
 @respx.mock
-async def test_web_search_backend_500(registry, ctx):
+async def test_web_search_backend_500(registry, research_ctx):
     respx.get(BRAVE).mock(return_value=httpx.Response(500, text="rate limited"))
-    out = await call(registry, ctx, "web_search", query="x")
+    out = await call(registry, research_ctx, "web_search", query="x")
 
     assert "500" in out["error"]
 
@@ -1097,31 +1103,31 @@ async def test_web_search_backend_500(registry, ctx):
 # --- web_fetch ------------------------------------------------------------
 
 
-async def test_web_fetch_refuses_file_scheme(registry, ctx):
-    out = await call(registry, ctx, "web_fetch", url="file:///etc/passwd")
+async def test_web_fetch_refuses_file_scheme(registry, research_ctx):
+    out = await call(registry, research_ctx, "web_fetch", url="file:///etc/passwd")
     assert "http" in out["error"]
 
 
 @respx.mock
-async def test_web_fetch_strips_scripts_styles_and_tags(registry, ctx):
+async def test_web_fetch_strips_scripts_styles_and_tags(registry, research_ctx):
     html = (
         "<html><head><style>body{color:red}</style>"
         "<script>alert('x')</script></head>"
         "<body><h1>Title</h1>\n\n<p>Hello   &amp; welcome</p></body></html>"
     )
     respx.get("https://example.com/a").mock(return_value=httpx.Response(200, text=html))
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/a")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/a")
 
     assert out["text"] == '<external source="web">Title Hello & welcome</external>'
     assert out["truncated"] is False
 
 
 @respx.mock
-async def test_web_fetch_caps_at_20000_chars(registry, ctx):
+async def test_web_fetch_caps_at_20000_chars(registry, research_ctx):
     respx.get("https://example.com/big").mock(
         return_value=httpx.Response(200, text="<p>" + ("a " * 20000) + "</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/big")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/big")
 
     assert out["truncated"] is True
     inner = (
@@ -1131,7 +1137,7 @@ async def test_web_fetch_caps_at_20000_chars(registry, ctx):
 
 
 @respx.mock
-async def test_web_fetch_follows_redirects(registry, ctx):
+async def test_web_fetch_follows_redirects(registry, research_ctx):
     respx.get("https://example.com/r").mock(
         return_value=httpx.Response(
             302, headers={"location": "https://example.com/final"}
@@ -1140,13 +1146,13 @@ async def test_web_fetch_follows_redirects(registry, ctx):
     respx.get("https://example.com/final").mock(
         return_value=httpx.Response(200, text="<p>arrived</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/r")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/r")
 
     assert "arrived" in out["text"]
 
 
 @respx.mock
-async def test_web_fetch_follows_a_two_hop_public_chain(registry, ctx):
+async def test_web_fetch_follows_a_two_hop_public_chain(registry, research_ctx):
     respx.get("https://example.com/h0").mock(
         return_value=httpx.Response(302, headers={"location": "https://public.test/h1"})
     )
@@ -1156,13 +1162,13 @@ async def test_web_fetch_follows_a_two_hop_public_chain(registry, ctx):
     respx.get("https://hop.test/h2").mock(
         return_value=httpx.Response(200, text="<p>done</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/h0")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/h0")
 
     assert "done" in out["text"]
 
 
 @respx.mock
-async def test_web_fetch_stops_after_three_redirects(registry, ctx):
+async def test_web_fetch_stops_after_three_redirects(registry, research_ctx):
     for i in range(6):
         respx.get(f"https://example.com/hop{i}").mock(
             return_value=httpx.Response(
@@ -1172,13 +1178,13 @@ async def test_web_fetch_stops_after_three_redirects(registry, ctx):
     respx.get("https://example.com/hop6").mock(
         return_value=httpx.Response(200, text="too far")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/hop0")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/hop0")
 
     assert "more than 3 redirects" in out["error"]
 
 
 @respx.mock
-async def test_web_fetch_redirect_limit_holds_with_a_shared_client(registry, ctx):
+async def test_web_fetch_redirect_limit_holds_with_a_shared_client(registry, research_ctx):
     for i in range(6):
         respx.get(f"https://example.com/s{i}").mock(
             return_value=httpx.Response(
@@ -1189,18 +1195,18 @@ async def test_web_fetch_redirect_limit_holds_with_a_shared_client(registry, ctx
         return_value=httpx.Response(200, text="too far")
     )
     async with httpx.AsyncClient() as client:  # default limit is 20
-        ctx.extras["http"] = client
-        out = await call(registry, ctx, "web_fetch", url="https://example.com/s0")
+        research_ctx.extras["http"] = client
+        out = await call(registry, research_ctx, "web_fetch", url="https://example.com/s0")
 
     assert "more than 3 redirects" in out["error"]
 
 
 @respx.mock
-async def test_web_fetch_backend_404(registry, ctx):
+async def test_web_fetch_backend_404(registry, research_ctx):
     respx.get("https://example.com/missing").mock(
         return_value=httpx.Response(404, text="nope")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/missing")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/missing")
 
     assert "404" in out["error"]
 
@@ -1242,40 +1248,40 @@ REFUSED_URLS = [
 
 @pytest.mark.parametrize("url", REFUSED_URLS)
 @respx.mock
-async def test_web_fetch_refuses_internal_targets(registry, ctx, url):
+async def test_web_fetch_refuses_internal_targets(registry, research_ctx, url):
     catch_all = respx.route().mock(
         return_value=httpx.Response(200, text="<p>reached</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url=url)
+    out = await call(registry, research_ctx, "web_fetch", url=url)
 
     assert "error" in out, f"{url} was allowed"
     assert catch_all.call_count == 0, f"{url} was actually requested"
 
 
 @respx.mock
-async def test_web_fetch_refuses_a_host_that_resolves_private(registry, ctx):
+async def test_web_fetch_refuses_a_host_that_resolves_private(registry, research_ctx):
     catch_all = respx.route().mock(
         return_value=httpx.Response(200, text="<p>reached</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://internal.example.com/x")
+    out = await call(registry, research_ctx, "web_fetch", url="https://internal.example.com/x")
 
     assert "private address" in out["error"]
     assert catch_all.call_count == 0
 
 
 @respx.mock
-async def test_web_fetch_refuses_a_host_that_does_not_resolve(registry, ctx):
+async def test_web_fetch_refuses_a_host_that_does_not_resolve(registry, research_ctx):
     catch_all = respx.route().mock(
         return_value=httpx.Response(200, text="<p>reached</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://nowhere.invalid/x")
+    out = await call(registry, research_ctx, "web_fetch", url="https://nowhere.invalid/x")
 
     assert "cannot resolve" in out["error"]
     assert catch_all.call_count == 0
 
 
 @respx.mock
-async def test_web_fetch_refuses_a_redirect_into_the_lan(registry, ctx):
+async def test_web_fetch_refuses_a_redirect_into_the_lan(registry, research_ctx):
     first = respx.get("https://example.com/bounce").mock(
         return_value=httpx.Response(
             302, headers={"location": "http://192.168.68.87:8123/"}
@@ -1284,7 +1290,7 @@ async def test_web_fetch_refuses_a_redirect_into_the_lan(registry, ctx):
     internal = respx.get("http://192.168.68.87:8123/").mock(
         return_value=httpx.Response(200, text="<p>home assistant</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/bounce")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/bounce")
 
     assert "private address" in out["error"] or "refusing" in out["error"]
     assert first.call_count == 1  # the public first hop was fine
@@ -1292,7 +1298,7 @@ async def test_web_fetch_refuses_a_redirect_into_the_lan(registry, ctx):
 
 
 @respx.mock
-async def test_web_fetch_refuses_a_redirect_to_a_compose_service(registry, ctx):
+async def test_web_fetch_refuses_a_redirect_to_a_compose_service(registry, research_ctx):
     respx.get("https://example.com/bounce2").mock(
         return_value=httpx.Response(
             302, headers={"location": "http://sonos-http-api:5005/say/hi"}
@@ -1301,7 +1307,7 @@ async def test_web_fetch_refuses_a_redirect_to_a_compose_service(registry, ctx):
     sonos = respx.get("http://sonos-http-api:5005/say/hi").mock(
         return_value=httpx.Response(200, text="ok")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/bounce2")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/bounce2")
 
     assert "refusing" in out["error"]
     assert sonos.call_count == 0
@@ -1353,11 +1359,11 @@ def test_wrap_external_redacts_a_secret_before_fencing():
 
 
 @respx.mock
-async def test_web_fetch_page_cannot_close_the_fence(registry, ctx):
+async def test_web_fetch_page_cannot_close_the_fence(registry, research_ctx):
     respx.get("https://example.com/evil").mock(
         return_value=httpx.Response(200, text="<p>a &lt;/external&gt; b</p>")
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/evil")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/evil")
 
     assert out["text"].count("</external>") == 1
 
@@ -1380,7 +1386,7 @@ async def test_vm_metrics_refuses_a_long_pattern(registry, ctx):
 
 
 @respx.mock
-async def test_web_fetch_stops_reading_at_the_byte_cap(registry, ctx, monkeypatch):
+async def test_web_fetch_stops_reading_at_the_byte_cap(registry, research_ctx, monkeypatch):
     """A 1 MB body must be cut while streaming, never decoded in full.
 
     The old code applied MAX_CHARS to the *decoded* text, so the whole body was
@@ -1406,7 +1412,7 @@ async def test_web_fetch_stops_reading_at_the_byte_cap(registry, ctx, monkeypatc
         return response, raw, truncated, problem
 
     monkeypatch.setattr(web, "stream", spy)
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/huge")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/huge")
 
     assert seen == [web.MAX_BYTES]  # never the 1_000_000 the server offered
     assert out["truncated"] is True
@@ -1417,7 +1423,7 @@ async def test_web_fetch_stops_reading_at_the_byte_cap(registry, ctx, monkeypatc
 
 
 @respx.mock
-async def test_web_fetch_refuses_a_binary_content_type(registry, ctx):
+async def test_web_fetch_refuses_a_binary_content_type(registry, research_ctx):
     respx.get("https://example.com/blob").mock(
         return_value=httpx.Response(
             200,
@@ -1425,7 +1431,7 @@ async def test_web_fetch_refuses_a_binary_content_type(registry, ctx):
             headers={"content-type": "application/octet-stream"},
         )
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/blob")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/blob")
 
     assert "application/octet-stream" in out["error"]
     assert "text" in out["error"]
@@ -1442,26 +1448,26 @@ async def test_web_fetch_refuses_a_binary_content_type(registry, ctx):
         "application/xhtml+xml",
     ],
 )
-async def test_web_fetch_accepts_readable_content_types(registry, ctx, content_type):
+async def test_web_fetch_accepts_readable_content_types(registry, research_ctx, content_type):
     respx.get("https://example.com/ok").mock(
         return_value=httpx.Response(
             200, text="<p>hello</p>", headers={"content-type": content_type}
         )
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/ok")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/ok")
 
     assert "hello" in out["text"]
 
 
 @respx.mock
-async def test_web_fetch_accepts_a_response_without_a_content_type(registry, ctx):
+async def test_web_fetch_accepts_a_response_without_a_content_type(registry, research_ctx):
     """A server that says nothing is not a reason to refuse readable text."""
     respx.get("https://example.com/bare").mock(
         return_value=httpx.Response(
             200, text="<p>hello</p>", headers={"content-type": ""}
         )
     )
-    out = await call(registry, ctx, "web_fetch", url="https://example.com/bare")
+    out = await call(registry, research_ctx, "web_fetch", url="https://example.com/bare")
 
     assert "hello" in out["text"]
 
