@@ -28,9 +28,11 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 DEFAULT_LLM_CHAIN = (
     "gemini:gemini-3.8-flash,"
     "gemini:gemini-3.5-flash-lite,"
-    "lan:qwen3-coder:30b,"
-    "ollama:llama3.2:3b"
+    "lan:qwen3-coder:30b"
 )
+# No ollama: (rpi5-local) entry. llama3.2:3b was tried there: ~70% of calls hit
+# the 600 s timeout on the Pi's CPU, prompts overran its context, and the rest
+# often wrote tool calls as JSON text. A skipped cycle beats that.
 
 # Every expert the image ships a persona for. Brain-only was the rollout
 # default while the loops were unproven; with them proven the useful default is
