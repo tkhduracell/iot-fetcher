@@ -114,7 +114,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | --- | --- | --- |
 | `MEMORY_ROOT` | `/memory` | Where agent memory lives. The volume mount point. |
 | `SEED_ROOT` | `/app/seed` (set in the image) | Starting constitution and personas. |
-| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b,ollama:llama3.2:3b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
+| `LLM_CHAIN` | `gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b` | `provider:model` entries tried in order until one answers. `lan:` is found by sweeping the network; `ollama:` is `OLLAMA_URL`. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
 | `OLLAMA_NUM_CTX` | `16384` | Context window (tokens) requested per call, via `options.num_ctx` on Ollama's native `/api/chat` endpoint, for the **`ollama:`** provider -- the rpi5's own in-compose `ollama` service (8GB RAM). Ollama's own server default is 4096 and it truncates an oversized prompt silently **from the front** -- dropping the persona/system turn a cycle needs most -- so this is set explicitly rather than left to that default. Observed cycle prompts run ~9.7k tokens, so 16384 clears that with headroom. The `ollama` service in `docker-compose.yml` also sets `OLLAMA_CONTEXT_LENGTH` to the same value as a server-side fallback for any client that does not set `options.num_ctx` -- keep the two in step. Note this option is native-API-only: the OpenAI-compatible `/v1/chat/completions` endpoint ignores per-request `options`, which is why this module talks to `/api/chat`. When a prompt is estimated to exceed the budget, the provider logs a warning and trims the oldest tool-result messages rather than letting the server truncate the persona/system turn off the front. |
 | `LAN_OLLAMA_NUM_CTX` | `32768` | Same as `OLLAMA_NUM_CTX`, but for the **`lan:`** provider's host -- a desktop machine discovered on the network, not the rpi5, so a separate and larger default rather than sharing `OLLAMA_NUM_CTX`. 32768 matches what this deployment's LAN Ollama servers are themselves configured for; raise or lower to match a different LAN host's actual context window. |
@@ -463,12 +463,12 @@ without guessing from logs and metrics alone.
 The chain spends the free tier first and falls back to hardware in the house:
 
 ```
-gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite → lan:qwen3-coder:30b → ollama:llama3.2:3b
+gemini:gemini-3.8-flash → gemini:gemini-3.5-flash-lite → lan:qwen3-coder:30b
 ```
 
 Each Gemini key answers until the ledger says its quota is gone (or three 429s
 park it), and the local entries are what the cycle uses from then until the day
-rolls over. `ollama:` is the rpi5's own service, the last resort. **`lan:` is a model on whatever machine in
+rolls over. `ollama:` (the rpi5's own service) is supported but not in the default chain: a 3B model on the Pi's CPU mostly timed out and could not tool-call reliably. **`lan:` is a model on whatever machine in
 the house is awake and has it pulled** — the desktop in the next room can run
 something worth asking, but it is not a fixed address, so the provider goes and
 finds it.

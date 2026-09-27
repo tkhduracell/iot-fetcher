@@ -18,7 +18,6 @@ def test_defaults_from_empty_env():
         "gemini:gemini-3.8-flash",
         "gemini:gemini-3.5-flash-lite",
         "lan:qwen3-coder:30b",
-        "ollama:llama3.2:3b",
     ]
     assert s.experts == ["energy", "health", "house-ops", "researcher", "infra"]
     assert s.brain_heartbeat_s == 30 * 60
