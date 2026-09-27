@@ -313,8 +313,8 @@ def test_gemini_3_8_flash_gets_its_measured_rpd_not_the_configured_one():
     limits = limits_from_settings(settings)
     # rpm/tpm are untouched -- only the daily cap is overridden, and only for
     # the one key it was measured against.
-    assert limits["gemini:gemini-3.8-flash"] == Limits(rpm=8, tpm=200000, rpd=11)
-    assert limits["gemini:gemini-3.5-flash-lite"] == Limits(rpm=8, tpm=200000, rpd=200)
+    assert limits["gemini:gemini-3.8-flash"] == Limits(rpm=8, tpm=200000, rpd=11, loops=frozenset({"brain"}))
+    assert limits["gemini:gemini-3.5-flash-lite"] == Limits(rpm=8, tpm=200000, rpd=200, loops=frozenset({"expert"}))
 
 
 async def test_success_clears_a_previous_429_streak(tmp_path):
@@ -602,3 +602,47 @@ async def test_a_key_that_recovers_can_warn_again(tmp_path, caplog):
 
     warned = [r for r in caplog.records if r.levelname == "WARNING" and "skipping a" in r.message]
     assert len(warned) == 2
+
+
+CHAIN_38 = "gemini:gemini-3.8-flash,gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b"
+
+
+def test_default_reserves_gemini_3_8_for_the_brain_and_the_rest_for_experts():
+    limits = limits_from_settings(load_settings({"LLM_CHAIN": CHAIN_38}))
+    assert limits["gemini:gemini-3.8-flash"].loops == frozenset({"brain"})
+    assert limits["gemini:gemini-3.5-flash-lite"].loops == frozenset({"expert"})
+    assert limits["lan:qwen3-coder:30b"].loops == frozenset({"expert"})
+
+
+def test_all_lifts_the_split():
+    settings = load_settings({"LLM_CHAIN": CHAIN_38, "BRAIN_MODELS": "all"})
+    assert all(lim.loops is None for lim in limits_from_settings(settings).values())
+
+
+def test_explicit_expert_models_can_share_a_key_with_the_brain():
+    settings = load_settings(
+        {
+            "LLM_CHAIN": CHAIN_38,
+            "BRAIN_MODELS": "gemini:gemini-3.8-flash,lan:qwen3-coder:30b",
+            "EXPERT_MODELS": "gemini:gemini-3.5-flash-lite,lan:qwen3-coder:30b",
+        }
+    )
+    limits = limits_from_settings(settings)
+    assert limits["lan:qwen3-coder:30b"].loops is None
+    assert limits["gemini:gemini-3.8-flash"].loops == frozenset({"brain"})
+
+
+def test_custom_chain_without_the_default_brain_model_keeps_sharing():
+    settings = load_settings({"LLM_CHAIN": "gemini:flash,fake:x"})
+    assert settings.brain_models is None and settings.expert_models is None
+
+
+def test_ledger_refuses_a_reserved_key_to_the_other_loop(tmp_path):
+    ledger = Ledger(
+        {"k": Limits(rpm=5, tpm=100_000, rpd=20, loops=frozenset({"brain"}))},
+        tmp_path / "l.json",
+        clock=lambda: 1_757_000_000.0,
+    )
+    assert ledger.can_spend("k", "brain").allowed
+    refused = ledger.can_spend("k", "expert")
+    assert not refused.allowed and refused.reason == "reserved"

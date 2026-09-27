@@ -27,7 +27,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from ai_brain.ledger import Ledger, Limits, Priority
@@ -51,10 +51,11 @@ DEFAULT_CALL_TIMEOUT_S = 60
 TIMEOUT_CHARGE_TOKENS = 4000
 
 # Skip reasons that mean the chain is working, not failing: the expert floor
-# holding cloud quota back for the brain, and the per-minute windows. An
+# holding cloud quota back for the brain, a key reserved for the other kind of
+# loop, and the per-minute windows. An
 # expert falling through to the LAN on every round is the design, so these
 # log at debug. See ``ProviderChain._log_skip``.
-_BY_DESIGN_SKIPS = frozenset({"priority", "rpm", "tpm"})
+_BY_DESIGN_SKIPS = frozenset({"priority", "reserved", "rpm", "tpm"})
 
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
@@ -187,18 +188,29 @@ KEY_RPD_OVERRIDES: dict[str, int] = {
 }
 
 
+def _loops_for(key: str, settings: Settings) -> frozenset[str] | None:
+    """Who may spend on ``key``: brain, experts, both (None) -- or nobody,
+    which the supervisor rejects at startup."""
+    brain = settings.brain_models is None or key in settings.brain_models
+    expert = settings.expert_models is None or key in settings.expert_models
+    if brain and expert:
+        return None
+    return frozenset(p for p, ok in (("brain", brain), ("expert", expert)) if ok)
+
+
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
     """One budget per chain key: the env-configured tier, except for local
-    hosts (unmetered) and any key in KEY_RPD_OVERRIDES (a lower, measured rpd)."""
-    limits = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
+    hosts (unmetered) and any key in KEY_RPD_OVERRIDES (a lower, measured rpd),
+    each restricted to the loops BRAIN_MODELS / EXPERT_MODELS allow."""
     out: dict[str, Limits] = {}
     for key in settings.llm_chain:
         if key.startswith("lan:"):
-            out[key] = UNMETERED
+            base = UNMETERED
         elif key in KEY_RPD_OVERRIDES:
-            out[key] = Limits(rpm=limits.rpm, tpm=limits.tpm, rpd=KEY_RPD_OVERRIDES[key])
+            base = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=KEY_RPD_OVERRIDES[key])
         else:
-            out[key] = limits
+            base = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
+        out[key] = replace(base, loops=_loops_for(key, settings))
     return out
 
 

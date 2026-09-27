@@ -116,6 +116,26 @@ def test_build_exits_when_a_gemini_entry_has_no_key(tmp_path, caplog):
     assert "GEMINI_API_KEY" in caplog.text
 
 
+def test_build_exits_when_brain_models_names_a_key_not_in_the_chain(tmp_path, caplog):
+    settings = load_settings(
+        env(tmp_path, LLM_CHAIN="gemini:flash", GEMINI_API_KEY="k", BRAIN_MODELS="gemini:typo")
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
+        build(settings, chain_factory=fake_chain)
+    assert excinfo.value.code == 2
+    assert "BRAIN_MODELS" in caplog.text
+
+
+def test_build_exits_when_the_split_leaves_experts_no_model(tmp_path, caplog):
+    settings = load_settings(
+        env(tmp_path, LLM_CHAIN="gemini:flash", GEMINI_API_KEY="k", BRAIN_MODELS="gemini:flash")
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as excinfo:
+        build(settings, chain_factory=fake_chain)
+    assert excinfo.value.code == 2
+    assert "EXPERT_MODELS" in caplog.text
+
+
 def test_build_allows_a_gemini_entry_with_a_key(tmp_path):
     settings = load_settings(env(tmp_path, LLM_CHAIN="gemini:flash", GEMINI_API_KEY="k"))
     system = build(settings, chain_factory=fake_chain)
