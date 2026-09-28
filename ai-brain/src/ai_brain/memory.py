@@ -767,7 +767,10 @@ class MemoryDir:
         # faster than it closes them would otherwise crowd out the journal.
         if open_gaps:
             luckor = "\n".join(
-                f"- {g.question}" + (f" ({g.why})" if g.why else "") for g in open_gaps
+                # The id leads: close_gap takes it, and a loop shown only the
+                # question cannot close anything.
+                f"- [{g.id}] {g.question}" + (f" ({g.why})" if g.why else "")
+                for g in open_gaps
             )
             parts.append(f"## Öppna luckor\n{luckor}")
         return "\n\n".join(parts)

@@ -17,6 +17,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math"
 	"log/slog"
 	"time"
 
@@ -244,6 +245,12 @@ func (d *Deps) poll(ctx context.Context) {
 		return
 	}
 	points := readingsToPoints(d.Cfg.SigenergyHost, r, start)
+	if raw := rawHouseLoadKW(r); raw < -houseLoadNegativeWarnKW {
+		d.Log.WarnContext(ctx, "house load computed negative; a meter disagrees",
+			"load_kw", raw, "pv_kw", r.PVTotalKW,
+			"from_battery_kw", r.FromBatteryKW, "to_battery_kw", r.ToBatteryKW,
+			"from_grid_kw", r.GridFromKW, "to_grid_kw", r.GridToKW)
+	}
 	if err := d.Metrics.Write(ctx, points); err != nil {
 		d.Log.WarnContext(ctx, "metrics write (poll) failed", "err", err)
 	}
@@ -295,8 +302,10 @@ func readingsToPoints(host string, r *modbus.Readings, ts time.Time) []*metrics.
 			Field("max_charge_limit_w", r.ESSMaxChargeLimitW).
 			At(ts))
 	}
+	points = append(points, houseLoadPoint(r, ts))
 	for i, kw := range r.PVStringKW {
-		if kw <= 0 {
+		// An unconnected string reads a constant 0.000001 kW, not 0.
+		if kw < pvStringFloorKW {
 			continue
 		}
 		points = append(points, metrics.NewPoint("sigenergy_pv_power").
@@ -306,6 +315,36 @@ func readingsToPoints(host string, r *modbus.Readings, ts time.Time) []*metrics.
 			At(ts))
 	}
 	return points
+}
+
+// pvStringFloorKW is below any real string output; readings under it are
+// an unconnected string's noise and are not written.
+const pvStringFloorKW = 0.001
+
+// houseLoadNegativeWarnKW is how far below zero the computed load may go
+// before it is a metering disagreement rather than rounding.
+const houseLoadNegativeWarnKW = 0.2
+
+// rawHouseLoadKW is what the house itself consumes: every source in, minus
+// every sink out, all from the same Modbus read. Nothing measures it
+// directly -- Tibber's meter sees only the grid side.
+func rawHouseLoadKW(r *modbus.Readings) float64 {
+	return r.PVTotalKW + r.FromBatteryKW - r.ToBatteryKW + r.GridFromKW - r.GridToKW
+}
+
+// houseLoadPoint is the whole energy balance as one point under names that
+// say what each flow is, so a reader cannot mistake grid import for house
+// load. Load is clamped at 0 and rounded to 10 W.
+func houseLoadPoint(r *modbus.Readings, ts time.Time) *metrics.Point {
+	load := math.Round(math.Max(0, rawHouseLoadKW(r))*100) / 100
+	return metrics.NewPoint("house_power").
+		Field("solar_kw", r.PVTotalKW).
+		Field("load_kw", load).
+		Field("battery_charge_kw", r.ToBatteryKW).
+		Field("battery_discharge_kw", r.FromBatteryKW).
+		Field("grid_import_kw", r.GridFromKW).
+		Field("grid_export_kw", r.GridToKW).
+		At(ts)
 }
 
 func boolInt(b bool) int {

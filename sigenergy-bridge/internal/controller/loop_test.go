@@ -341,3 +341,39 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition never became true")
 }
+
+func TestHouseLoadPoint(t *testing.T) {
+	ts := time.Unix(1700000000, 0)
+	cases := []struct {
+		name string
+		r    modbus.Readings
+		want float64
+	}{
+		// 09-27 17:00 UTC: battery selling to the grid after sunset.
+		{"battery export", modbus.Readings{FromBatteryKW: 5.0, GridToKW: 3.746}, 1.25},
+		// 09-26 22:13 UTC: grid charging the battery at 7 kW.
+		{"grid charge", modbus.Readings{GridFromKW: 8.982, ToBatteryKW: 6.993}, 1.99},
+		{"solar into battery", modbus.Readings{PVTotalKW: 2.315, GridFromKW: 5.654, ToBatteryKW: 6.993}, 0.98},
+		{"rounding below zero clamps", modbus.Readings{PVTotalKW: 1.0, ToBatteryKW: 1.02}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := houseLoadPoint(&c.r, ts)
+			if p.Measurement != "house_power" {
+				t.Fatalf("measurement = %q", p.Measurement)
+			}
+			if got := p.Fields["load_kw"]; got != c.want {
+				t.Fatalf("load_kw = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestReadingsToPoints_SkipsDeadString(t *testing.T) {
+	r := &modbus.Readings{PVTotalKW: 2, PVStringKW: [4]float64{2, 0, 0, 0.000001}}
+	for _, p := range readingsToPoints("h", r, time.Unix(0, 0)) {
+		if p.Tags["string"] == "string_4" {
+			t.Fatal("string_4 noise was written")
+		}
+	}
+}
