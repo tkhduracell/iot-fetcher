@@ -42,9 +42,8 @@ LAN_REQUEST_TIMEOUT_S = 900.0
 # The lan: host is a desktop machine discovered on the network, not the rpi5
 # running the rest of this stack -- its own hardware, not the constrained
 # in-compose ollama service, so its own num_ctx default is larger than
-# ai_brain.llm.ollama.DEFAULT_NUM_CTX. 32768 matches what this deployment's
-# LAN Ollama servers are themselves configured for. Overridable via
-# LAN_OLLAMA_NUM_CTX -- see ai_brain.config.
+# ai_brain.llm.ollama.DEFAULT_NUM_CTX. The fallback for a lan: entry that
+# NUM_CTX_BY_MODEL does not match -- see ai_brain.config.
 LAN_DEFAULT_NUM_CTX = 32768
 
 

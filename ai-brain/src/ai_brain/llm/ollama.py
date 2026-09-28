@@ -55,8 +55,8 @@ CALL_TIMEOUT_S = 600.0
 # Raspberry Pi 5 (8GB), at the cost of more RAM per loaded model. This is the
 # base default for OllamaProvider itself; the lan: provider (a desktop
 # machine on the LAN, not the rpi5) is configured with its own, larger
-# default -- see LAN_OLLAMA_NUM_CTX in ai_brain.config and
-# ai_brain.llm.lan.LanOllamaProvider. See ai-brain/README.md's Configuration
+# default -- see ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX. Either is overridden
+# per model by NUM_CTX_BY_MODEL in ai_brain.config. See ai-brain/README.md's Configuration
 # section for the tradeoff.
 DEFAULT_NUM_CTX = 16384
 
