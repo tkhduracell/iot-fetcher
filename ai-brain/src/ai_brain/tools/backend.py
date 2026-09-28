@@ -10,6 +10,7 @@ token budget looks like (usage). All of them read; none of them act.
 from __future__ import annotations
 
 from ai_brain.tools import ToolRegistry
+from ai_brain.tools.airbnb_tools import register_airbnb_tools
 from ai_brain.tools.docker_tools import register_docker_tools
 from ai_brain.tools.drive import register_drive_tools
 from ai_brain.tools.ha import register_ha_tools
@@ -24,6 +25,7 @@ def register_backend_tools(registry: ToolRegistry) -> None:
     register_ha_tools(registry)
     register_drive_tools(registry)
     register_web_tools(registry)
+    register_airbnb_tools(registry)
     register_usage_tools(registry)
     register_docker_tools(registry)
     register_introspect(registry)

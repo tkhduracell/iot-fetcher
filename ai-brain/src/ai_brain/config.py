@@ -185,6 +185,8 @@ class Settings:
     sonos_url: str
     sonos_room: str
     brave_api_key: str
+    airbnb_ical_url: str
+    airbnb_reminder_hour: int
     slack_bot_token: str
     slack_app_token: str
     slack_user_id: str
@@ -318,6 +320,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         sonos_url=get("SONOS_URL", "http://sonos-http-api:5005"),
         sonos_room=get("SONOS_ROOM", "Kitchen"),
         brave_api_key=get("BRAVE_API_KEY"),
+        # The Airbnb calendar's secret iCal address. A credential: env only.
+        airbnb_ical_url=get("AIRBNB_ICAL_URL").strip(),
+        # Local (Europe/Stockholm) hour after which tomorrow's back-to-back
+        # changeovers get a Slack cleaning reminder.
+        airbnb_reminder_hour=get_int("AIRBNB_REMINDER_HOUR", 18),
         slack_bot_token=get("SLACK_BOT_TOKEN"),
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),

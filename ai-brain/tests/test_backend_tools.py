@@ -123,6 +123,7 @@ def test_loop_allowlists(registry):
     assert {s.name for s in registry.specs_for("energy")} == {
         "vm_query",
         "vm_metrics",
+        "airbnb_calendar",
         "usage_status",
     }
     assert {s.name for s in registry.specs_for("health")} == {
@@ -133,12 +134,14 @@ def test_loop_allowlists(registry):
     assert {s.name for s in registry.specs_for("house-ops")} == {
         "ha_context",
         "ha_error_log",
+        "airbnb_calendar",
         "usage_status",
     }
     assert {s.name for s in registry.specs_for("researcher")} == {
         "drive_search",
         "web_search",
         "web_fetch",
+        "airbnb_calendar",
         "usage_status",
     }
     assert {s.name for s in registry.specs_for("infra")} == {
