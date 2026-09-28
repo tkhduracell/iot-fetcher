@@ -259,14 +259,14 @@ def test_http_port_zero_disables_the_api():
 
 def test_num_ctx_by_model_default_gives_qwen38_64k():
     s = load_settings({})
-    assert s.num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3*", 32768), ("ollama:*", 16384)]
+    assert s.num_ctx_by_model == [("lan:qwen3.8*", 131072), ("lan:qwen3*", 32768), ("ollama:*", 16384)]
 
 
 def test_num_ctx_by_model_parses_and_opts_out():
     s = load_settings({"NUM_CTX_BY_MODEL": "lan:qwen3-coder*=49152, ollama:*=8192"})
     assert s.num_ctx_by_model == [("lan:qwen3-coder*", 49152), ("ollama:*", 8192)]
     assert load_settings({"NUM_CTX_BY_MODEL": "off"}).num_ctx_by_model == []
-    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3*", 32768), ("ollama:*", 16384)]
+    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 131072), ("lan:qwen3*", 32768), ("ollama:*", 16384)]
 
 
 @pytest.mark.parametrize("raw", ["lan:x", "lan:x=big", "lan:x=1024", "lan:x=999999"])
@@ -285,4 +285,34 @@ def test_chain_applies_num_ctx_per_model_with_kind_fallback(tmp_path):
         }
     )
     chain = ProviderChain.from_settings(s, Ledger({}, tmp_path / "ledger.json"))
-    assert [p._num_ctx for p in chain.providers] == [65536, 32768, 32768, 16384]
+    assert [p._num_ctx for p in chain.providers] == [131072, 32768, 32768, 16384]
+
+
+def test_think_by_model_default_and_parsing():
+    assert load_settings({}).think_by_model == [("lan:qwen3.8*", "xhigh")]
+    s = load_settings({"THINK_BY_MODEL": "lan:qwen3-coder*=false, ollama:*=Low"})
+    assert s.think_by_model == [("lan:qwen3-coder*", "false"), ("ollama:*", "low")]
+    assert load_settings({"THINK_BY_MODEL": "off"}).think_by_model == []
+
+
+@pytest.mark.parametrize("raw", ["lan:x", "lan:x=max", "=xhigh"])
+def test_think_by_model_rejects_bad_entries(raw):
+    with pytest.raises(ValueError, match="THINK_BY_MODEL"):
+        load_settings({"THINK_BY_MODEL": raw})
+
+
+def test_chain_sends_think_only_where_matched(tmp_path):
+    from ai_brain.ledger import Ledger
+    from ai_brain.llm import ProviderChain
+    from ai_brain.llm.ollama import build_request
+
+    s = load_settings(
+        {
+            "LLM_CHAIN": "lan:qwen3.8:27b-mlx,lan:qwen3-coder:30b,ollama:qwen3:4b",
+            "THINK_BY_MODEL": "lan:qwen3.8*=xhigh,ollama:*=false",
+        }
+    )
+    chain = ProviderChain.from_settings(s, Ledger({}, tmp_path / "ledger.json"))
+    assert [p._think for p in chain.providers] == ["xhigh", None, False]
+    assert build_request("m", [], [], 64, think="xhigh")["think"] == "xhigh"
+    assert "think" not in build_request("m", [], [], 64)

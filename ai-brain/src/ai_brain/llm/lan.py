@@ -57,6 +57,7 @@ class LanOllamaProvider(Provider):
         client: httpx.AsyncClient | None = None,
         timeout_s: httpx.Timeout | None = None,
         num_ctx: int = LAN_DEFAULT_NUM_CTX,
+        think: bool | str | None = None,
     ) -> None:
         self.finder = finder
         self.model = finder.model
@@ -66,6 +67,7 @@ class LanOllamaProvider(Provider):
             LAN_REQUEST_TIMEOUT_S, connect=LAN_CONNECT_TIMEOUT_S
         )
         self._num_ctx = num_ctx
+        self._think = think
         self._attempts_left = LAN_ATTEMPTS
 
     def available(self) -> bool:
@@ -84,6 +86,7 @@ class LanOllamaProvider(Provider):
             client=self._client,
             timeout_s=self._timeout_s,
             num_ctx=self._num_ctx,
+            think=self._think,
         )
         try:
             reply = await provider.complete(messages, tools, max_tokens)

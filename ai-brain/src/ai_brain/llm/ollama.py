@@ -83,6 +83,7 @@ class OllamaProvider(Provider):
         client: httpx.AsyncClient | None = None,
         timeout_s: float | httpx.Timeout = CALL_TIMEOUT_S,
         num_ctx: int = DEFAULT_NUM_CTX,
+        think: bool | str | None = None,
     ):
         self.model = model
         self.key = f"ollama:{model}"
@@ -90,6 +91,7 @@ class OllamaProvider(Provider):
         self._timeout_s = timeout_s
         self._client = client
         self._num_ctx = num_ctx
+        self._think = think
         # A client we were handed belongs to the caller; only one we made
         # ourselves is ours to close.
         self._owns_client = client is None
@@ -112,7 +114,7 @@ class OllamaProvider(Provider):
     ) -> Reply:
         messages = _fit_to_context(messages, self._num_ctx, max_tokens, self.key)
         payload = build_request(
-            self.model, messages, tools, max_tokens, num_ctx=self._num_ctx
+            self.model, messages, tools, max_tokens, num_ctx=self._num_ctx, think=self._think
         )
         body = json.dumps(payload)
         log.debug(
@@ -262,6 +264,7 @@ def build_request(
     tools: list[ToolSpec],
     max_tokens: int,
     num_ctx: int = DEFAULT_NUM_CTX,
+    think: bool | str | None = None,
 ) -> dict:
     """Our message list as an Ollama ``/api/chat`` body.
 
@@ -295,6 +298,10 @@ def build_request(
             "num_ctx": num_ctx,
         },
     }
+    # Omitted rather than sent as null: no THINK_BY_MODEL match means the
+    # model's own default, and Ollama reads an explicit null as "off".
+    if think is not None:
+        payload["think"] = think
     if tools:
         payload["tools"] = [
             {

@@ -30,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
-from ai_brain.config import match_by_model
+from ai_brain.config import match_by_model, think_value
 from ai_brain.ledger import Ledger, Limits, Priority
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
@@ -260,7 +260,8 @@ class ProviderChain:
                 )
                 lan_finders.append(lan_finder)
                 num_ctx = match_by_model(settings.num_ctx_by_model, entry, LAN_DEFAULT_NUM_CTX)
-                providers.append(LanOllamaProvider(lan_finder, num_ctx=num_ctx))
+                think = think_value(match_by_model(settings.think_by_model, entry, None))
+                providers.append(LanOllamaProvider(lan_finder, num_ctx=num_ctx, think=think))
             elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
                 # the concrete provider module or its API client.
@@ -278,7 +279,10 @@ class ProviderChain:
                 from ai_brain.llm.ollama import DEFAULT_NUM_CTX, OllamaProvider
 
                 num_ctx = match_by_model(settings.num_ctx_by_model, entry, DEFAULT_NUM_CTX)
-                providers.append(OllamaProvider(model, settings.ollama_url, num_ctx=num_ctx))
+                think = think_value(match_by_model(settings.think_by_model, entry, None))
+                providers.append(
+                    OllamaProvider(model, settings.ollama_url, num_ctx=num_ctx, think=think)
+                )
             elif name == "fake":
                 from ai_brain.llm.fake import FakeProvider
 
