@@ -481,6 +481,11 @@ def test_read_context_lists_open_gaps(brain_dir):
     assert "Already answered?" not in ctx
 
 
+def test_read_context_shows_gap_ids_so_they_can_be_closed(brain_dir):
+    gap = brain_dir.open_gap("Why is the spa cold?")
+    assert f"- [{gap.id}] Why is the spa cold?" in brain_dir.read_context("Be kind.")
+
+
 def test_read_context_omits_the_gap_section_when_there_are_none(brain_dir):
     assert "Öppna luckor" not in brain_dir.read_context("Be kind.")
 
