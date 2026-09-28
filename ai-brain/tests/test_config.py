@@ -316,3 +316,20 @@ def test_chain_sends_think_only_where_matched(tmp_path):
     assert [p._think for p in chain.providers] == ["xhigh", None, False]
     assert build_request("m", [], [], 64, think="xhigh")["think"] == "xhigh"
     assert "think" not in build_request("m", [], [], 64)
+
+
+def test_thinking_request_uses_model_card_sampling_and_echoes_thinking():
+    from ai_brain.llm import Message
+    from ai_brain.llm.ollama import build_request
+
+    history = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="ok", thinking="let me look"),
+    ]
+    on = build_request("m", history, [], 64, think="xhigh")
+    assert on["options"]["temperature"] == 1.0 and on["options"]["top_k"] == 20
+    assert on["messages"][1]["thinking"] == "let me look"
+
+    off = build_request("m", history, [], 64)
+    assert off["options"]["temperature"] == 0.7 and "top_k" not in off["options"]
+    assert "thinking" not in off["messages"][1]

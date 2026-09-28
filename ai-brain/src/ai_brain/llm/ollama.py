@@ -60,6 +60,10 @@ CALL_TIMEOUT_S = 600.0
 # section for the tradeoff.
 DEFAULT_NUM_CTX = 16384
 
+# Qwen3.8's model card sampling for thinking mode. Used whenever a request
+# asks the model to think; a non-thinking request keeps the plain 0.7.
+THINKING_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0}
+
 # Rough tokens-per-character used only to decide whether to warn/trim before
 # sending -- Ollama does the real tokenization server-side. English averages
 # ~4 chars/token; this errs low (over-counts tokens) so the warning fires
@@ -273,12 +277,15 @@ def build_request(
     options entirely, which is why this module is native rather than
     OpenAI-compatible.
     """
+    thinking_on = think not in (None, False, "false")
     out_messages: list[dict[str, Any]] = []
     for message in messages:
         if message.role == "tool":
             out_messages.append({"role": "tool", "content": message.content})
         elif message.role == "assistant":
             entry: dict[str, Any] = {"role": "assistant", "content": message.content}
+            if thinking_on and message.thinking:
+                entry["thinking"] = message.thinking
             if message.tool_calls:
                 entry["tool_calls"] = [
                     {"function": {"name": call.name, "arguments": call.args}}
@@ -294,8 +301,8 @@ def build_request(
         "stream": False,
         "options": {
             "num_predict": max_tokens,
-            "temperature": 0.7,
             "num_ctx": num_ctx,
+            **(THINKING_SAMPLING if thinking_on else {"temperature": 0.7}),
         },
     }
     # Omitted rather than sent as null: no THINK_BY_MODEL match means the

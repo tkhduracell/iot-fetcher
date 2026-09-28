@@ -94,6 +94,10 @@ class Message:
     # provider handed another model's turn cannot always echo it back
     # verbatim. Empty means "not from a provider", e.g. a turn a test built.
     model: str = ""
+    # An Ollama thinking model's reasoning for this turn, echoed back on the
+    # next round when that provider thinks -- Qwen3.8 is tuned to see its own
+    # earlier reasoning in multi-turn agentic work ("preserve_thinking").
+    thinking: str = ""
 
 
 @dataclass(frozen=True)
