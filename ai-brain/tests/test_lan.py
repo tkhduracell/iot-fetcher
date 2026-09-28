@@ -290,7 +290,7 @@ def test_the_lan_provider_keeps_its_place_in_the_chain(tmp_path):
 
 
 def test_from_settings_gives_the_lan_provider_its_own_num_ctx(tmp_path):
-    """LAN_OLLAMA_NUM_CTX, not OLLAMA_NUM_CTX, drives the lan: provider.
+    """NUM_CTX_BY_MODEL drives the lan: provider, not the ollama: default.
 
     The lan: host is a desktop machine on the network, not the
     RAM-constrained rpi5 running the in-compose ollama: service -- the two
@@ -299,16 +299,12 @@ def test_from_settings_gives_the_lan_provider_its_own_num_ctx(tmp_path):
     from ai_brain.ledger import Ledger
 
     settings = load_settings(
-        {
-            "LLM_CHAIN": f"lan:{MODEL}",
-            "OLLAMA_NUM_CTX": "4096",
-            "LAN_OLLAMA_NUM_CTX": "65536",
-        }
+        {"LLM_CHAIN": f"lan:{MODEL}", "NUM_CTX_BY_MODEL": f"lan:{MODEL}=49152,ollama:*=4096"}
     )
     ledger = Ledger(limits_for(settings), tmp_path / "ledger.json", clock=lambda: 1.0)
     chain = ProviderChain.from_settings(settings, ledger)
 
-    assert chain.providers[0]._num_ctx == 65536
+    assert chain.providers[0]._num_ctx == 49152
 
 
 def test_a_chain_without_a_lan_entry_has_no_finders(tmp_path):

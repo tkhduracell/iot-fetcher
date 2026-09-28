@@ -253,15 +253,13 @@ class ProviderChain:
                 # finder even when several share a model name, since two
                 # entries might resolve to different machines.
                 from ai_brain.discovery import OllamaFinder, subnets_for
-                from ai_brain.llm.lan import LanOllamaProvider
+                from ai_brain.llm.lan import LAN_DEFAULT_NUM_CTX, LanOllamaProvider
 
                 lan_finder = OllamaFinder(
                     model, subnets_for(settings.lan_subnets, settings.ha_url)
                 )
                 lan_finders.append(lan_finder)
-                num_ctx = match_by_model(
-                    settings.num_ctx_by_model, entry, settings.lan_ollama_num_ctx
-                )
+                num_ctx = match_by_model(settings.num_ctx_by_model, entry, LAN_DEFAULT_NUM_CTX)
                 providers.append(LanOllamaProvider(lan_finder, num_ctx=num_ctx))
             elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
@@ -277,11 +275,9 @@ class ProviderChain:
                 )
             elif name == "ollama":
                 # Imported lazily to match the gemini branch above.
-                from ai_brain.llm.ollama import OllamaProvider
+                from ai_brain.llm.ollama import DEFAULT_NUM_CTX, OllamaProvider
 
-                num_ctx = match_by_model(
-                    settings.num_ctx_by_model, entry, settings.ollama_num_ctx
-                )
+                num_ctx = match_by_model(settings.num_ctx_by_model, entry, DEFAULT_NUM_CTX)
                 providers.append(OllamaProvider(model, settings.ollama_url, num_ctx=num_ctx))
             elif name == "fake":
                 from ai_brain.llm.fake import FakeProvider

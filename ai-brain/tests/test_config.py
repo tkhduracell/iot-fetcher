@@ -257,42 +257,16 @@ def test_http_port_zero_disables_the_api():
     assert load_settings({"HTTP_PORT": "0"}).http_port == 0
 
 
-def test_ollama_num_ctx_defaults_to_a_pi5_sized_value():
-    # Ollama's own server default (4096) is too small for a cycle's
-    # persona+memory+tool-result prompt (observed ~9.7k tokens); this is our
-    # own, larger default.
-    assert load_settings({}).ollama_num_ctx == 16384
-
-
-def test_ollama_num_ctx_is_read_from_the_environment():
-    assert load_settings({"OLLAMA_NUM_CTX": "8192"}).ollama_num_ctx == 8192
-
-
-def test_lan_ollama_num_ctx_defaults_larger_than_the_local_ollama_default():
-    # The lan: host is a desktop machine, not the RAM-constrained rpi5
-    # running the in-compose ollama: service, so it gets its own, larger,
-    # default rather than sharing OLLAMA_NUM_CTX.
-    s = load_settings({})
-    assert s.lan_ollama_num_ctx == 32768
-    assert s.lan_ollama_num_ctx > s.ollama_num_ctx
-
-
-def test_lan_ollama_num_ctx_is_read_from_the_environment():
-    assert (
-        load_settings({"LAN_OLLAMA_NUM_CTX": "65536"}).lan_ollama_num_ctx == 65536
-    )
-
-
 def test_num_ctx_by_model_default_gives_qwen38_64k():
     s = load_settings({})
-    assert s.num_ctx_by_model == [("lan:qwen3.8*", 65536)]
+    assert s.num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3-coder*", 65536)]
 
 
 def test_num_ctx_by_model_parses_and_opts_out():
     s = load_settings({"NUM_CTX_BY_MODEL": "lan:qwen3-coder*=49152, ollama:*=8192"})
     assert s.num_ctx_by_model == [("lan:qwen3-coder*", 49152), ("ollama:*", 8192)]
     assert load_settings({"NUM_CTX_BY_MODEL": "off"}).num_ctx_by_model == []
-    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 65536)]
+    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3-coder*", 65536)]
 
 
 @pytest.mark.parametrize("raw", ["lan:x", "lan:x=big", "lan:x=1024", "lan:x=999999"])
@@ -307,10 +281,8 @@ def test_chain_applies_num_ctx_per_model_with_kind_fallback(tmp_path):
 
     s = load_settings(
         {
-            "LLM_CHAIN": "lan:qwen3.8:27b-mlx,lan:qwen3-coder:30b,ollama:qwen3:4b",
-            "LAN_OLLAMA_NUM_CTX": "32768",
-            "OLLAMA_NUM_CTX": "16384",
+            "LLM_CHAIN": "lan:qwen3.8:27b-mlx,lan:qwen3-coder:30b,lan:other:7b,ollama:qwen3:4b",
         }
     )
     chain = ProviderChain.from_settings(s, Ledger({}, tmp_path / "ledger.json"))
-    assert [p._num_ctx for p in chain.providers] == [65536, 32768, 16384]
+    assert [p._num_ctx for p in chain.providers] == [65536, 65536, 32768, 16384]

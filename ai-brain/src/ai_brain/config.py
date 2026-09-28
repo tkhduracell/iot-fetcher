@@ -84,10 +84,12 @@ CYCLE_MAX_ROUNDS_HARD_CEILING = 64
 # Per-model Ollama context window, same ``pattern=N`` shape as
 # CYCLE_MAX_ROUNDS_BY_MODEL but matched against the LLM_CHAIN entry itself
 # (``lan:qwen3.8:27b-mlx``) when the chain is built -- the window is fixed per
-# provider, not per round. No match falls back to LAN_OLLAMA_NUM_CTX or
-# OLLAMA_NUM_CTX by provider kind. Gemini entries are never consulted: its
-# window is the API's, not ours to set. The qwen3.8 host is configured for 64k.
-DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=65536"
+# provider, not per round. No match falls back to the provider kind's own
+# default: ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
+# ai_brain.llm.ollama.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
+# consulted: its window is the API's, not ours to set. Both qwen models on the
+# LAN Mac are given 64k.
+DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=65536,lan:qwen3-coder*=65536"
 
 # Below this a cycle's persona+memory prompt alone does not fit; above it no
 # model in the chain has a window to match (qwen3.8 tops out at 256k).
@@ -169,8 +171,6 @@ class Settings:
     expert_models: frozenset[str] | None
     gemini_api_key: str
     ollama_url: str
-    ollama_num_ctx: int
-    lan_ollama_num_ctx: int
     num_ctx_by_model: list[tuple[str, int]]
     experts: list[str]
     brain_heartbeat_s: int
@@ -266,7 +266,7 @@ def _max_rounds_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
 def _num_ctx_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
     """``NUM_CTX_BY_MODEL``: same unset / ``none``/``off`` / entries split as
     ``_max_rounds_by_model`` -- unset or blank keeps the shipped default,
-    ``none``/``off`` leaves every provider on its kind's flat NUM_CTX.
+    ``none``/``off`` leaves every provider on its kind's default.
     """
     raw = env.get("NUM_CTX_BY_MODEL", "").strip()
     if raw.lower() in NO_MAX_ROUNDS_BY_MODEL:
@@ -304,19 +304,6 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         else _experts_default(llm_chain, brain_models),
         gemini_api_key=get("GEMINI_API_KEY"),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
-        # 4096 is Ollama's own server default and far smaller than a cycle's
-        # persona+memory+tool-result prompt (observed ~9.7k tokens in
-        # practice); the server truncates silently from the front when a
-        # prompt overflows it, which is why this has a bigger default. This
-        # is the rpi5's own in-compose ollama service (RAM-constrained, 8GB)
-        # -- the LAN desktop's own Ollama gets its own, larger,
-        # LAN_OLLAMA_NUM_CTX below. See ai_brain.llm.ollama.build_request.
-        ollama_num_ctx=get_int("OLLAMA_NUM_CTX", 16384),
-        # The lan: provider's host is a desktop machine, not the rpi5, and
-        # this deployment's LAN Ollama servers are themselves configured for
-        # a 32k context window -- so its default is larger than the local
-        # ollama: provider's, rather than shared with it.
-        lan_ollama_num_ctx=get_int("LAN_OLLAMA_NUM_CTX", 32768),
         num_ctx_by_model=_num_ctx_by_model(env),
         experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 240) * 60,
