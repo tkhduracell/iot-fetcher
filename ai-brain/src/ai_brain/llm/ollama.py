@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
 from ai_brain.llm import (
+    STREAM_SINK,
     ErrorKind,
     Message,
     Provider,
@@ -120,6 +122,9 @@ class OllamaProvider(Provider):
         payload = build_request(
             self.model, messages, tools, max_tokens, num_ctx=self._num_ctx, think=self._think
         )
+        sink = STREAM_SINK.get()
+        if sink is not None:
+            payload["stream"] = True
         body = json.dumps(payload)
         log.debug(
             "%s request: %d bytes, %d messages",
@@ -127,6 +132,9 @@ class OllamaProvider(Provider):
             len(body),
             len(payload["messages"]),
         )
+
+        if sink is not None:
+            return await self._complete_streaming(body, sink)
 
         try:
             response = await self._http().post(
@@ -144,6 +152,56 @@ class OllamaProvider(Provider):
         if response.status_code >= 400:
             raise self._error(response)
         return self._reply(response.json())
+
+    async def _complete_streaming(
+        self, body: str, sink: Callable[[str, str], None]
+    ) -> Reply:
+        """The same call with ``stream: true``: one JSON object per line.
+
+        Thinking and text arrive as deltas and go to ``sink`` as they land;
+        tool calls and the token counts arrive whole (tool calls in their own
+        chunk, counts on the final ``done`` one). The deltas are folded back
+        into one body so ``_reply`` builds exactly what a non-streaming call
+        would have -- the loop cannot tell the difference.
+        """
+        text: list[str] = []
+        thinking: list[str] = []
+        calls: list[dict] = []
+        final: dict = {}
+        try:
+            async with self._http().stream(
+                "POST", self.url, content=body, headers={"content-type": "application/json"}
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise self._error(response)
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    chunk = json.loads(line)
+                    if chunk.get("error"):
+                        raise ProviderError(f"{self.key} stream error: {chunk['error']}", kind="server")
+                    message = chunk.get("message") or {}
+                    for kind, parts, key in (("thinking", thinking, "thinking"), ("text", text, "content")):
+                        delta = message.get(key) or ""
+                        if delta:
+                            parts.append(delta)
+                            _safe_sink(sink, kind, delta)
+                    calls.extend(message.get("tool_calls") or [])
+                    if chunk.get("done"):
+                        final = chunk
+        except httpx.TimeoutException as err:
+            raise ProviderError(f"{self.key} timed out: {err}", kind="timeout") from err
+        except httpx.HTTPError as err:
+            raise ProviderError(f"{self.key} transport error: {err}", kind="server") from err
+        except json.JSONDecodeError as err:
+            raise ProviderError(f"{self.key} bad stream line: {err}", kind="server") from err
+        return self._reply(
+            {
+                **final,
+                "message": {"content": "".join(text), "thinking": "".join(thinking), "tool_calls": calls},
+            }
+        )
 
     def _error(self, response: httpx.Response) -> ProviderError:
         status = response.status_code
@@ -190,6 +248,14 @@ class OllamaProvider(Provider):
             thinking=thinking,
             key=self.key,
         )
+
+
+def _safe_sink(sink: Callable[[str, str], None], kind: str, delta: str) -> None:
+    # A live view is a convenience; a broken one must never fail the call.
+    try:
+        sink(kind, delta)
+    except Exception:
+        log.warning("stream sink raised; ignoring", exc_info=True)
 
 
 def _estimate_tokens(messages: list[Message]) -> int:

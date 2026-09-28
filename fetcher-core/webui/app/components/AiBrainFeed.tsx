@@ -65,6 +65,7 @@ type FeedRound = {
 
 type FeedEvent =
   | { type: 'round_started'; loop: string; at: number; dropped?: number }
+  | { type: 'round_delta'; loop: string; thinking?: string; text?: string; dropped?: number }
   | {
       type: 'round_complete';
       loop: string;
@@ -186,7 +187,15 @@ const FeedEntryImpl: React.FC<{
         </span>
       </div>
       {entry.pending ? (
-        <Pre className="opacity-60">väntar på modellen…</Pre>
+        // A streaming model's reply as it arrives: its text once it has
+        // any, otherwise its thinking, dimmed, with a cursor at the end.
+        round.text || round.thinking ? (
+          <div className={round.text ? '' : 'opacity-60'}>
+            <FullText>{`${round.text || round.thinking}▌`}</FullText>
+          </div>
+        ) : (
+          <Pre className="opacity-60">väntar på modellen…</Pre>
+        )
       ) : (
         <>
           {/* Thinking is hidden when the round has its own text -- the text is
@@ -362,6 +371,16 @@ const AiBrainFeed: React.FC = () => {
             ].slice(0, MAX_ROUNDS),
           );
           break;
+        case 'round_delta':
+          resolvePending(raw.loop, (entry) => ({
+            ...entry,
+            round: {
+              ...entry.round,
+              thinking: (entry.round.thinking ?? '') + (raw.thinking ?? ''),
+              text: (entry.round.text ?? '') + (raw.text ?? ''),
+            },
+          }));
+          break;
         case 'round_complete':
           seenRef.current.set(raw.loop, (seenRef.current.get(raw.loop) ?? 0) + 1);
           resolvePending(raw.loop, () => ({
@@ -465,7 +484,11 @@ const AiBrainFeed: React.FC = () => {
     };
   }, [loadAgents, loadTraces, onFeedEvent]);
 
-  const thinking = rounds.filter((e) => e.pending);
+  // Pending entries are badges until their model starts streaming; one that
+  // has streamed anything gets a live box of its own above the finished rounds.
+  const streamed = (e: FeedRound) => !!(e.round.text || e.round.thinking);
+  const thinking = rounds.filter((e) => e.pending && !streamed(e));
+  const live = rounds.filter((e) => e.pending && streamed(e));
   const done = rounds.filter((e) => !e.pending);
   const emojiFor = (loop: string) => agents?.find((a) => a.name === loop)?.emoji ?? '';
 
@@ -511,6 +534,15 @@ const AiBrainFeed: React.FC = () => {
               ))}
             </div>
           )}
+          {live.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex flex-col gap-2 min-w-0 rounded px-3 py-2"
+              style={{ background: WALL.raised }}
+            >
+              <FeedEntry entry={entry} first emoji={emojiFor(entry.loop)} running />
+            </div>
+          ))}
           {groupRuns(done).map((group, gi, groups) => (
             <div
               key={group.key}

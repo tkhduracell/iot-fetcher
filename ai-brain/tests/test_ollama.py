@@ -320,3 +320,73 @@ async def test_a_prompt_that_fits_is_sent_unmodified(caplog):
         {"role": "system", "content": "short"},
         {"role": "user", "content": "hi"},
     ]
+
+
+# --- streaming ---------------------------------------------------------------
+
+
+@respx.mock
+async def test_streaming_sends_deltas_and_builds_the_same_reply():
+    from ai_brain.llm import STREAM_SINK
+
+    lines = [
+        {"message": {"role": "assistant", "thinking": "let me "}},
+        {"message": {"role": "assistant", "thinking": "look"}},
+        {"message": {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "list_facts", "arguments": {"q": "x"}}}]}},
+        {"message": {"role": "assistant", "content": "done"}},
+        {"done": True, "prompt_eval_count": 11, "eval_count": 3, "message": {"content": ""}},
+    ]
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(200, text="\n".join(json.dumps(x) for x in lines) + "\n")
+    )
+    got: list[tuple[str, str]] = []
+    token = STREAM_SINK.set(lambda kind, delta: got.append((kind, delta)))
+    try:
+        reply = await provider().complete([Message(role="user", content="hi")], [], 64)
+    finally:
+        STREAM_SINK.reset(token)
+
+    assert json.loads(route.calls.last.request.content)["stream"] is True
+    assert got == [("thinking", "let me "), ("thinking", "look"), ("text", "done")]
+    assert (reply.thinking, reply.text) == ("let me look", "done")
+    assert [c.name for c in reply.tool_calls] == ["list_facts"]
+    assert (reply.usage.prompt_tokens, reply.usage.completion_tokens) == (11, 3)
+
+
+@respx.mock
+async def test_streaming_error_line_is_a_provider_error():
+    from ai_brain.llm import STREAM_SINK, ProviderError
+
+    respx.post(URL).mock(return_value=httpx.Response(200, text=json.dumps({"error": "boom"}) + "\n"))
+    token = STREAM_SINK.set(lambda *_: None)
+    try:
+        with pytest.raises(ProviderError, match="boom"):
+            await provider().complete([Message(role="user", content="hi")], [], 64)
+    finally:
+        STREAM_SINK.reset(token)
+
+
+@respx.mock
+async def test_no_sink_means_no_streaming():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json=text_response()))
+    await provider().complete([Message(role="user", content="hi")], [], 64)
+    assert json.loads(route.calls.last.request.content)["stream"] is False
+
+
+def test_delta_publisher_batches_into_round_delta_events():
+    from ai_brain.events import EventBus
+    from ai_brain.loop import _DeltaPublisher
+
+    bus = EventBus()
+    with bus.subscribe() as queue:
+        pub = _DeltaPublisher(bus, "energy")
+        pub.add("thinking", "a")
+        pub.add("thinking", "b")
+        pub.add("text", "c")
+        pub.flush()
+        pub.flush()  # nothing buffered: no empty event
+        events = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert events[-1] == {"type": "round_delta", "loop": "energy", "thinking": "ab", "text": "c"}
+    assert all(e["type"] == "round_delta" for e in events)
+    assert "".join(e.get("thinking", "") for e in events) == "ab"
