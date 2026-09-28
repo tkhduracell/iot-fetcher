@@ -259,14 +259,14 @@ def test_http_port_zero_disables_the_api():
 
 def test_num_ctx_by_model_default_gives_qwen38_64k():
     s = load_settings({})
-    assert s.num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3-coder*", 65536)]
+    assert s.num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3*", 32768), ("ollama:*", 16384)]
 
 
 def test_num_ctx_by_model_parses_and_opts_out():
     s = load_settings({"NUM_CTX_BY_MODEL": "lan:qwen3-coder*=49152, ollama:*=8192"})
     assert s.num_ctx_by_model == [("lan:qwen3-coder*", 49152), ("ollama:*", 8192)]
     assert load_settings({"NUM_CTX_BY_MODEL": "off"}).num_ctx_by_model == []
-    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3-coder*", 65536)]
+    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 65536), ("lan:qwen3*", 32768), ("ollama:*", 16384)]
 
 
 @pytest.mark.parametrize("raw", ["lan:x", "lan:x=big", "lan:x=1024", "lan:x=999999"])
@@ -285,4 +285,4 @@ def test_chain_applies_num_ctx_per_model_with_kind_fallback(tmp_path):
         }
     )
     chain = ProviderChain.from_settings(s, Ledger({}, tmp_path / "ledger.json"))
-    assert [p._num_ctx for p in chain.providers] == [65536, 65536, 32768, 16384]
+    assert [p._num_ctx for p in chain.providers] == [65536, 32768, 32768, 16384]

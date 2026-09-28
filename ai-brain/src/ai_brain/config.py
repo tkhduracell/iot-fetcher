@@ -87,9 +87,9 @@ CYCLE_MAX_ROUNDS_HARD_CEILING = 64
 # provider, not per round. No match falls back to the provider kind's own
 # default: ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
 # ai_brain.llm.ollama.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
-# consulted: its window is the API's, not ours to set. Both qwen models on the
-# LAN Mac are given 64k.
-DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=65536,lan:qwen3-coder*=65536"
+# consulted: its window is the API's, not ours to set. Only qwen3.8 on the
+# LAN Mac gets 64k; the rest are spelled out at their kind's default.
+DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=65536,lan:qwen3*=32768,ollama:*=16384"
 
 # Below this a cycle's persona+memory prompt alone does not fit; above it no
 # model in the chain has a window to match (qwen3.8 tops out at 256k).
