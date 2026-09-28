@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -98,6 +99,16 @@ class Message:
     # next round when that provider thinks -- Qwen3.8 is tuned to see its own
     # earlier reasoning in multi-turn agentic work ("preserve_thinking").
     thinking: str = ""
+
+
+# Where a streaming-capable provider sends its reply as it is generated:
+# ``sink("thinking" | "text", delta)``. A ContextVar rather than a parameter so
+# the loop can switch it on around one ``chain.complete`` without every
+# provider, fake and chain method growing an argument only Ollama uses.
+# Unset (the default) means the provider does its ordinary non-streaming call.
+STREAM_SINK: ContextVar[Callable[[str, str], None] | None] = ContextVar(
+    "STREAM_SINK", default=None
+)
 
 
 @dataclass(frozen=True)

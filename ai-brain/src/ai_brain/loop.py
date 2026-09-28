@@ -31,6 +31,7 @@ import fnmatch
 import json
 import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -41,7 +42,7 @@ from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
-from ai_brain.llm import ChainExhausted, Message, ProviderChain
+from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain
 from ai_brain.memory import MemoryDir, Note
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.slack_io import CHAT_TOPIC
@@ -389,6 +390,40 @@ def _tool_result_stats(result: str) -> dict:
     return stats
 
 
+# How often buffered stream deltas go out as one ``round_delta`` event. A
+# token-per-event feed would be hundreds of events a round through a bus whose
+# subscriber queues hold 200; a few per second reads as live all the same.
+DELTA_FLUSH_S = 0.25
+
+
+class _DeltaPublisher:
+    """Buffers a streaming reply's deltas into ``round_delta`` events.
+
+    Wall-clock (``time.monotonic``), not the loop's injectable clock: this
+    paces an HTTP feed, not anything a test reasons about.
+    """
+
+    def __init__(self, events: EventBus, loop_name: str) -> None:
+        self.events = events
+        self.loop_name = loop_name
+        self._buf: dict[str, list[str]] = {"thinking": [], "text": []}
+        self._last = time.monotonic()
+
+    def add(self, kind: str, delta: str) -> None:
+        self._buf.setdefault(kind, []).append(delta)
+        if time.monotonic() - self._last >= DELTA_FLUSH_S:
+            self.flush()
+
+    def flush(self) -> None:
+        self._last = time.monotonic()
+        out = {kind: "".join(parts) for kind, parts in self._buf.items() if parts}
+        if not out:
+            return
+        for parts in self._buf.values():
+            parts.clear()
+        self.events.publish({"type": "round_delta", "loop": self.loop_name, **out})
+
+
 def _round_event(loop_name: str, round_: RoundTrace) -> dict:
     """A ``round_complete`` event, in the same shape ``_trace_json`` serves.
 
@@ -631,16 +666,23 @@ class AgentLoop:
                         {"type": "round_started", "loop": self.name, "at": self.clock()}
                     )
                 call_started = self.clock()
-                reply = await asyncio.wait_for(
-                    self.chain.complete(
-                        messages,
-                        self.registry.specs_for(self.name, self.ctx.settings),
-                        self.max_tokens,
-                        self.priority,
-                        agent=self.name,
-                    ),
-                    timeout=self.chain_timeout_s,
-                )
+                streamer = _DeltaPublisher(self.events, self.name) if self.events else None
+                sink_token = STREAM_SINK.set(streamer.add if streamer else None)
+                try:
+                    reply = await asyncio.wait_for(
+                        self.chain.complete(
+                            messages,
+                            self.registry.specs_for(self.name, self.ctx.settings),
+                            self.max_tokens,
+                            self.priority,
+                            agent=self.name,
+                        ),
+                        timeout=self.chain_timeout_s,
+                    )
+                finally:
+                    STREAM_SINK.reset(sink_token)
+                    if streamer:
+                        streamer.flush()
                 rounds += 1
                 call_duration = self.clock() - call_started
                 model = reply.model

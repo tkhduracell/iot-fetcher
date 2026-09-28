@@ -510,8 +510,8 @@ def build_app(
         return _json(_tokens_json(system))
 
     async def feed(request: web.Request) -> web.StreamResponse:
-        """Every loop's ``round_started``/``round_complete``/``cycle_ended``
-        events, live, merged across all loops.
+        """Every loop's ``round_started``/``round_delta``/``round_complete``/
+        ``cycle_ended`` events, live, merged across all loops.
 
         Still a GET that mutates nothing -- it just never closes its
         response. A subscriber queue is created and torn down entirely
