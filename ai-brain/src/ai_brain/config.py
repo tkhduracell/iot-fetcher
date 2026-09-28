@@ -88,8 +88,8 @@ CYCLE_MAX_ROUNDS_HARD_CEILING = 64
 # default: ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
 # ai_brain.llm.ollama.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
 # consulted: its window is the API's, not ours to set. Only qwen3.8 on the
-# LAN Mac gets 64k; the rest are spelled out at their kind's default.
-DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=65536,lan:qwen3*=32768,ollama:*=16384"
+# LAN Mac gets 128k; the rest are spelled out at their kind's default.
+DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384"
 
 # Below this a cycle's persona+memory prompt alone does not fit; above it no
 # model in the chain has a window to match (qwen3.8 tops out at 256k).
@@ -138,7 +138,34 @@ def _parse_num_ctx_by_model(raw: str) -> list[tuple[str, int]]:
     return _parse_by_model(raw, "NUM_CTX_BY_MODEL", NUM_CTX_MIN, NUM_CTX_MAX)
 
 
-def match_by_model(entries: list[tuple[str, int]], key: str, fallback: int) -> int:
+# Ollama's ``think`` field per model, same ``pattern=value`` shape and
+# matched the same way as NUM_CTX_BY_MODEL. Qwen3.8 on Ollama takes
+# false/low/medium/xhigh and silently runs its default for anything else
+# ("high", "max"), so only these spellings are accepted. No match sends no
+# ``think`` at all -- the model's own default.
+DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh"
+THINK_VALUES = frozenset({"true", "false", "low", "medium", "high", "xhigh"})
+
+
+def _parse_think_by_model(raw: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for part in _csv(raw):
+        pattern, sep, value = part.partition("=")
+        pattern, value = pattern.strip(), value.strip().lower()
+        if not sep or not pattern or value not in THINK_VALUES:
+            raise ValueError(
+                f"THINK_BY_MODEL entry {part!r} is not pattern=<{'|'.join(sorted(THINK_VALUES))}>"
+            )
+        entries.append((pattern, value))
+    return entries
+
+
+def think_value(level: str | None) -> bool | str | None:
+    """A THINK_BY_MODEL level as Ollama's ``think`` field: bools stay bools."""
+    return {"true": True, "false": False}.get(level, level) if level else None
+
+
+def match_by_model[T](entries: list[tuple[str, T]], key: str, fallback: T) -> T:
     """The N of the first pattern matching ``key``, else ``fallback``."""
     for pattern, n in entries:
         if fnmatch.fnmatch(key, pattern):
@@ -172,6 +199,7 @@ class Settings:
     gemini_api_key: str
     ollama_url: str
     num_ctx_by_model: list[tuple[str, int]]
+    think_by_model: list[tuple[str, str]]
     experts: list[str]
     brain_heartbeat_s: int
     expert_heartbeat_s: int
@@ -185,6 +213,8 @@ class Settings:
     sonos_url: str
     sonos_room: str
     brave_api_key: str
+    airbnb_ical_url: str
+    airbnb_reminder_hour: int
     slack_bot_token: str
     slack_app_token: str
     slack_user_id: str
@@ -263,6 +293,15 @@ def _max_rounds_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
     )
 
 
+def _think_by_model(env: Mapping[str, str]) -> list[tuple[str, str]]:
+    """``THINK_BY_MODEL``: unset or blank keeps the default, ``none``/``off``
+    sends no ``think`` for any model."""
+    raw = env.get("THINK_BY_MODEL", "").strip()
+    if raw.lower() in NO_MAX_ROUNDS_BY_MODEL:
+        return []
+    return _parse_think_by_model(raw) or _parse_think_by_model(DEFAULT_THINK_BY_MODEL)
+
+
 def _num_ctx_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
     """``NUM_CTX_BY_MODEL``: same unset / ``none``/``off`` / entries split as
     ``_max_rounds_by_model`` -- unset or blank keeps the shipped default,
@@ -305,6 +344,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         gemini_api_key=get("GEMINI_API_KEY"),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
         num_ctx_by_model=_num_ctx_by_model(env),
+        think_by_model=_think_by_model(env),
         experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 240) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
@@ -318,6 +358,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         sonos_url=get("SONOS_URL", "http://sonos-http-api:5005"),
         sonos_room=get("SONOS_ROOM", "Kitchen"),
         brave_api_key=get("BRAVE_API_KEY"),
+        # The Airbnb calendar's secret iCal address. A credential: env only.
+        airbnb_ical_url=get("AIRBNB_ICAL_URL").strip(),
+        # Local (Europe/Stockholm) hour after which tomorrow's back-to-back
+        # changeovers get a Slack cleaning reminder.
+        airbnb_reminder_hour=get_int("AIRBNB_REMINDER_HOUR", 18),
         slack_bot_token=get("SLACK_BOT_TOKEN"),
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
