@@ -134,6 +134,21 @@ def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
     )
 
 
+# Per-model override of CYCLE_MAX_PROMPT_TOKENS, matched against the chain key
+# of whichever model answered the latest round (like CYCLE_MAX_ROUNDS_BY_MODEL).
+# Local models cost nothing per token, so they get a far larger budget -- still
+# finite, as a backstop against a cycle looping on huge tool results. 0 is
+# "no budget" for that model, same as CYCLE_MAX_PROMPT_TOKENS=0.
+DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL = "lan:*=2000000,ollama:*=2000000"
+MAX_PROMPT_TOKENS_CEILING = 10_000_000
+
+
+def _parse_max_prompt_tokens_by_model(raw: str) -> list[tuple[str, int]]:
+    return _parse_by_model(
+        raw, "CYCLE_MAX_PROMPT_TOKENS_BY_MODEL", 0, MAX_PROMPT_TOKENS_CEILING
+    )
+
+
 def _parse_num_ctx_by_model(raw: str) -> list[tuple[str, int]]:
     return _parse_by_model(raw, "NUM_CTX_BY_MODEL", NUM_CTX_MIN, NUM_CTX_MAX)
 
@@ -225,6 +240,7 @@ class Settings:
     max_rounds_by_model: list[tuple[str, int]]
     max_tokens: int
     max_prompt_tokens: int
+    max_prompt_tokens_by_model: list[tuple[str, int]]
     thinking_budget: int
     rpm: int
     tpm: int
@@ -290,6 +306,17 @@ def _max_rounds_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
         return []
     return _parse_max_rounds_by_model(raw) or _parse_max_rounds_by_model(
         DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL
+    )
+
+
+def _max_prompt_tokens_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
+    """``CYCLE_MAX_PROMPT_TOKENS_BY_MODEL``: unset or blank keeps the
+    default, ``none``/``off`` gives every model the flat budget."""
+    raw = env.get("CYCLE_MAX_PROMPT_TOKENS_BY_MODEL", "").strip()
+    if raw.lower() in NO_MAX_ROUNDS_BY_MODEL:
+        return []
+    return _parse_max_prompt_tokens_by_model(raw) or _parse_max_prompt_tokens_by_model(
+        DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL
     )
 
 
@@ -378,6 +405,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # one that keeps pulling in large tool results round after round
         # without ever calling end_cycle.
         max_prompt_tokens=get_int("CYCLE_MAX_PROMPT_TOKENS", 400_000),
+        max_prompt_tokens_by_model=_max_prompt_tokens_by_model(env),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),
         rpm=get_int("RPM", 8),
         tpm=get_int("TPM", 200000),

@@ -333,3 +333,15 @@ def test_thinking_request_uses_model_card_sampling_and_echoes_thinking():
     off = build_request("m", history, [], 64)
     assert off["options"]["temperature"] == 0.7 and "top_k" not in off["options"]
     assert "thinking" not in off["messages"][1]
+
+
+def test_max_prompt_tokens_by_model_default_and_overrides():
+    assert load_settings({}).max_prompt_tokens_by_model == [
+        ("lan:*", 2_000_000),
+        ("ollama:*", 2_000_000),
+    ]
+    s = load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "lan:qwen3.8*=0"})
+    assert s.max_prompt_tokens_by_model == [("lan:qwen3.8*", 0)]
+    assert load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "off"}).max_prompt_tokens_by_model == []
+    with pytest.raises(ValueError, match="CYCLE_MAX_PROMPT_TOKENS_BY_MODEL"):
+        load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "lan:*=99999999999"})

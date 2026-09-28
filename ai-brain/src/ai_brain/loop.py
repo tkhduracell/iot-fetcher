@@ -463,6 +463,7 @@ class AgentLoop:
         max_rounds_by_model: list[tuple[str, int]] | None = None,
         max_tokens: int = MAX_TOKENS,
         max_prompt_tokens: int = CYCLE_MAX_PROMPT_TOKENS,
+        max_prompt_tokens_by_model: list[tuple[str, int]] | None = None,
         call_timeout_s: int = 60,
         events: EventBus | None = None,
     ) -> None:
@@ -480,6 +481,9 @@ class AgentLoop:
         self.max_rounds_by_model = list(max_rounds_by_model or [])
         self.max_tokens = max_tokens
         self.max_prompt_tokens = max_prompt_tokens
+        self.max_prompt_tokens_by_model = list(max_prompt_tokens_by_model or [])
+        # The budget the stop was judged against, for the cycle summary.
+        self._budget_hit = max_prompt_tokens
         self.call_timeout_s = call_timeout_s
         self.events = events
         # The exact worst case for one round: every provider in the chain
@@ -701,7 +705,9 @@ class AgentLoop:
                 # just below, once, rather than left to end the cycle with the
                 # model never having seen a nudge at all.
                 new_cap = self._rounds_cap(reply.key, reply.model)
-                if not budget_stopped and self._prompt_budget_exceeded(trace.prompt_tokens):
+                if not budget_stopped and self._prompt_budget_exceeded(
+                    trace.prompt_tokens, reply.key or reply.model
+                ):
                     # First round over CYCLE_MAX_PROMPT_TOKENS: same rescue as
                     # a cap drop -- enough extra room for one nudge, never
                     # more -- except this stop is sticky (budget_stopped
@@ -713,7 +719,7 @@ class AgentLoop:
                         "[%s] prompt tokens (%d) exceeded CYCLE_MAX_PROMPT_TOKENS (%d)",
                         self.name,
                         trace.prompt_tokens,
-                        self.max_prompt_tokens,
+                        self._budget_hit,
                     )
                 if floor_cap is None and (
                     budget_stopped or (not nudge_sent and new_cap <= rounds + WRAP_UP_ROUNDS_BEFORE_CAP)
@@ -817,7 +823,7 @@ class AgentLoop:
                 status = "max_rounds"
                 if budget_stopped:
                     summary = (
-                        f"hit CYCLE_MAX_PROMPT_TOKENS ({self.max_prompt_tokens}) "
+                        f"hit CYCLE_MAX_PROMPT_TOKENS ({self._budget_hit}) "
                         f"without end_cycle: prompt tokens reached {trace.prompt_tokens}"
                     )
                 else:
@@ -900,13 +906,21 @@ class AgentLoop:
                 return min(rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
         return min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
 
-    def _prompt_budget_exceeded(self, prompt_tokens: int) -> bool:
+    def _prompt_budget_exceeded(self, prompt_tokens: int, key: str = "") -> bool:
         """True once a cycle's running prompt-token total passes the budget.
 
-        ``self.max_prompt_tokens == 0`` is the documented off switch -- same
+        The budget is that of the model that answered the latest round
+        (CYCLE_MAX_PROMPT_TOKENS_BY_MODEL, first match), else the flat
+        ``self.max_prompt_tokens``. 0 is the documented off switch -- same
         spelling as ``HTTP_PORT``'s.
         """
-        return self.max_prompt_tokens > 0 and prompt_tokens > self.max_prompt_tokens
+        budget = self.max_prompt_tokens
+        for pattern, n in self.max_prompt_tokens_by_model:
+            if fnmatch.fnmatch(key, pattern):
+                budget = n
+                break
+        self._budget_hit = budget
+        return budget > 0 and prompt_tokens > budget
 
     def _cap_tool_result(self, tool: str, result: str) -> str:
         """Keep one runaway tool result from swamping the conversation.

@@ -2308,3 +2308,43 @@ async def test_an_expert_loop_never_calls_approvals_all(
 
 async def _always_ts(topic: str, text: str, blocks=None) -> str:
     return "1.1"
+
+
+async def test_a_local_model_gets_its_own_larger_prompt_budget(make_loop, brain_dir):
+    """CYCLE_MAX_PROMPT_TOKENS_BY_MODEL: a lan: model that answered the
+    latest round is judged against its own budget, not the flat one."""
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), key="lan:qwen3.8:27b-mlx", prompt_tokens=5000)
+        for i in range(4)
+    ]
+    script.append(reply("done", call("end_cycle", "e", next_wake_minutes=10, summary="s"), key="lan:qwen3.8:27b-mlx"))
+    loop, provider = make_loop(
+        script,
+        max_rounds=8,
+        max_prompt_tokens=10_000,
+        max_prompt_tokens_by_model=[("lan:*", 100_000)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    final_messages = provider.calls[-1][0]
+    assert not [m for m in final_messages if m.role == "user" and "rounds left" in m.content]
+
+
+async def test_a_cloud_model_still_uses_the_flat_budget(make_loop, brain_dir):
+    script = [
+        reply(f"round {i}", call("list_facts", f"c{i}"), key="gemini:flash", prompt_tokens=3000)
+        for i in range(6)
+    ]
+    loop, _ = make_loop(
+        script,
+        max_rounds=20,
+        max_prompt_tokens=10_000,
+        max_prompt_tokens_by_model=[("lan:*", 100_000)],
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    assert "CYCLE_MAX_PROMPT_TOKENS (10000)" in brain_dir.journal_text(1)
