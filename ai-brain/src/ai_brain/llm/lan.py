@@ -44,7 +44,7 @@ LAN_REQUEST_TIMEOUT_S = 900.0
 # in-compose ollama service, so its own num_ctx default is larger than
 # ai_brain.llm.ollama.DEFAULT_NUM_CTX. 32768 matches what this deployment's
 # LAN Ollama servers are themselves configured for. Overridable via
-# LAN_OLLAMA_NUM_CTX -- see ai_brain.config.
+# LAN_OLLAMA_NUM_CTX, or per model via NUM_CTX_BY_MODEL -- see ai_brain.config.
 LAN_DEFAULT_NUM_CTX = 32768
 
 

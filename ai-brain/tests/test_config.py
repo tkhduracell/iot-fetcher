@@ -281,3 +281,36 @@ def test_lan_ollama_num_ctx_is_read_from_the_environment():
     assert (
         load_settings({"LAN_OLLAMA_NUM_CTX": "65536"}).lan_ollama_num_ctx == 65536
     )
+
+
+def test_num_ctx_by_model_default_gives_qwen38_64k():
+    s = load_settings({})
+    assert s.num_ctx_by_model == [("lan:qwen3.8*", 65536)]
+
+
+def test_num_ctx_by_model_parses_and_opts_out():
+    s = load_settings({"NUM_CTX_BY_MODEL": "lan:qwen3-coder*=49152, ollama:*=8192"})
+    assert s.num_ctx_by_model == [("lan:qwen3-coder*", 49152), ("ollama:*", 8192)]
+    assert load_settings({"NUM_CTX_BY_MODEL": "off"}).num_ctx_by_model == []
+    assert load_settings({"NUM_CTX_BY_MODEL": " "}).num_ctx_by_model == [("lan:qwen3.8*", 65536)]
+
+
+@pytest.mark.parametrize("raw", ["lan:x", "lan:x=big", "lan:x=1024", "lan:x=999999"])
+def test_num_ctx_by_model_rejects_bad_entries(raw):
+    with pytest.raises(ValueError, match="NUM_CTX_BY_MODEL"):
+        load_settings({"NUM_CTX_BY_MODEL": raw})
+
+
+def test_chain_applies_num_ctx_per_model_with_kind_fallback(tmp_path):
+    from ai_brain.ledger import Ledger
+    from ai_brain.llm import ProviderChain
+
+    s = load_settings(
+        {
+            "LLM_CHAIN": "lan:qwen3.8:27b-mlx,lan:qwen3-coder:30b,ollama:qwen3:4b",
+            "LAN_OLLAMA_NUM_CTX": "32768",
+            "OLLAMA_NUM_CTX": "16384",
+        }
+    )
+    chain = ProviderChain.from_settings(s, Ledger({}, tmp_path / "ledger.json"))
+    assert [p._num_ctx for p in chain.providers] == [65536, 32768, 16384]

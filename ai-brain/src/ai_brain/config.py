@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,14 +81,27 @@ DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32"
 CYCLE_MAX_ROUNDS_HARD_CEILING = 64
 
 
-def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
-    """``pattern=N`` entries, in order, as ``(fnmatch pattern, rounds)``.
+# Per-model Ollama context window, same ``pattern=N`` shape as
+# CYCLE_MAX_ROUNDS_BY_MODEL but matched against the LLM_CHAIN entry itself
+# (``lan:qwen3.8:27b-mlx``) when the chain is built -- the window is fixed per
+# provider, not per round. No match falls back to LAN_OLLAMA_NUM_CTX or
+# OLLAMA_NUM_CTX by provider kind. Gemini entries are never consulted: its
+# window is the API's, not ours to set. The qwen3.8 host is configured for 64k.
+DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=65536"
+
+# Below this a cycle's persona+memory prompt alone does not fit; above it no
+# model in the chain has a window to match (qwen3.8 tops out at 256k).
+NUM_CTX_MIN = 4096
+NUM_CTX_MAX = 262_144
+
+
+def _parse_by_model(raw: str, var: str, lo: int, hi: int) -> list[tuple[str, int]]:
+    """``pattern=N`` entries, in order, as ``(fnmatch pattern, N)``.
 
     Validated here rather than left to blow up mid-cycle: a startup that
     accepts a malformed entry only fails once some cycle happens to be
     answered by a model matching it, hours or days later. ``N`` must be
-    between 1 and ``CYCLE_MAX_ROUNDS_HARD_CEILING`` -- a cap above the hard
-    ceiling can never bind (the ceiling always wins), so it is rejected as
+    between ``lo`` and ``hi`` -- a value outside that range is rejected as
     the config mistake it is rather than silently clamped.
     """
     entries: list[tuple[str, int]] = []
@@ -96,22 +110,38 @@ def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
         pattern = pattern.strip()
         value = value.strip()
         if not sep or not pattern or not value:
-            raise ValueError(
-                f"CYCLE_MAX_ROUNDS_BY_MODEL entry {part!r} is not pattern=N"
-            )
+            raise ValueError(f"{var} entry {part!r} is not pattern=N")
         try:
-            rounds = int(value)
+            n = int(value)
         except ValueError as exc:
-            raise ValueError(
-                f"CYCLE_MAX_ROUNDS_BY_MODEL entry {part!r} has a non-integer N"
-            ) from exc
-        if not (1 <= rounds <= CYCLE_MAX_ROUNDS_HARD_CEILING):
-            raise ValueError(
-                f"CYCLE_MAX_ROUNDS_BY_MODEL entry {part!r} must have N between "
-                f"1 and {CYCLE_MAX_ROUNDS_HARD_CEILING}"
-            )
-        entries.append((pattern, rounds))
+            raise ValueError(f"{var} entry {part!r} has a non-integer N") from exc
+        if not (lo <= n <= hi):
+            raise ValueError(f"{var} entry {part!r} must have N between {lo} and {hi}")
+        entries.append((pattern, n))
     return entries
+
+
+def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
+    """CYCLE_MAX_ROUNDS_BY_MODEL entries; N between 1 and the hard ceiling.
+
+    A cap above ``CYCLE_MAX_ROUNDS_HARD_CEILING`` can never bind (the ceiling
+    always wins), so it is rejected rather than silently clamped.
+    """
+    return _parse_by_model(
+        raw, "CYCLE_MAX_ROUNDS_BY_MODEL", 1, CYCLE_MAX_ROUNDS_HARD_CEILING
+    )
+
+
+def _parse_num_ctx_by_model(raw: str) -> list[tuple[str, int]]:
+    return _parse_by_model(raw, "NUM_CTX_BY_MODEL", NUM_CTX_MIN, NUM_CTX_MAX)
+
+
+def match_by_model(entries: list[tuple[str, int]], key: str, fallback: int) -> int:
+    """The N of the first pattern matching ``key``, else ``fallback``."""
+    for pattern, n in entries:
+        if fnmatch.fnmatch(key, pattern):
+            return n
+    return fallback
 
 
 def _model_set(raw: str, default: str | None) -> frozenset[str] | None:
@@ -141,6 +171,7 @@ class Settings:
     ollama_url: str
     ollama_num_ctx: int
     lan_ollama_num_ctx: int
+    num_ctx_by_model: list[tuple[str, int]]
     experts: list[str]
     brain_heartbeat_s: int
     expert_heartbeat_s: int
@@ -232,6 +263,17 @@ def _max_rounds_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
     )
 
 
+def _num_ctx_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
+    """``NUM_CTX_BY_MODEL``: same unset / ``none``/``off`` / entries split as
+    ``_max_rounds_by_model`` -- unset or blank keeps the shipped default,
+    ``none``/``off`` leaves every provider on its kind's flat NUM_CTX.
+    """
+    raw = env.get("NUM_CTX_BY_MODEL", "").strip()
+    if raw.lower() in NO_MAX_ROUNDS_BY_MODEL:
+        return []
+    return _parse_num_ctx_by_model(raw) or _parse_num_ctx_by_model(DEFAULT_NUM_CTX_BY_MODEL)
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if env is None:
         import os
@@ -275,6 +317,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # a 32k context window -- so its default is larger than the local
         # ollama: provider's, rather than shared with it.
         lan_ollama_num_ctx=get_int("LAN_OLLAMA_NUM_CTX", 32768),
+        num_ctx_by_model=_num_ctx_by_model(env),
         experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 240) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
