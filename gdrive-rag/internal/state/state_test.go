@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,7 +132,7 @@ func TestAddEmbedTokensRollover(t *testing.T) {
 func TestAppendSkippedCap(t *testing.T) {
 	s := &State{}
 	for i := 0; i < maxSkipped+250; i++ {
-		s.AppendSkipped(SkippedFile{FileID: "f", Reason: "x"})
+		s.AppendSkipped(SkippedFile{FileID: fmt.Sprintf("f%d", i), Reason: "x"})
 	}
 	snap := s.Snapshot()
 	if len(snap.Skipped) != maxSkipped {
@@ -150,3 +151,14 @@ func TestSnapshotIsIndependent(t *testing.T) {
 	}
 }
 
+
+func TestAppendSkipped_DedupsByFileID(t *testing.T) {
+	s := &State{}
+	s.AppendSkipped(SkippedFile{FileID: "a", Reason: "one"})
+	s.AppendSkipped(SkippedFile{FileID: "b", Reason: "x"})
+	s.AppendSkipped(SkippedFile{FileID: "a", Reason: "two"})
+	got := s.Snapshot().Skipped
+	if len(got) != 2 || got[1].FileID != "a" || got[1].Reason != "two" {
+		t.Fatalf("Skipped = %+v; want b then a(two)", got)
+	}
+}
