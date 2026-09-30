@@ -91,6 +91,7 @@ All configuration is via environment variables; see
 | `RAG_EMBED_MODEL` | `gemini-embedding-001` | Embedding model |
 | `RAG_EXTRACT_MODEL` | `gemini-3.5-flash-lite` | Flash OCR / extraction model |
 | `RAG_SYNC_INTERVAL` | `10m` | How often to run `changes.list` |
+| `RAG_HEAL_INTERVAL` | `24h` | How often to re-list whitelisted folders and re-enqueue files missing from the index (e.g. dropped after a 429). `0` disables |
 | `RAG_CHUNK_TOKENS` | `800` | Target chunk size |
 | `RAG_CHUNK_OVERLAP` | `100` | Tokens of overlap between chunks |
 | `RAG_EMBED_BATCH_SIZE` | `25` | Chunks per embedding request |

@@ -36,13 +36,16 @@ type SkippedFile struct {
 // Snapshot is a read-only copy of the State fields, returned by State.Snapshot.
 // It deliberately omits the mutex/clock so callers can pass it by value.
 type Snapshot struct {
-	PageToken           string        `json:"page_token,omitempty"`
-	LastSync            time.Time     `json:"last_sync,omitempty"`
-	InitialSyncComplete bool          `json:"initial_sync_complete,omitempty"`
-	CounterDay          string        `json:"counter_day,omitempty"`
-	EmbedTokensToday    int64         `json:"embed_tokens_today,omitempty"`
-	FlashRequestsToday  int64         `json:"flash_requests_today,omitempty"`
-	Skipped             []SkippedFile `json:"skipped,omitempty"`
+	PageToken           string               `json:"page_token,omitempty"`
+	LastSync            time.Time            `json:"last_sync,omitempty"`
+	InitialSyncComplete bool                 `json:"initial_sync_complete,omitempty"`
+	LastHeal            time.Time            `json:"last_heal,omitempty"`
+	LastHealReenqueued  int                  `json:"last_heal_reenqueued,omitempty"`
+	CounterDay          string               `json:"counter_day,omitempty"`
+	EmbedTokensToday    int64                `json:"embed_tokens_today,omitempty"`
+	FlashRequestsToday  int64                `json:"flash_requests_today,omitempty"`
+	Skipped             []SkippedFile        `json:"skipped,omitempty"`
+	Unindexable         map[string]time.Time `json:"unindexable,omitempty"`
 }
 
 // State is the persistent sync progress + per-day budget tracker.
@@ -51,10 +54,19 @@ type State struct {
 	PageToken           string        `json:"page_token,omitempty"`
 	LastSync            time.Time     `json:"last_sync,omitempty"`
 	InitialSyncComplete bool          `json:"initial_sync_complete,omitempty"`
+	LastHeal            time.Time     `json:"last_heal,omitempty"`
+	LastHealReenqueued  int           `json:"last_heal_reenqueued,omitempty"`
 	CounterDay          string        `json:"counter_day,omitempty"`
 	EmbedTokensToday    int64         `json:"embed_tokens_today,omitempty"`
 	FlashRequestsToday  int64         `json:"flash_requests_today,omitempty"`
 	Skipped             []SkippedFile `json:"skipped,omitempty"`
+
+	// Unindexable maps fileID -> the Drive modifiedTime at which the file was
+	// found unindexable (skipped, or out of retries). Unlike Skipped it is
+	// never evicted, so heal can trust it; an edit past that time clears it.
+	Unindexable map[string]time.Time `json:"unindexable,omitempty"`
+	// Failures counts consecutive transient ingest failures per fileID.
+	Failures map[string]int `json:"failures,omitempty"`
 
 	// now is the clock used for Pacific-day rollover. Tests override it.
 	// Defaults to time.Now when nil.
@@ -135,9 +147,17 @@ func (s *State) Snapshot() Snapshot {
 		PageToken:           s.PageToken,
 		LastSync:            s.LastSync,
 		InitialSyncComplete: s.InitialSyncComplete,
+		LastHeal:            s.LastHeal,
+		LastHealReenqueued:  s.LastHealReenqueued,
 		CounterDay:          s.CounterDay,
 		EmbedTokensToday:    s.EmbedTokensToday,
 		FlashRequestsToday:  s.FlashRequestsToday,
+	}
+	if len(s.Unindexable) > 0 {
+		cp.Unindexable = make(map[string]time.Time, len(s.Unindexable))
+		for k, v := range s.Unindexable {
+			cp.Unindexable[k] = v
+		}
 	}
 	if len(s.Skipped) > 0 {
 		cp.Skipped = make([]SkippedFile, len(s.Skipped))
@@ -174,6 +194,46 @@ func (s *State) SetInitialSyncComplete(done bool) {
 	s.InitialSyncComplete = done
 }
 
+// SetLastHeal records the last completed self-heal pass and how many files
+// it re-enqueued.
+func (s *State) SetLastHeal(t time.Time, reenqueued int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LastHeal = t
+	s.LastHealReenqueued = reenqueued
+}
+
+// MarkUnindexable records that fileID, at Drive modifiedTime mtime, can't be
+// indexed. Clears its failure count.
+func (s *State) MarkUnindexable(fileID string, mtime time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Unindexable == nil {
+		s.Unindexable = map[string]time.Time{}
+	}
+	s.Unindexable[fileID] = mtime
+	delete(s.Failures, fileID)
+}
+
+// MarkIndexed forgets any failure or unindexable record for fileID.
+func (s *State) MarkIndexed(fileID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.Unindexable, fileID)
+	delete(s.Failures, fileID)
+}
+
+// RecordFailure bumps fileID's consecutive-failure count and returns it.
+func (s *State) RecordFailure(fileID string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Failures == nil {
+		s.Failures = map[string]int{}
+	}
+	s.Failures[fileID]++
+	return s.Failures[fileID]
+}
+
 // AddEmbedTokens increments the embedding-token counter, rolling the day over
 // first if the Pacific calendar day has changed.
 func (s *State) AddEmbedTokens(n int64) {
@@ -196,6 +256,13 @@ func (s *State) AddFlashRequest() {
 func (s *State) AppendSkipped(sk SkippedFile) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// One entry per file: a re-skip replaces the old entry.
+	for i := range s.Skipped {
+		if s.Skipped[i].FileID == sk.FileID {
+			s.Skipped = append(s.Skipped[:i], s.Skipped[i+1:]...)
+			break
+		}
+	}
 	s.Skipped = append(s.Skipped, sk)
 	if over := len(s.Skipped) - maxSkipped; over > 0 {
 		// Drop oldest `over` entries.

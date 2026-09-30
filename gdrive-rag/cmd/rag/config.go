@@ -23,6 +23,7 @@ type Config struct {
 
 	// Tuning.
 	SyncInterval   time.Duration
+	HealInterval   time.Duration
 	ChunkTokens    int
 	ChunkOverlap   int
 	EmbedBatchSize int
@@ -61,6 +62,9 @@ func LoadConfig() (*Config, error) {
 
 	var err error
 	if c.SyncInterval, err = getDuration("RAG_SYNC_INTERVAL", 10*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.HealInterval, err = getDuration("RAG_HEAL_INTERVAL", 24*time.Hour); err != nil {
 		return nil, err
 	}
 	if c.ChunkTokens, err = getInt("RAG_CHUNK_TOKENS", 800); err != nil {

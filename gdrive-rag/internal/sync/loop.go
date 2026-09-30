@@ -54,6 +54,7 @@ type Config struct {
 	WhitelistedFolders []string
 
 	Interval      time.Duration
+	HealInterval  time.Duration // self-heal cadence (see heal.go); <= 0 disables
 	ChunkTokens   int
 	ChunkOverlap  int
 	MaxFileSizeMB int
@@ -82,6 +83,7 @@ type Looper struct {
 	whitelisted []string
 
 	interval      time.Duration
+	healInterval  time.Duration
 	chunkTokens   int
 	chunkOverlap  int
 	maxFileSizeMB int
@@ -158,6 +160,7 @@ func newLooperWithDeps(cfg Config, d driveClient, x extractor, e embedder) *Loop
 		embed:         e,
 		whitelisted:   append([]string(nil), cfg.WhitelistedFolders...),
 		interval:      cfg.Interval,
+		healInterval:  cfg.HealInterval,
 		chunkTokens:   cfg.ChunkTokens,
 		chunkOverlap:  cfg.ChunkOverlap,
 		maxFileSizeMB: cfg.MaxFileSizeMB,
@@ -260,25 +263,20 @@ func (l *Looper) Reindex(ctx context.Context, folderID string) error {
 		// because the admin endpoint is local-only; the handler can do it.
 		folders = []string{folderID}
 	}
-	for _, fid := range folders {
-		if err := l.drive.ListFolder(ctx, fid, func(f *drive.File) error {
-			path, err := l.drive.AncestryPath(ctx, f.ID, l.whitelisted)
-			if err != nil {
-				l.logger.Warn("sync: AncestryPath failed during reindex", "fileID", f.ID, "err", err)
-				path = ""
-			}
-			return l.queue.Enqueue(queueItemFromFile(f, path))
-		}); err != nil {
-			return fmt.Errorf("sync: reindex folder %s: %w", fid, err)
-		}
+	items, _, err := l.walkFolders(ctx, folders, nil)
+	if err != nil {
+		return fmt.Errorf("sync: reindex: %w", err)
 	}
-	return nil
+	return l.queue.EnqueueMany(items)
 }
 
 // Status is a read-only snapshot of sync progress and budget usage, reported
 // via the /status HTTP endpoint.
 type Status struct {
 	LastSync           time.Time
+	LastHeal           time.Time
+	HealReenqueued     int
+	UnindexableCount   int
 	DocumentCount      int
 	ChunkCount         int
 	QueueDepth         int
@@ -298,6 +296,9 @@ func (l *Looper) Status(ctx context.Context) Status {
 	snap := l.state.Snapshot()
 	st := Status{
 		LastSync:           snap.LastSync,
+		LastHeal:           snap.LastHeal,
+		HealReenqueued:     snap.LastHealReenqueued,
+		UnindexableCount:   len(snap.Unindexable),
 		QueueDepth:         l.queue.Len(),
 		SkippedCount:       len(snap.Skipped),
 		EmbedTokensToday:   snap.EmbedTokensToday,
