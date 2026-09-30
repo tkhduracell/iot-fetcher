@@ -6,7 +6,6 @@ import {
   RoborockTargets,
   StartOutcome,
   classifyStart,
-  START_CONFIRM_DELAY_MS,
 } from '../lib/roborock';
 import { useRoborockStatus } from '../hooks/useRoborockStatus';
 

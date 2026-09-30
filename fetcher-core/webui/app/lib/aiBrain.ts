@@ -214,8 +214,6 @@ export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T>
   return body as T;
 }
 
-export const fetchHealth = (signal?: AbortSignal) => getJson<Health>('healthz', signal);
-
 export const fetchStatus = (signal?: AbortSignal) => getJson<Status>('api/status', signal);
 
 export const fetchAgents = (signal?: AbortSignal) =>
