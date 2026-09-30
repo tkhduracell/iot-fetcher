@@ -39,6 +39,7 @@ type Snapshot struct {
 	PageToken           string        `json:"page_token,omitempty"`
 	LastSync            time.Time     `json:"last_sync,omitempty"`
 	InitialSyncComplete bool          `json:"initial_sync_complete,omitempty"`
+	LastHeal            time.Time     `json:"last_heal,omitempty"`
 	CounterDay          string        `json:"counter_day,omitempty"`
 	EmbedTokensToday    int64         `json:"embed_tokens_today,omitempty"`
 	FlashRequestsToday  int64         `json:"flash_requests_today,omitempty"`
@@ -51,6 +52,7 @@ type State struct {
 	PageToken           string        `json:"page_token,omitempty"`
 	LastSync            time.Time     `json:"last_sync,omitempty"`
 	InitialSyncComplete bool          `json:"initial_sync_complete,omitempty"`
+	LastHeal            time.Time     `json:"last_heal,omitempty"`
 	CounterDay          string        `json:"counter_day,omitempty"`
 	EmbedTokensToday    int64         `json:"embed_tokens_today,omitempty"`
 	FlashRequestsToday  int64         `json:"flash_requests_today,omitempty"`
@@ -135,6 +137,7 @@ func (s *State) Snapshot() Snapshot {
 		PageToken:           s.PageToken,
 		LastSync:            s.LastSync,
 		InitialSyncComplete: s.InitialSyncComplete,
+		LastHeal:            s.LastHeal,
 		CounterDay:          s.CounterDay,
 		EmbedTokensToday:    s.EmbedTokensToday,
 		FlashRequestsToday:  s.FlashRequestsToday,
@@ -172,6 +175,13 @@ func (s *State) SetInitialSyncComplete(done bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.InitialSyncComplete = done
+}
+
+// SetLastHeal records the last completed self-heal pass.
+func (s *State) SetLastHeal(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.LastHeal = t
 }
 
 // AddEmbedTokens increments the embedding-token counter, rolling the day over

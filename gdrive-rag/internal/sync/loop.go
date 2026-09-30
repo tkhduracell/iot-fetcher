@@ -54,6 +54,7 @@ type Config struct {
 	WhitelistedFolders []string
 
 	Interval      time.Duration
+	HealInterval  time.Duration // self-heal cadence (see heal.go); <= 0 disables
 	ChunkTokens   int
 	ChunkOverlap  int
 	MaxFileSizeMB int
@@ -82,6 +83,7 @@ type Looper struct {
 	whitelisted []string
 
 	interval      time.Duration
+	healInterval  time.Duration
 	chunkTokens   int
 	chunkOverlap  int
 	maxFileSizeMB int
@@ -158,6 +160,7 @@ func newLooperWithDeps(cfg Config, d driveClient, x extractor, e embedder) *Loop
 		embed:         e,
 		whitelisted:   append([]string(nil), cfg.WhitelistedFolders...),
 		interval:      cfg.Interval,
+		healInterval:  cfg.HealInterval,
 		chunkTokens:   cfg.ChunkTokens,
 		chunkOverlap:  cfg.ChunkOverlap,
 		maxFileSizeMB: cfg.MaxFileSizeMB,

@@ -29,12 +29,18 @@ func (l *Looper) tick(ctx context.Context) error {
 		}
 	}
 
-	// 2. Reconcile Drive changes since the last persisted pageToken.
+	// 2. Self-heal: re-enqueue files the index lost. Best-effort; a failed
+	// pass is retried next tick and never blocks change reconciliation.
+	if err := l.heal(ctx); err != nil {
+		l.logger.Warn("sync: heal failed", "err", err)
+	}
+
+	// 3. Reconcile Drive changes since the last persisted pageToken.
 	if err := l.reconcileChanges(ctx); err != nil {
 		return err
 	}
 
-	// 3. Drain the queue. Ingest errors are per-file; only budget exhaustion
+	// 4. Drain the queue. Ingest errors are per-file; only budget exhaustion
 	// aborts the whole drain.
 	if err := l.drainQueue(ctx); err != nil {
 		return err
@@ -131,10 +137,11 @@ func (l *Looper) drainQueue(ctx context.Context) error {
 				At:       l.now(),
 			})
 		default:
-			// Transient failure (network, API 5xx, etc.). Log and drop — a
-			// subsequent Drive change event, or an operator-triggered reindex,
-			// will re-enqueue the file. Don't pollute state.Skipped with
-			// transient noise; that list is for permanently-unindexable files.
+			// Transient failure (network, API 5xx, 429, etc.). Log and drop —
+			// the next heal pass re-enqueues any file with no chunks in the
+			// store, so unchanged files aren't lost forever. Don't pollute
+			// state.Skipped with transient noise; that list is for
+			// permanently-unindexable files.
 			l.logger.Warn("sync: ingest failed", "fileID", item.FileID, "err", err)
 		}
 	}

@@ -149,6 +149,7 @@ func run() error {
 		Embedder:           embClient,
 		WhitelistedFolders: cfg.WhitelistedFolders,
 		Interval:           cfg.SyncInterval,
+		HealInterval:       cfg.HealInterval,
 		ChunkTokens:        cfg.ChunkTokens,
 		ChunkOverlap:       cfg.ChunkOverlap,
 		MaxFileSizeMB:      cfg.MaxFileSizeMB,
