@@ -19,6 +19,9 @@ type Config struct {
 	// Indexing.
 	WhitelistedFolders []string
 	EmbedModel         string
+	EmbedProvider      string // "gemini" or "ollama"
+	OllamaURL          string
+	EmbedQueryPrefix   string // ollama only
 	ExtractModel       string
 
 	// Tuning.
@@ -53,6 +56,10 @@ func LoadConfig() (*Config, error) {
 		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		WhitelistedFolders: splitCSV(os.Getenv("RAG_ROOT_FOLDER_IDS")),
 
+		EmbedProvider: getenv("RAG_EMBED_PROVIDER", "gemini"),
+		OllamaURL:     getenv("RAG_OLLAMA_URL", "http://ollama:11434"),
+		EmbedQueryPrefix: getenv("RAG_EMBED_QUERY_PREFIX",
+			"Instruct: Given a search query, retrieve relevant passages from the user's documents\nQuery: "),
 		EmbedModel:   getenv("RAG_EMBED_MODEL", "gemini-embedding-001"),
 		ExtractModel: getenv("RAG_EXTRACT_MODEL", "gemini-3.5-flash-lite"),
 		ListenAddr:   getenv("RAG_LISTEN_ADDR", ":8090"),
@@ -135,6 +142,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxFileSizeMB <= 0 {
 		return errors.New("RAG_MAX_FILE_SIZE_MB must be > 0")
+	}
+	if c.EmbedProvider != "gemini" && c.EmbedProvider != "ollama" {
+		return errors.New(`RAG_EMBED_PROVIDER must be "gemini" or "ollama"`)
 	}
 	if c.EmbedTPMCap <= 0 {
 		return errors.New("RAG_EMBED_TPM_CAP must be > 0")

@@ -116,6 +116,8 @@ services:
     restart: unless-stopped
     volumes:
       - gdrive-rag-data:/data
+    depends_on:
+      - ollama
     labels:
       - "wud.watch=true"
       - "wud.watch.digest=true"
@@ -132,7 +134,6 @@ services:
       - database-auth
       - gdrive-rag
       - sonos-http-api
-      - ollama
       - docker-proxy
     labels:
       - "wud.watch=true"
@@ -168,12 +169,12 @@ services:
     image: ollama/ollama:latest
     hostname: ollama
     restart: unless-stopped
+    # Serves gdrive-rag's embeddings (RAG_EMBED_PROVIDER=ollama,
+    # qwen3-embedding:0.6b) so indexing has no cloud quota. ai-brain does not
+    # use it: a chat model on the Pi's CPU mostly timed out (ai-brain/README.md).
     environment:
-      # Belt-and-braces default alongside ai-brain's own ollama: context
-      # window (16384 unless NUM_CTX_BY_MODEL says otherwise; passed as
-      # options.num_ctx on every /api/chat call -- see NUM_CTX_BY_MODEL in
-      # ai-brain/README.md). This is the server's own fallback for any client
-      # that does not set options.num_ctx explicitly. Keep the two in step.
+      # Server fallback for clients that don't send options.num_ctx; gdrive-rag
+      # sends its own (4096) per request.
       - OLLAMA_CONTEXT_LENGTH=16384
     volumes:
       - ollama-models:/root/.ollama
