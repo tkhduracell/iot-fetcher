@@ -33,7 +33,10 @@ from ai_brain.regex_safety import check_pattern
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 from ai_brain.tools.http import decode_json, request
 
-VM_LOOPS = frozenset({"brain", "energy", "health"})
+# house-ops reads HA's current state; VM holds the same entities' history
+# (ha_* metrics from the HA->VM exporter), which is what turns a handful of
+# snapshots into a real baseline.
+VM_LOOPS = frozenset({"brain", "energy", "health", "house-ops"})
 
 # Fixed windows, each 10-28 buckets. Points multiply by series (one per label
 # combination), so a tight per-series count is what keeps 20 series small.

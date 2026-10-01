@@ -132,6 +132,8 @@ def test_loop_allowlists(registry):
         "usage_status",
     }
     assert {s.name for s in registry.specs_for("house-ops")} == {
+        "vm_query",
+        "vm_metrics",
         "ha_context",
         "ha_error_log",
         "airbnb_calendar",
