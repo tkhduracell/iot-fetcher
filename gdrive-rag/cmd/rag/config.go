@@ -21,6 +21,8 @@ type Config struct {
 	EmbedModel         string
 	EmbedProvider      string // "gemini" or "ollama"
 	OllamaURL          string
+	OllamaBatchSize    int
+	OllamaTimeout      time.Duration
 	EmbedQueryPrefix   string // ollama only
 	ExtractModel       string
 
@@ -35,10 +37,10 @@ type Config struct {
 	LogLevel       string
 
 	// Budget caps.
-	EmbedTPMCap    int64
-	EmbedRPMCap    int64 // reserved; currently unused
-	FlashRPMCap    int
-	FlashDailyCap  int64
+	EmbedTPMCap   int64
+	EmbedRPMCap   int64 // reserved; currently unused
+	FlashRPMCap   int
+	FlashDailyCap int64
 
 	// File-size cutoffs.
 	MaxFileSizeMB      int
@@ -81,6 +83,12 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	if c.EmbedBatchSize, err = getInt("RAG_EMBED_BATCH_SIZE", 25); err != nil {
+		return nil, err
+	}
+	if c.OllamaBatchSize, err = getInt("RAG_OLLAMA_BATCH_SIZE", 8); err != nil {
+		return nil, err
+	}
+	if c.OllamaTimeout, err = getDuration("RAG_OLLAMA_TIMEOUT", 15*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.EmbedTPMCap, err = getInt64("RAG_EMBED_TPM_CAP", 200_000); err != nil {
