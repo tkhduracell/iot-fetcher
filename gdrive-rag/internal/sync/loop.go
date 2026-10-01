@@ -49,7 +49,7 @@ type Config struct {
 	Store     *store.Store
 	Drive     *drive.Client
 	Extractor *extract.Router
-	Embedder  *embed.Client
+	Embedder  embed.Embedder
 
 	WhitelistedFolders []string
 

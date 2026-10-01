@@ -99,7 +99,7 @@ type Service struct {
 // NewService constructs a Service backed by the concrete types used in
 // production. Use zero-value construction (&Service{...}) when swapping fakes
 // in tests.
-func NewService(looper *syncpkg.Looper, embedder *embed.Client, st *store.Store, logger *slog.Logger) *Service {
+func NewService(looper *syncpkg.Looper, embedder embed.Embedder, st *store.Store, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
