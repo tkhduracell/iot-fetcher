@@ -112,7 +112,8 @@ func run() error {
 		embClient, err = embed.NewOllamaClient(embed.OllamaConfig{
 			URL:          cfg.OllamaURL,
 			Model:        cfg.EmbedModel,
-			BatchSize:    cfg.EmbedBatchSize,
+			BatchSize:    cfg.OllamaBatchSize,
+			Timeout:      cfg.OllamaTimeout,
 			QueryPrefix:  cfg.EmbedQueryPrefix,
 			RecordTokens: func(n int64) { st.AddEmbedTokens(n) },
 		})

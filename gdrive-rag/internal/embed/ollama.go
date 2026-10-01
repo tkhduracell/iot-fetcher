@@ -25,9 +25,14 @@ type Embedder interface {
 // models and would allocate far more memory than an embedding needs.
 const ollamaNumCtx = 4096
 
-// ollamaTimeout bounds one /api/embed call. The model runs on the Pi's CPU,
-// and the first call also loads it from disk.
-const ollamaTimeout = 5 * time.Minute
+// DefaultOllamaTimeout bounds one /api/embed call when OllamaConfig.Timeout
+// is unset. The model runs on the Pi's CPU, and the first call also loads it
+// from disk; a 25-chunk batch was observed taking over 5 minutes.
+const DefaultOllamaTimeout = 15 * time.Minute
+
+// DefaultOllamaBatchSize keeps one request short on a CPU-only host, so a
+// slow batch doesn't hit the timeout and fail the whole file.
+const DefaultOllamaBatchSize = 8
 
 // OllamaConfig configures an OllamaClient.
 type OllamaConfig struct {
@@ -35,8 +40,10 @@ type OllamaConfig struct {
 	URL string
 	// Model is the embedding model tag, e.g. "qwen3-embedding:0.6b".
 	Model string
-	// BatchSize caps texts per request; DefaultBatchSize when <= 0.
+	// BatchSize caps texts per request; DefaultOllamaBatchSize when <= 0.
 	BatchSize int
+	// Timeout bounds one request; DefaultOllamaTimeout when <= 0.
+	Timeout time.Duration
 	// QueryPrefix is prepended to search queries only. Qwen3-Embedding is
 	// instruction-tuned on the query side and expects documents bare.
 	QueryPrefix string
@@ -65,7 +72,11 @@ func NewOllamaClient(cfg OllamaConfig) (*OllamaClient, error) {
 	}
 	batch := cfg.BatchSize
 	if batch <= 0 {
-		batch = DefaultBatchSize
+		batch = DefaultOllamaBatchSize
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = DefaultOllamaTimeout
 	}
 	return &OllamaClient{
 		url:         strings.TrimRight(cfg.URL, "/"),
@@ -73,7 +84,7 @@ func NewOllamaClient(cfg OllamaConfig) (*OllamaClient, error) {
 		batchSize:   batch,
 		queryPrefix: cfg.QueryPrefix,
 		record:      cfg.RecordTokens,
-		http:        &http.Client{Timeout: ollamaTimeout},
+		http:        &http.Client{Timeout: timeout},
 	}, nil
 }
 
