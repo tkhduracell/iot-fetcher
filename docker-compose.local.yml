@@ -5,7 +5,6 @@ services:
     container_name: victoria-metrics
     volumes:
       - ./volumes/victoria-metrics:/victoria-metrics-data
-      - ./wud/metrics_password:/etc/wud-metrics-password:ro
 
   database-auth:
     container_name: victoria-metrics-auth
@@ -87,9 +86,7 @@ services:
         limits:
           cpus: 2.75
 
-  wud:
-    container_name: wud
-    env_file: ./wud/.env
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+  watchdog:
+    container_name: watchdog
+    env_file: ./watchdog/.env
 
