@@ -221,13 +221,12 @@ services:
     environment:
       - TZ=Europe/Stockholm
 
-  wud:
-    image: getwud/wud
+  watchdog:
+    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/watchdog:latest
     restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      - WUD_WATCHER_LOCAL_WATCHBYDEFAULT=false
-      - WUD_WATCHER_LOCAL_CRON=*/5 * * * *
-      - WUD_REGISTRY_CUSTOM_GAR_URL=https://europe-docker.pkg.dev
-      - WUD_TRIGGER_DOCKER_LOCAL_PRUNE=true
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./volumes/watchdog:/data
+    labels:
+      - "wud.watch=true"

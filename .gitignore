@@ -8,8 +8,8 @@
 !.env.example
 !.env.test
 
-# Bare-password files for services whose config can't take a KEY=VALUE env
-# file directly (e.g. VictoriaMetrics' basic_auth.password_file).
+# Leftover bare-password file from the retired wud service; may still exist in
+# old checkouts (e.g. on rpi5), so keep it ignored.
 wud/metrics_password
 
 # --- secrets: cloud + service-account credentials --------------------------
