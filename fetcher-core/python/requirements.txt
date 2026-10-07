@@ -90,7 +90,7 @@ passlib==1.7.4
     # via plugp100
 plugp100==6.0.1
     # via iot-fetcher (pyproject.toml)
-propcache==0.5.2
+propcache==0.5.4
     # via
     #   aiohttp
     #   yarl
