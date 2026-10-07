@@ -558,7 +558,7 @@ wheels = [
 
 [[package]]
 name = "influxdb3-python"
-version = "0.20.0"
+version = "0.21.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -567,9 +567,9 @@ dependencies = [
     { name = "reactivex" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/f0/3fb234e83316e439a91d4d7ee5a2f569b9b81e5a709618c4168dca3a087b/influxdb3_python-0.20.0.tar.gz", hash = "sha256:f1e28c2f4f244d48006beeb82be7aea82ebdd3b3e1807250d124b6f1d53c5943", size = 102084, upload-time = "2026-06-11T06:49:53.012Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/e0/080fbe58f87d3826a4e14abe98ffca6934c729a325e9e442aadd52f4cd83/influxdb3_python-0.21.0.tar.gz", hash = "sha256:6c7a84c0d8f56860d90eabd4c790b88ca4425b896588ad1a213a5173256d481b", size = 91634, upload-time = "2026-08-27T07:32:07.614Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/2f/06961cdb1d38d0cdb3c6876970db227e69824a293896af6d1eb983fa1534/influxdb3_python-0.20.0-py3-none-any.whl", hash = "sha256:0914f05c2ed9b96f2962fb3d410068dda9c411b562dab22fae1d6c6599a37927", size = 86330, upload-time = "2026-06-11T06:49:52.016Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/6b/b62263a419ab29240cbd8301284d94a70562aab48850c6880a3e4ef5457f/influxdb3_python-0.21.0-py3-none-any.whl", hash = "sha256:53663a8e9f7f3e8d37b6fe9a37cb9d6e6356e16ffd6e1d837dcedf81c15e1011", size = 69604, upload-time = "2026-08-27T07:32:06.232Z" },
 ]
 
 [[package]]
@@ -591,7 +591,7 @@ dependencies = [
 requires-dist = [
     { name = "google-cloud-storage", specifier = "==3.15.0" },
     { name = "iaqualink", specifier = "==0.6.0" },
-    { name = "influxdb3-python", specifier = "==0.20.0" },
+    { name = "influxdb3-python", specifier = "==0.21.0" },
     { name = "ngenicpy", specifier = "==0.5.2" },
     { name = "plugp100", specifier = "==6.0.1" },
     { name = "requests", specifier = "==2.34.2" },

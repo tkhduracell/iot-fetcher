@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "requests==2.34.2",
-    "influxdb3-python==0.20.0",
+    "influxdb3-python==0.21.0",
     "schedule==1.2.2",
     "google-cloud-storage==3.15.0",
     "ngenicpy==0.5.2",
