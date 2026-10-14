@@ -27,6 +27,7 @@ DEFAULT_SEED_ROOT = Path(__file__).resolve().parents[2] / "seed"
 # calls -- every round ends in end_cycle -- so a reasoning model that answers
 # in prose burns its rounds and writes nothing, however well it reasons.
 DEFAULT_LLM_CHAIN = (
+    "lan:qwen3.8:27b-mxfp8,"
     "gemini:gemini-3.8-flash,"
     "lan:qwen3.8:27b-mlx,"
     "gemini:gemini-3.5-flash-lite,"
@@ -88,8 +89,9 @@ CYCLE_MAX_ROUNDS_HARD_CEILING = 64
 # default: ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
 # ai_brain.llm.ollama.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
 # consulted: its window is the API's, not ours to set. Only qwen3.8 on the
-# LAN Mac gets 128k; the rest are spelled out at their kind's default.
-DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384"
+# LAN Mac gets 128k (256k for the mxfp8 build, preferred first in the
+# chain and skipped when no LAN host serves it); the rest are spelled out at their kind's default.
+DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8:27b-mxfp8=262144,lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384"
 
 # Below this a cycle's persona+memory prompt alone does not fit; above it no
 # model in the chain has a window to match (qwen3.8 tops out at 256k).
