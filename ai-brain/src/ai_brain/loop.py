@@ -773,6 +773,7 @@ class AgentLoop:
                         thought_signature=reply.thought_signature,
                         model=reply.model,
                         thinking=reply.thinking,
+                        provider_blocks=reply.provider_blocks,
                     )
                 )
                 if not reply.tool_calls:

@@ -5,9 +5,19 @@ per-day budgets hold across the whole process. Experts starve first: they may
 only spend while both remaining daily fractions are above
 ``EXPERT_FLOOR``, leaving the brain the last 40% of the day.
 
-State is JSON on disk (``{"day": ..., "buckets": {...}}``), rewritten through a
-temp file plus ``os.replace`` after every mutation, so a crash mid-write never
-leaves a torn ledger.
+A paid key (anthropic:) is budgeted in dollars instead, by a USD *pool* that
+every key drawing on the same prepaid credit shares. The pool's period is the
+plan's billing cycle, not the calendar month or the Pacific day: credits land
+on the billing day and expire unused on the next one. Each day gets an
+allowance of what is left divided by the days left, frozen at the day's first
+look -- so an expensive day shrinks the days after it, and a quiet one lets
+them spend more, and the month ends close to spent rather than either early
+or with credit left to expire. The expert floor applies to the day's
+allowance the same way it applies to the free tier's daily quota.
+
+State is JSON on disk (``{"day": ..., "buckets": {...}, "pools": {...}}``),
+rewritten through a temp file plus ``os.replace`` after every mutation, so a
+crash mid-write never leaves a torn ledger.
 """
 
 from __future__ import annotations
@@ -18,7 +28,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -31,6 +41,12 @@ BACKOFF_BASE_S = 60.0
 BACKOFF_MAX_S = 3600.0
 EXHAUSTED_AFTER_429 = 3
 NOT_FOUND_DISABLE_S = 86400.0
+# How long an out-of-credit key is parked before it is tried again. Not "until
+# the period resets": credits arrive *after* the plan payment clears, which
+# may be hours past the billing day's midnight, and a key parked for a month
+# by one early retry would sit out the whole cycle. A refused call is free, so
+# trying again a few times a day costs nothing.
+EXHAUSTED_RETRY_S = 6 * 3600.0
 
 Priority = Literal["brain", "expert"]
 
@@ -44,6 +60,8 @@ class Limits:
     # a model is reserved for the brain (or kept away from it) -- see
     # BRAIN_MODELS / EXPERT_MODELS in config.py.
     loops: frozenset[str] | None = None
+    # The USD pool this key spends from, if it is paid in dollars. See Pool.
+    usd_pool: str | None = None
 
     @property
     def daily_tokens(self) -> int:
@@ -61,6 +79,78 @@ class Decision:
     allowed: bool
     retry_at: float | None
     reason: str
+
+
+@dataclass(frozen=True)
+class Pool:
+    """A dollar budget per billing cycle, shared by every key naming it."""
+
+    monthly_usd: float
+    # Day of month the credit refreshes. A month without that day (31 in
+    # April) uses its last day.
+    billing_day: int = 1
+
+
+def _clamped(year: int, month: int, day: int) -> date:
+    for d in range(day, 27, -1):
+        try:
+            return date(year, month, d)
+        except ValueError:
+            continue
+    return date(year, month, min(day, 28))
+
+
+def _shift_month(year: int, month: int, by: int) -> tuple[int, int]:
+    index = year * 12 + (month - 1) + by
+    return index // 12, index % 12 + 1
+
+
+def period_start(today: date, billing_day: int) -> date:
+    """The billing cycle ``today`` falls in starts on this date."""
+    this = _clamped(today.year, today.month, billing_day)
+    if today >= this:
+        return this
+    return _clamped(*_shift_month(today.year, today.month, -1), billing_day)
+
+
+def next_period_start(start: date, billing_day: int) -> date:
+    return _clamped(*_shift_month(start.year, start.month, 1), billing_day)
+
+
+def _midnight(day: date) -> float:
+    return datetime(day.year, day.month, day.day, tzinfo=PACIFIC).timestamp()
+
+
+class _PoolState:
+    def __init__(self, pool: Pool):
+        self.pool = pool
+        self.period_start = ""
+        self.usd_period = 0.0
+        self.usd_day = 0.0
+        # The day's allowance, frozen at its first look; None until then.
+        self.day_allowance: float | None = None
+        self.exhausted_until: float | None = None
+
+    def to_json(self) -> dict:
+        return {
+            "period_start": self.period_start,
+            "usd_period": self.usd_period,
+            "usd_day": self.usd_day,
+            "day_allowance": self.day_allowance,
+            "exhausted_until": self.exhausted_until,
+        }
+
+    def load_json(self, raw: dict) -> None:
+        self.period_start = str(raw.get("period_start", ""))
+        self.usd_period = float(raw.get("usd_period", 0.0))
+        self.usd_day = float(raw.get("usd_day", 0.0))
+        allowance = raw.get("day_allowance")
+        self.day_allowance = None if allowance is None else float(allowance)
+        self.exhausted_until = raw.get("exhausted_until")
+
+    def reset_day(self) -> None:
+        self.usd_day = 0.0
+        self.day_allowance = None
 
 
 def _day_of(ts: float) -> str:
@@ -135,11 +225,13 @@ class Ledger:
         limits: dict[str, Limits],
         path: Path,
         clock: Callable[[], float] = time.time,
+        pools: dict[str, Pool] | None = None,
     ):
         self._limits = dict(limits)
         self._path = Path(path)
         self._clock = clock
         self._buckets = {key: _Bucket(lim) for key, lim in self._limits.items()}
+        self._pools = {name: _PoolState(pool) for name, pool in (pools or {}).items()}
         self._day = _day_of(self._clock())
         self._load()
 
@@ -162,8 +254,25 @@ class Ledger:
                     requests_day=bucket.limits.rpd // 2,
                     tokens_day=bucket.limits.daily_tokens // 2,
                 )
+            # Same for the month's dollars: half of it, gone.
+            for state in self._pools.values():
+                state.usd_period = state.pool.monthly_usd / 2
             self._save()
             return
+
+        # Pools first: their spend belongs to the billing cycle, not the day,
+        # so a stale day must not throw the month's spend away with it.
+        pools = raw.get("pools")
+        if isinstance(pools, dict):
+            for name, state in self._pools.items():
+                entry = pools.get(name)
+                if isinstance(entry, dict):
+                    try:
+                        state.load_json(entry)
+                    except (ValueError, TypeError):
+                        state.usd_period = state.pool.monthly_usd / 2
+                    if day != self._day:
+                        state.reset_day()
 
         if day != self._day:
             # Valid but stale: the day genuinely rolled over, so zero counters.
@@ -177,13 +286,17 @@ class Ledger:
                 except (ValueError, TypeError):
                     bucket.reset_day()
 
+    def _state(self) -> dict:
+        state: dict = {
+            "day": self._day,
+            "buckets": {key: b.to_json() for key, b in self._buckets.items()},
+        }
+        if self._pools:
+            state["pools"] = {name: p.to_json() for name, p in self._pools.items()}
+        return state
+
     def _save(self) -> None:
-        body = json.dumps(
-            {
-                "day": self._day,
-                "buckets": {key: b.to_json() for key, b in self._buckets.items()},
-            }
-        )
+        body = json.dumps(self._state())
         tmp = self._path.with_name(self._path.name + ".tmp")
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(body, encoding="utf-8")
@@ -198,10 +311,66 @@ class Ledger:
         self._day = day
         for bucket in self._buckets.values():
             bucket.reset_day()
+        for state in self._pools.values():
+            state.reset_day()
         # The roll is a real state change: without persisting it, a restart
         # reloads yesterday's day and daily counts from disk and the budget
         # stays spent until something else happens to write.
         self._save()
+
+    # ---------- pools ----------
+
+    def _pool_for(self, bucket: _Bucket) -> _PoolState | None:
+        name = bucket.limits.usd_pool
+        return self._pools.get(name) if name else None
+
+    def _sync_pool(self, state: _PoolState, now: float) -> date:
+        """Start a new billing cycle if one has begun; the next one's start."""
+        today = datetime.fromtimestamp(now, PACIFIC).date()
+        billing_day = state.pool.billing_day
+        start = period_start(today, billing_day)
+        if state.period_start != start.isoformat():
+            # An empty period_start is a pool that has never been synced (a
+            # fresh or corrupt ledger): adopt the current cycle without
+            # zeroing what the load already decided was spent.
+            if state.period_start:
+                state.usd_period = 0.0
+                state.usd_day = 0.0
+                state.day_allowance = None
+                state.exhausted_until = None
+            state.period_start = start.isoformat()
+            self._save()
+        return next_period_start(start, billing_day)
+
+    def _allowance(self, state: _PoolState, now: float) -> float:
+        nxt = self._sync_pool(state, now)
+        if state.day_allowance is None:
+            today = datetime.fromtimestamp(now, PACIFIC).date()
+            days_left = max(1, (nxt - today).days)
+            left = max(0.0, state.pool.monthly_usd - state.usd_period)
+            state.day_allowance = left / days_left
+            self._save()
+        return state.day_allowance
+
+    def _pool_decision(
+        self, state: _PoolState, priority: Priority, now: float
+    ) -> Decision | None:
+        """Why a pool forbids spending now, or None when it allows it."""
+        allowance = self._allowance(state, now)
+        if state.exhausted_until is not None and now < state.exhausted_until:
+            return Decision(False, state.exhausted_until, "exhausted")
+        if state.usd_period >= state.pool.monthly_usd:
+            nxt = self._sync_pool(state, now)
+            return Decision(False, _midnight(nxt), "usd_month")
+        if state.usd_day >= allowance:
+            return Decision(False, _next_midnight(now), "usd_day")
+        if (
+            priority == "expert"
+            and allowance > 0
+            and 1.0 - state.usd_day / allowance <= EXPERT_FLOOR
+        ):
+            return Decision(False, _next_midnight(now), "priority")
+        return None
 
     # ---------- queries ----------
 
@@ -226,10 +395,16 @@ class Ledger:
         if limits.loops is not None and priority not in limits.loops:
             return Decision(False, None, "reserved")
 
+        pool = self._pool_for(bucket)
+        if pool is not None:
+            refused = self._pool_decision(pool, priority, now)
+            if refused is not None:
+                return refused
+
         if bucket.requests_day >= limits.rpd or bucket.tokens_day >= limits.daily_tokens:
             return Decision(False, _next_midnight(now), "rpd")
 
-        if priority == "expert":
+        if priority == "expert" and pool is None:
             req_left, tok_left = self._fractions(bucket)
             if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
                 return Decision(False, _next_midnight(now), "priority")
@@ -290,10 +465,27 @@ class Ledger:
 
     def snapshot(self) -> dict:
         self._roll_day(self._clock())
-        return {
-            "day": self._day,
-            "buckets": {key: b.to_json() for key, b in self._buckets.items()},
-        }
+        return self._state()
+
+    def pools(self) -> list[dict]:
+        """Each USD pool's spend against its cycle and today's allowance."""
+        now = self._clock()
+        self._roll_day(now)
+        out = []
+        for name, state in self._pools.items():
+            allowance = self._allowance(state, now)
+            out.append(
+                {
+                    "pool": name,
+                    "period_start": state.period_start,
+                    "usd_period": round(state.usd_period, 4),
+                    "usd_limit": state.pool.monthly_usd,
+                    "usd_day": round(state.usd_day, 4),
+                    "usd_day_allowance": round(allowance, 4),
+                    "exhausted_until": state.exhausted_until,
+                }
+            )
+        return out
 
     def usage(self) -> dict:
         """Every key's spend against its budget, for a human or the brain to read.
@@ -323,11 +515,16 @@ class Ledger:
                     "disabled_until": bucket.get("disabled_until"),
                 }
             )
-        return {"day": snapshot["day"], "keys": keys}
+        out: dict = {"day": snapshot["day"], "keys": keys}
+        if self._pools:
+            out["pools"] = self.pools()
+        return out
 
     # ---------- mutations ----------
 
-    def record(self, key: str, prompt_tokens: int, completion_tokens: int) -> None:
+    def record(
+        self, key: str, prompt_tokens: int, completion_tokens: int, usd: float = 0.0
+    ) -> None:
         now = self._clock()
         self._roll_day(now)
         bucket = self._buckets.get(key)
@@ -338,6 +535,30 @@ class Ledger:
         bucket.recent.append((now, tokens))
         bucket.requests_day += 1
         bucket.tokens_day += tokens
+        pool = self._pool_for(bucket)
+        if pool is not None and usd:
+            self._sync_pool(pool, now)
+            pool.usd_day += float(usd)
+            pool.usd_period += float(usd)
+        self._save()
+
+    def record_exhausted(self, key: str) -> None:
+        """The provider says the prepaid credit behind this key is gone.
+
+        Parks the whole pool -- every key on it draws from the same balance --
+        or, for a key with no pool, just that key.
+        """
+        now = self._clock()
+        self._roll_day(now)
+        bucket = self._buckets.get(key)
+        if bucket is None:
+            return
+        pool = self._pool_for(bucket)
+        if pool is not None:
+            self._sync_pool(pool, now)
+            pool.exhausted_until = now + EXHAUSTED_RETRY_S
+        else:
+            bucket.disabled_until = now + EXHAUSTED_RETRY_S
         self._save()
 
     def record_429(self, key: str, retry_after_s: float | None) -> None:

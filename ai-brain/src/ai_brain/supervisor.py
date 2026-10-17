@@ -30,8 +30,13 @@ from ai_brain.approvals import Approvals
 from ai_brain.config import Settings, load_settings
 from ai_brain.events import EventBus
 from ai_brain.executors import Executors
-from ai_brain.ledger import Ledger
-from ai_brain.llm import PROVIDER_PREFIXES, ProviderChain, limits_from_settings
+from ai_brain.ledger import Ledger, Pool
+from ai_brain.llm import (
+    ANTHROPIC_POOL,
+    PROVIDER_PREFIXES,
+    ProviderChain,
+    limits_from_settings,
+)
 from ai_brain.loop import AgentLoop
 from ai_brain.memory import MemoryDir
 from ai_brain.metrics import MetricsWriter, render
@@ -122,6 +127,15 @@ def _check_chain(settings: Settings) -> None:
             ", ".join(settings.llm_chain),
         )
         raise SystemExit(2)
+    if any(entry.startswith("anthropic:") for entry in settings.llm_chain) and (
+        not settings.anthropic_api_key
+    ):
+        log.error(
+            "LLM_CHAIN has anthropic entries (%s) but ANTHROPIC_API_KEY is empty; "
+            "refusing to start",
+            ", ".join(settings.llm_chain),
+        )
+        raise SystemExit(2)
 
     chain = set(settings.llm_chain)
     for var, models in (("BRAIN_MODELS", settings.brain_models), ("EXPERT_MODELS", settings.expert_models)):
@@ -168,7 +182,12 @@ def build(
         memory.seed_from(settings.seed_root)
 
     events = EventBus()
-    ledger = Ledger(limits_from_settings(settings), settings.memory_root / "_ledger.json", clock)
+    pools = {
+        ANTHROPIC_POOL: Pool(settings.claude_monthly_usd, settings.claude_billing_day)
+    }
+    ledger = Ledger(
+        limits_from_settings(settings), settings.memory_root / "_ledger.json", clock, pools
+    )
     factory = chain_factory or ProviderChain.from_settings
     chain = factory(settings, ledger)
 
