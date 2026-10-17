@@ -404,7 +404,11 @@ class Ledger:
         if bucket.requests_day >= limits.rpd or bucket.tokens_day >= limits.daily_tokens:
             return Decision(False, _next_midnight(now), "rpd")
 
-        if priority == "expert":
+        # The floor holds the last 40% back for the brain, so it only means
+        # something on a key the brain may spend. On an expert-only key
+        # (EXPERT_MODELS without BRAIN_MODELS) it just strands that share.
+        brain_may_use = limits.loops is None or "brain" in limits.loops
+        if priority == "expert" and brain_may_use:
             req_left, tok_left = self._fractions(bucket)
             if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
                 return Decision(False, _next_midnight(now), "priority")
