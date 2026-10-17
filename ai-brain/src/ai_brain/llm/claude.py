@@ -152,6 +152,21 @@ class AnthropicProvider(Provider):
         self._api_key = api_key
         self._effort = effort
         self._client = client
+        # The previous reply's prompt size: the conversation only grows, so it
+        # is a floor on what a call that never answered was sending.
+        self._last_prompt_tokens = 0
+
+    def timeout_cost_usd(self, max_tokens: int) -> float:
+        """A timed-out call priced as if nothing had been cached and the
+        whole output budget had been spent -- the most it could have cost
+        given the last prompt this provider saw."""
+        return price_usd(
+            self.model,
+            Usage(
+                prompt_tokens=self._last_prompt_tokens,
+                completion_tokens=max(max_tokens, MIN_MAX_TOKENS),
+            ),
+        )
 
     def _sdk(self) -> Any:
         if self._client is None:
@@ -173,7 +188,12 @@ class AnthropicProvider(Provider):
         try:
             response = await self._sdk().messages.create(**kwargs)
         except anthropic.APITimeoutError as err:
-            raise ProviderError(f"{self.key} timed out: {err}", kind="timeout") from err
+            cost = self.timeout_cost_usd(max_tokens)
+            raise ProviderError(
+                f"{self.key} timed out: {err}",
+                kind="timeout",
+                usage=Usage(prompt_tokens=0, completion_tokens=0, cost_usd=cost),
+            ) from err
         except anthropic.APIConnectionError as err:
             raise ProviderError(f"{self.key} transport error: {err}", kind="server") from err
         except anthropic.APIStatusError as err:
@@ -203,6 +223,7 @@ class AnthropicProvider(Provider):
             cache_write_tokens=cache_write,
         )
         usage = replace(usage, cost_usd=price_usd(self.model, usage))
+        self._last_prompt_tokens = usage.prompt_tokens
 
         if response.stop_reason == "refusal":
             # A safety decline is an HTTP 200, not an error, and it is billed.

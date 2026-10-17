@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import fnmatch
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -358,8 +359,10 @@ def _float(raw: str, default: float) -> float:
     if not raw:
         return default
     value = float(raw)
-    if value < 0:
-        raise ValueError(f"expected a non-negative number, got {raw!r}")
+    # nan compares False against everything and inf never runs out, so
+    # either would silently switch the cap off.
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"expected a finite, non-negative number, got {raw!r}")
     return value
 
 

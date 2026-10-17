@@ -395,3 +395,62 @@ async def test_refusal_is_charged_and_falls_through(tmp_path):
     )
     assert reply.key == "gemini:x"
     assert ledger.pools()[0]["usd_day"] > 0
+
+
+# ---------- review fixes ----------
+
+
+async def test_sdk_timeout_is_charged_at_worst_case(tmp_path):
+    p, _ = provider(
+        sdk_message([{"type": "text", "text": "first"}]),
+        anthropic.APITimeoutError(httpx2.Request("POST", "https://api.anthropic.com/v1/messages")),
+    )
+    await p.complete([Message("user", "go")], [], 8000)
+    with pytest.raises(ProviderError) as info:
+        await p.complete([Message("user", "go")], [], 8000)
+    assert info.value.kind == "timeout"
+    # Last prompt (10500) uncached + a full 16k output on Opus.
+    expected = (10_500 * 4 + MIN_MAX_TOKENS * 20) / 1e6
+    assert info.value.usage.cost_usd == pytest.approx(expected)
+
+
+async def test_chain_timeout_charges_the_pool(tmp_path):
+    import asyncio
+
+    class Hangs(AnthropicProvider):
+        call_timeout_s = 0.01
+
+        async def complete(self, messages, tools, max_tokens):
+            await asyncio.sleep(1)
+
+    ledger = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5", "gemini:x"])
+    hang = Hangs(MODEL, "sk-test", client=FakeClient())
+    reply = await ProviderChain([hang, backup()], ledger).complete(
+        [Message("user", "go")], [], 512, "brain"
+    )
+    assert reply.key == "gemini:x"
+    # Two attempts, each charged as a full output budget.
+    assert ledger.pools()[0]["usd_day"] == pytest.approx(
+        2 * MIN_MAX_TOKENS * 20 / 1e6, abs=1e-4
+    )
+
+
+async def test_expert_spend_is_recorded_as_expert_share(tmp_path):
+    ledger = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5"])
+    claude, _ = provider(sdk_message([{"type": "text", "text": "done"}]))
+    await ProviderChain([claude], ledger).complete([Message("user", "go")], [], 512, "expert")
+    [pool] = ledger.pools()
+    assert pool["usd_day_expert"] == pytest.approx(pool["usd_day"])
+    assert pool["usd_day_expert"] > 0
+
+
+def test_cache_reads_count_a_tenth_against_the_prompt_budget():
+    usage = Usage(prompt_tokens=100_000, completion_tokens=0, cached_tokens=90_000)
+    assert usage.budget_tokens == 10_000 + 9_000
+    assert Usage(prompt_tokens=5000, completion_tokens=0).budget_tokens == 5000
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-1"])
+def test_monthly_cap_must_be_finite_and_non_negative(raw):
+    with pytest.raises(ValueError):
+        load_settings({"CLAUDE_MONTHLY_USD": raw})

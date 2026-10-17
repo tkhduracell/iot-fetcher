@@ -52,6 +52,10 @@ ErrorKind = Literal[
 # fallback key on what is probably a blip.
 RETRYABLE: frozenset[str] = frozenset({"server", "timeout"})
 
+# Cache reads count 1/CACHE_READ_WEIGHT of a prompt token against the cycle's
+# prompt budget -- see Usage.budget_tokens.
+CACHE_READ_WEIGHT = 10
+
 # Seconds one provider call may take. Also what a timed-out call is charged:
 # we never saw a usage block, so we assume the request was as expensive as the
 # loop's own max_tokens rather than free.
@@ -134,6 +138,17 @@ class Usage:
     # What the call cost, for a paid provider that prices its own usage. 0.0
     # for the free tier and local models.
     cost_usd: float = 0.0
+
+    @property
+    def budget_tokens(self) -> int:
+        """Prompt tokens as CYCLE_MAX_PROMPT_TOKENS should count them.
+
+        A cache read re-sends a prefix the provider already holds, at about a
+        tenth of the price of fresh input; counting it at full weight would
+        stop a well-cached cycle at a tenth of the work the budget was sized
+        for. So reads count a tenth. Providers without a cache are unchanged.
+        """
+        return self.prompt_tokens - self.cached_tokens + self.cached_tokens // CACHE_READ_WEIGHT
 
 
 @dataclass(frozen=True)
@@ -238,6 +253,16 @@ class Provider(ABC):
     async def complete(
         self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> Reply: ...
+
+    def timeout_cost_usd(self, max_tokens: int) -> float:
+        """What a call that timed out may have cost, for a paid provider.
+
+        A timed-out request was sent and may well have been billed, but no
+        usage block ever came back. 0.0 for the free tier and local models;
+        a paid provider overrides this with a conservative estimate so its
+        USD pool is not left believing the call was free.
+        """
+        return 0.0
 
     def available(self) -> bool:
         """False when the provider has nothing to dial at all.
@@ -508,7 +533,13 @@ class ProviderChain:
                 # The request was sent and may already have been billed, so
                 # charge it before deciding what to do next -- an unrecorded
                 # spend makes the remaining-budget metric overstate the truth.
-                self.ledger.record(key, TIMEOUT_CHARGE_TOKENS, 0)
+                self.ledger.record(
+                    key,
+                    TIMEOUT_CHARGE_TOKENS,
+                    0,
+                    usd=provider.timeout_cost_usd(max_tokens),
+                    priority=priority,
+                )
                 err = ProviderError(f"call exceeded {timeout_s}s", kind="timeout")
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
                 if attempt < attempts:
@@ -520,7 +551,7 @@ class ProviderChain:
                     raise
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
                 if err.usage is not None:
-                    self._record(key, err.usage)
+                    self._record(key, err.usage, priority)
                 if err.kind == "exhausted":
                     # Out of prepaid credit. Loud, because it means the month's
                     # budget is gone (or the pool cap is above the real
@@ -543,12 +574,16 @@ class ProviderChain:
                     continue
                 return None
             else:
-                self._record(key, reply.usage)
+                self._record(key, reply.usage, priority)
                 self.ledger.record_ok(key)
                 return reply
         return None
 
-    def _record(self, key: str, usage: Usage) -> None:
+    def _record(self, key: str, usage: Usage, priority: Priority) -> None:
         self.ledger.record(
-            key, usage.prompt_tokens, usage.completion_tokens, usd=usage.cost_usd
+            key,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usd=usage.cost_usd,
+            priority=priority,
         )

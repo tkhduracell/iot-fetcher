@@ -12,8 +12,11 @@ on the billing day and expire unused on the next one. Each day gets an
 allowance of what is left divided by the days left, frozen at the day's first
 look -- so an expensive day shrinks the days after it, and a quiet one lets
 them spend more, and the month ends close to spent rather than either early
-or with credit left to expire. The expert floor applies to the day's
-allowance the same way it applies to the free tier's daily quota.
+or with credit left to expire. The expert floor holds the brain's share of
+the allowance by capping what *experts* spend (at most 60% of the day), not
+by counting the brain's own spend against them: on a pool the brain is the
+big spender, and a floor on the total would let a busy brain morning shut
+every expert out of the paid models for the rest of the day.
 
 State is JSON on disk (``{"day": ..., "buckets": {...}, "pools": {...}}``),
 rewritten through a temp file plus ``os.replace`` after every mutation, so a
@@ -123,6 +126,8 @@ class _PoolState:
         self.period_start = ""
         self.usd_period = 0.0
         self.usd_day = 0.0
+        # The experts' share of usd_day, which the expert floor caps.
+        self.usd_day_expert = 0.0
         # The day's allowance, frozen at its first look; None until then.
         self.day_allowance: float | None = None
         self.exhausted_until: float | None = None
@@ -132,6 +137,7 @@ class _PoolState:
             "period_start": self.period_start,
             "usd_period": self.usd_period,
             "usd_day": self.usd_day,
+            "usd_day_expert": self.usd_day_expert,
             "day_allowance": self.day_allowance,
             "exhausted_until": self.exhausted_until,
         }
@@ -140,12 +146,14 @@ class _PoolState:
         self.period_start = str(raw.get("period_start", ""))
         self.usd_period = float(raw.get("usd_period", 0.0))
         self.usd_day = float(raw.get("usd_day", 0.0))
+        self.usd_day_expert = float(raw.get("usd_day_expert", 0.0))
         allowance = raw.get("day_allowance")
         self.day_allowance = None if allowance is None else float(allowance)
         self.exhausted_until = raw.get("exhausted_until")
 
     def reset_day(self) -> None:
         self.usd_day = 0.0
+        self.usd_day_expert = 0.0
         self.day_allowance = None
 
 
@@ -360,11 +368,7 @@ class Ledger:
             return Decision(False, _midnight(nxt), "usd_month")
         if state.usd_day >= allowance:
             return Decision(False, _next_midnight(now), "usd_day")
-        if (
-            priority == "expert"
-            and allowance > 0
-            and 1.0 - state.usd_day / allowance <= EXPERT_FLOOR
-        ):
+        if priority == "expert" and state.usd_day_expert >= allowance * (1.0 - EXPERT_FLOOR):
             return Decision(False, _next_midnight(now), "priority")
         return None
 
@@ -477,6 +481,7 @@ class Ledger:
                     "usd_period": round(state.usd_period, 4),
                     "usd_limit": state.pool.monthly_usd,
                     "usd_day": round(state.usd_day, 4),
+                    "usd_day_expert": round(state.usd_day_expert, 4),
                     "usd_day_allowance": round(allowance, 4),
                     "exhausted_until": state.exhausted_until,
                 }
@@ -519,7 +524,12 @@ class Ledger:
     # ---------- mutations ----------
 
     def record(
-        self, key: str, prompt_tokens: int, completion_tokens: int, usd: float = 0.0
+        self,
+        key: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        usd: float = 0.0,
+        priority: Priority | None = None,
     ) -> None:
         now = self._clock()
         self._roll_day(now)
@@ -536,6 +546,8 @@ class Ledger:
             self._sync_pool(pool, now)
             pool.usd_day += float(usd)
             pool.usd_period += float(usd)
+            if priority == "expert":
+                pool.usd_day_expert += float(usd)
         self._save()
 
     def record_exhausted(self, key: str) -> None:

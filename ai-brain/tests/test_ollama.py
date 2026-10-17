@@ -390,3 +390,20 @@ def test_delta_publisher_batches_into_round_delta_events():
     assert events[-1] == {"type": "round_delta", "loop": "energy", "thinking": "ab", "text": "c"}
     assert all(e["type"] == "round_delta" for e in events)
     assert "".join(e.get("thinking", "") for e in events) == "ab"
+
+
+
+def test_thinking_is_only_echoed_for_this_models_own_turns():
+    from ai_brain.llm import Message
+    from ai_brain.llm.ollama import build_request as ollama_request
+
+    msgs = [
+        Message("user", "go"),
+        Message("assistant", "a", model="claude-opus-5-5", thinking="claude summary"),
+        Message("assistant", "b", model="qwen3.8:27b-mlx @ http://h:11434", thinking="mine"),
+        Message("assistant", "c", model="qwen3.8:27b-mlx", thinking="also mine"),
+        Message("assistant", "d", thinking="unattributed"),
+    ]
+    body = ollama_request("qwen3.8:27b-mlx", msgs, [], 512, think=True)
+    echoed = [m.get("thinking") for m in body["messages"] if m["role"] == "assistant"]
+    assert echoed == [None, "mine", "also mine", "unattributed"]

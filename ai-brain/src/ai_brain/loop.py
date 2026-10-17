@@ -617,7 +617,11 @@ class AgentLoop:
         # Fires once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP short of whatever
         # effective_cap turns out to be at the time.
         nudge_sent = False
-        # True once trace.prompt_tokens first crosses max_prompt_tokens.
+        # The cycle's prompt tokens as the budget counts them (cache reads at
+        # a tenth -- Usage.budget_tokens); trace.prompt_tokens keeps the raw
+        # total for the trace and metrics.
+        budget_tokens = 0
+        # True once budget_tokens first crosses max_prompt_tokens.
         # Sticky forever after: a per-model cap bump on a later round must
         # not undo a stop the token budget already called for.
         budget_stopped = False
@@ -693,6 +697,7 @@ class AgentLoop:
                 self.token_counts["prompt"] += reply.usage.prompt_tokens
                 self.token_counts["completion"] += reply.usage.completion_tokens
                 trace.prompt_tokens += reply.usage.prompt_tokens
+                budget_tokens += reply.usage.budget_tokens
                 trace.completion_tokens += reply.usage.completion_tokens
                 # Evaluated after every reply, not just once at the start: a
                 # cycle that opened on a strong model and fell back to a weak
@@ -706,7 +711,7 @@ class AgentLoop:
                 # model never having seen a nudge at all.
                 new_cap = self._rounds_cap(reply.key, reply.model)
                 if not budget_stopped and self._prompt_budget_exceeded(
-                    trace.prompt_tokens, reply.key or reply.model
+                    budget_tokens, reply.key or reply.model
                 ):
                     # First round over CYCLE_MAX_PROMPT_TOKENS: same rescue as
                     # a cap drop -- enough extra room for one nudge, never
@@ -718,7 +723,7 @@ class AgentLoop:
                     log.warning(
                         "[%s] prompt tokens (%d) exceeded CYCLE_MAX_PROMPT_TOKENS (%d)",
                         self.name,
-                        trace.prompt_tokens,
+                        budget_tokens,
                         self._budget_hit,
                     )
                 if floor_cap is None and (
@@ -825,7 +830,7 @@ class AgentLoop:
                 if budget_stopped:
                     summary = (
                         f"hit CYCLE_MAX_PROMPT_TOKENS ({self._budget_hit}) "
-                        f"without end_cycle: prompt tokens reached {trace.prompt_tokens}"
+                        f"without end_cycle: prompt tokens reached {budget_tokens}"
                     )
                 else:
                     summary = f"hit max_rounds ({effective_cap}) without end_cycle"

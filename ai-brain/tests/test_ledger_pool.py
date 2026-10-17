@@ -73,12 +73,30 @@ def test_quiet_days_raise_the_allowance(tmp_path):
     assert later > first
 
 
-def test_experts_starve_before_the_brain(tmp_path):
-    ledger, _ = make(tmp_path, at(2026, 10, 17), monthly=24.0)
-    ledger.record(OPUS, 1000, 100, usd=0.65)
+def test_experts_are_capped_by_their_own_spend(tmp_path):
+    ledger, _ = make(tmp_path, at(2026, 10, 17), monthly=24.0)  # $1/day
+    ledger.record(HAIKU, 1000, 100, usd=0.6, priority="expert")
     d = ledger.can_spend(HAIKU, "expert")
     assert not d.allowed and d.reason == "priority"
+    # The brain keeps the rest of the day.
     assert ledger.can_spend(OPUS, "brain").allowed
+
+
+def test_a_busy_brain_does_not_shut_experts_out(tmp_path):
+    ledger, _ = make(tmp_path, at(2026, 10, 17), monthly=24.0)  # $1/day
+    ledger.record(OPUS, 1000, 100, usd=0.8, priority="brain")
+    assert ledger.can_spend(HAIKU, "expert").allowed
+    # Until the day's allowance itself is gone.
+    ledger.record(OPUS, 1000, 100, usd=0.2, priority="brain")
+    assert ledger.can_spend(HAIKU, "expert").reason == "usd_day"
+
+
+def test_expert_share_resets_with_the_day(tmp_path):
+    ledger, st = make(tmp_path, at(2026, 10, 17), monthly=24.0)
+    ledger.record(HAIKU, 10, 10, usd=0.6, priority="expert")
+    st["t"] = at(2026, 10, 18)
+    assert ledger.can_spend(HAIKU, "expert").allowed
+    assert ledger.pools()[0]["usd_day_expert"] == 0.0
 
 
 def test_keys_share_one_pool(tmp_path):
