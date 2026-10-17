@@ -34,10 +34,9 @@ through to gemini/LAN instead of treating it as our own malformed payload.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import anthropic
 
@@ -50,6 +49,9 @@ from ai_brain.llm import (
     ToolCall,
     ToolSpec,
     Usage,
+    as_replayed_result,
+    as_transcript,
+    is_foreign_turn,
 )
 
 log = logging.getLogger(__name__)
@@ -65,20 +67,26 @@ DEFAULT_CALL_TIMEOUT_S = 300
 # SDK insists on streaming for a non-streaming call.
 MIN_MAX_TOKENS = 16_000
 
-# $/MTok: (input, output, cache read). Cache writes are 1.25x input (5-minute
-# TTL, the only one this provider uses). Matched by prefix so a dated or
-# suffixed model id still prices.
-PRICES: dict[str, tuple[float, float, float]] = {
-    "claude-fable-5-1": (10.0, 50.0, 0.25),
-    "claude-opus-5-5": (4.0, 20.0, 0.20),
-    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
-    "claude-haiku-5-5": (0.10, 0.50, 0.01),
+class Price(NamedTuple):
+    """$/MTok. Cache writes are 1.25x input (5-minute TTL, the only one this
+    provider uses). A model priced by prompt size bills the whole request at
+    ``long_multiplier`` once its prompt passes ``long_prompt_tokens``."""
+
+    input: float
+    output: float
+    cache_read: float
+    long_prompt_tokens: int | None = None
+    long_multiplier: float = 1.0
+
+
+# Matched by prefix so a dated or suffixed model id still prices.
+PRICES: dict[str, Price] = {
+    "claude-fable-5-1": Price(10.0, 50.0, 0.25),
+    "claude-opus-5-5": Price(4.0, 20.0, 0.20),
+    "claude-sonnet-5-5": Price(2.0, 10.0, 0.20),
+    "claude-haiku-5-5": Price(0.10, 0.50, 0.01, long_prompt_tokens=100_000, long_multiplier=5.0),
 }
 CACHE_WRITE_MULTIPLIER = 1.25
-# Haiku 5.5 is priced per request by prompt size: past 100K prompt tokens the
-# whole request bills at 5x.
-HAIKU_LONG_PROMPT_TOKENS = 100_000
-HAIKU_LONG_PROMPT_MULTIPLIER = 5.0
 # A model not in PRICES is charged as the most expensive one, so a typo'd or
 # new model id over-counts rather than spending the month unseen.
 _UNKNOWN_PRICE = PRICES["claude-fable-5-1"]
@@ -100,7 +108,7 @@ _LOG_BODY_CHARS = 500
 
 def effort_for(think: str | None) -> str | None:
     """A THINK_BY_MODEL level as an effort value, or None for the default."""
-    return _EFFORT_BY_THINK.get(think, None) if think else None
+    return _EFFORT_BY_THINK.get(think) if think else None
 
 
 def price_usd(model: str, usage: Usage) -> float:
@@ -117,16 +125,15 @@ def price_usd(model: str, usage: Usage) -> float:
     if price is None:
         log.warning("no price for %s; charging it as %s", model, "claude-fable-5-1")
         price = _UNKNOWN_PRICE
-    inp, out, read = price
     fresh = max(0, usage.prompt_tokens - usage.cached_tokens - usage.cache_write_tokens)
     cost = (
-        fresh * inp
-        + usage.cache_write_tokens * inp * CACHE_WRITE_MULTIPLIER
-        + usage.cached_tokens * read
-        + usage.completion_tokens * out
+        fresh * price.input
+        + usage.cache_write_tokens * price.input * CACHE_WRITE_MULTIPLIER
+        + usage.cached_tokens * price.cache_read
+        + usage.completion_tokens * price.output
     ) / 1_000_000
-    if model.startswith("claude-haiku-5-5") and usage.prompt_tokens > HAIKU_LONG_PROMPT_TOKENS:
-        cost *= HAIKU_LONG_PROMPT_MULTIPLIER
+    if price.long_prompt_tokens is not None and usage.prompt_tokens > price.long_prompt_tokens:
+        cost *= price.long_multiplier
     return cost
 
 
@@ -139,15 +146,12 @@ class AnthropicProvider(Provider):
         api_key: str,
         client: Any | None = None,
         effort: str | None = None,
-        timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
     ):
         self.model = model
         self.key = f"anthropic:{model}"
         self._api_key = api_key
         self._effort = effort
-        self._timeout_s = timeout_s
         self._client = client
-        self.call_timeout_s = timeout_s
 
     def _sdk(self) -> Any:
         if self._client is None:
@@ -155,7 +159,7 @@ class AnthropicProvider(Provider):
             # provider); SDK retries underneath would multiply them and spend
             # the call's timeout on a provider the chain wants to leave.
             self._client = anthropic.AsyncAnthropic(
-                api_key=self._api_key, max_retries=0, timeout=self._timeout_s
+                api_key=self._api_key, max_retries=0, timeout=self.call_timeout_s
             )
         return self._client
 
@@ -193,8 +197,8 @@ class AnthropicProvider(Provider):
         cache_read = u.cache_read_input_tokens or 0
         cache_write = u.cache_creation_input_tokens or 0
         usage = Usage(
-            prompt_tokens=(u.input_tokens or 0) + cache_read + cache_write,
-            completion_tokens=u.output_tokens or 0,
+            prompt_tokens=u.input_tokens + cache_read + cache_write,
+            completion_tokens=u.output_tokens,
             cached_tokens=cache_read,
             cache_write_tokens=cache_write,
         )
@@ -289,7 +293,7 @@ def build_request(
                 system.append(message.content)
         elif message.role == "tool":
             if replaying:
-                _append(turns, "user", _text(f"Result of {message.name}: {message.content}"))
+                _append(turns, "user", _text(as_replayed_result(message)))
                 continue
             _append(
                 turns,
@@ -301,13 +305,12 @@ def build_request(
                 },
             )
         elif message.role == "assistant":
-            own = bool(message.model) and message.model == model
-            replaying = bool(message.tool_calls) and not own
-            if own and message.provider_blocks:
+            replaying = is_foreign_turn(message, model)
+            if message.model == model and message.provider_blocks:
                 _append(turns, "assistant", *message.provider_blocks)
             elif replaying:
                 log.debug("replaying %s turn as text for %s", message.model, model)
-                _append(turns, "assistant", _text(_as_transcript(message)))
+                _append(turns, "assistant", _text(as_transcript(message)))
             else:
                 blocks: list[dict[str, Any]] = []
                 if message.content:
@@ -359,12 +362,3 @@ def _append(turns: list[dict[str, Any]], role: str, *blocks: dict[str, Any]) -> 
     else:
         turns.append({"role": role, "content": list(blocks)})
 
-
-def _as_transcript(message: Message) -> str:
-    """Another model's tool-calling turn as plain text, like gemini.py's."""
-    lines = [message.content] if message.content else []
-    lines += [
-        f"I called {call.name}({json.dumps(call.args, ensure_ascii=False, sort_keys=True)})"
-        for call in message.tool_calls
-    ]
-    return "\n".join(lines)

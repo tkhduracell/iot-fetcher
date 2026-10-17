@@ -27,6 +27,7 @@ the only way ``ai_brain_ledger_remaining`` stays honest.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextvars import ContextVar
 from abc import ABC, abstractmethod
@@ -158,6 +159,41 @@ class Reply:
     key: str = ""
     # See ``Message.provider_blocks``; the loop copies these onto the turn.
     provider_blocks: tuple[dict, ...] = ()
+
+
+def is_foreign_turn(message: Message, model: str) -> bool:
+    """True when this tool-calling turn came from a different model.
+
+    The chain changes model mid-cycle whenever one runs out: the LAN host goes
+    away, a key is parked on 429s or out of credit. A provider whose turns
+    carry model-bound state (Gemini's thought signatures, Claude's signed
+    thinking blocks) cannot be handed another model's turn as if it were its
+    own, so such a turn is replayed as text instead (``as_transcript``).
+
+    A turn with no model recorded is left alone: that is a turn nobody
+    attributed, and the old behaviour is the safe one for it.
+    """
+    return bool(message.tool_calls) and bool(message.model) and message.model != model
+
+
+def as_transcript(message: Message) -> str:
+    """Another model's tool-calling turn as plain text any provider accepts.
+
+    The alternative to replaying it is dropping it, and the tool calls are the
+    entire content of a cycle: an agent handed its own history minus what it
+    did would repeat every call it had already made.
+    """
+    lines = [message.content] if message.content else []
+    lines += [
+        f"I called {call.name}({json.dumps(call.args, ensure_ascii=False, sort_keys=True)})"
+        for call in message.tool_calls
+    ]
+    return "\n".join(lines)
+
+
+def as_replayed_result(message: Message) -> str:
+    """A tool result belonging to a replayed turn, as plain user text."""
+    return f"Result of {message.name}: {message.content}"
 
 
 class ProviderError(Exception):

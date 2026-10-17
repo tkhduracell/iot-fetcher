@@ -22,6 +22,7 @@ crash mid-write never leaves a torn ledger.
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import time
@@ -92,12 +93,7 @@ class Pool:
 
 
 def _clamped(year: int, month: int, day: int) -> date:
-    for d in range(day, 27, -1):
-        try:
-            return date(year, month, d)
-        except ValueError:
-            continue
-    return date(year, month, min(day, 28))
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
 
 
 def _shift_month(year: int, month: int, by: int) -> tuple[int, int]:
@@ -153,14 +149,16 @@ class _PoolState:
         self.day_allowance = None
 
 
+def _date_of(ts: float) -> date:
+    return datetime.fromtimestamp(ts, PACIFIC).date()
+
+
 def _day_of(ts: float) -> str:
-    return datetime.fromtimestamp(ts, PACIFIC).date().isoformat()
+    return _date_of(ts).isoformat()
 
 
 def _next_midnight(ts: float) -> float:
-    local = datetime.fromtimestamp(ts, PACIFIC)
-    tomorrow = (local + timedelta(days=1)).date()
-    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=PACIFIC).timestamp()
+    return _midnight(_date_of(ts) + timedelta(days=1))
 
 
 class _Bucket:
@@ -324,43 +322,41 @@ class Ledger:
         name = bucket.limits.usd_pool
         return self._pools.get(name) if name else None
 
-    def _sync_pool(self, state: _PoolState, now: float) -> date:
-        """Start a new billing cycle if one has begun; the next one's start."""
-        today = datetime.fromtimestamp(now, PACIFIC).date()
+    def _sync_pool(self, state: _PoolState, now: float) -> tuple[float, date]:
+        """Start a new billing cycle if one has begun, then return today's
+        allowance and the next cycle's first day."""
+        today = _date_of(now)
         billing_day = state.pool.billing_day
         start = period_start(today, billing_day)
+        nxt = next_period_start(start, billing_day)
+        changed = False
         if state.period_start != start.isoformat():
             # An empty period_start is a pool that has never been synced (a
             # fresh or corrupt ledger): adopt the current cycle without
             # zeroing what the load already decided was spent.
             if state.period_start:
                 state.usd_period = 0.0
-                state.usd_day = 0.0
-                state.day_allowance = None
                 state.exhausted_until = None
+                state.reset_day()
             state.period_start = start.isoformat()
-            self._save()
-        return next_period_start(start, billing_day)
-
-    def _allowance(self, state: _PoolState, now: float) -> float:
-        nxt = self._sync_pool(state, now)
+            changed = True
         if state.day_allowance is None:
-            today = datetime.fromtimestamp(now, PACIFIC).date()
             days_left = max(1, (nxt - today).days)
             left = max(0.0, state.pool.monthly_usd - state.usd_period)
             state.day_allowance = left / days_left
+            changed = True
+        if changed:
             self._save()
-        return state.day_allowance
+        return state.day_allowance, nxt
 
     def _pool_decision(
         self, state: _PoolState, priority: Priority, now: float
     ) -> Decision | None:
         """Why a pool forbids spending now, or None when it allows it."""
-        allowance = self._allowance(state, now)
+        allowance, nxt = self._sync_pool(state, now)
         if state.exhausted_until is not None and now < state.exhausted_until:
             return Decision(False, state.exhausted_until, "exhausted")
         if state.usd_period >= state.pool.monthly_usd:
-            nxt = self._sync_pool(state, now)
             return Decision(False, _midnight(nxt), "usd_month")
         if state.usd_day >= allowance:
             return Decision(False, _next_midnight(now), "usd_day")
@@ -404,7 +400,7 @@ class Ledger:
         if bucket.requests_day >= limits.rpd or bucket.tokens_day >= limits.daily_tokens:
             return Decision(False, _next_midnight(now), "rpd")
 
-        if priority == "expert" and pool is None:
+        if priority == "expert":
             req_left, tok_left = self._fractions(bucket)
             if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
                 return Decision(False, _next_midnight(now), "priority")
@@ -473,7 +469,7 @@ class Ledger:
         self._roll_day(now)
         out = []
         for name, state in self._pools.items():
-            allowance = self._allowance(state, now)
+            allowance, _ = self._sync_pool(state, now)
             out.append(
                 {
                     "pool": name,

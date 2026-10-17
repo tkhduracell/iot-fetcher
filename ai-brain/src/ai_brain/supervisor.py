@@ -119,23 +119,18 @@ def _check_chain(settings: Settings) -> None:
                 ", ".join(sorted(PROVIDER_PREFIXES)),
             )
             raise SystemExit(2)
-    if any(entry.startswith("gemini:") for entry in settings.llm_chain) and (
-        not settings.gemini_api_key
+    for prefix, api_key, var in (
+        ("gemini", settings.gemini_api_key, "GEMINI_API_KEY"),
+        ("anthropic", settings.anthropic_api_key, "ANTHROPIC_API_KEY"),
     ):
-        log.error(
-            "LLM_CHAIN has gemini entries (%s) but GEMINI_API_KEY is empty; refusing to start",
-            ", ".join(settings.llm_chain),
-        )
-        raise SystemExit(2)
-    if any(entry.startswith("anthropic:") for entry in settings.llm_chain) and (
-        not settings.anthropic_api_key
-    ):
-        log.error(
-            "LLM_CHAIN has anthropic entries (%s) but ANTHROPIC_API_KEY is empty; "
-            "refusing to start",
-            ", ".join(settings.llm_chain),
-        )
-        raise SystemExit(2)
+        if not api_key and any(e.startswith(f"{prefix}:") for e in settings.llm_chain):
+            log.error(
+                "LLM_CHAIN has %s entries (%s) but %s is empty; refusing to start",
+                prefix,
+                ", ".join(settings.llm_chain),
+                var,
+            )
+            raise SystemExit(2)
 
     chain = set(settings.llm_chain)
     for var, models in (("BRAIN_MODELS", settings.brain_models), ("EXPERT_MODELS", settings.expert_models)):
@@ -182,12 +177,15 @@ def build(
         memory.seed_from(settings.seed_root)
 
     events = EventBus()
+    limits = limits_from_settings(settings)
+    # Only a chain that actually pays for something gets a dollar pool, so a
+    # free-tier deployment reports no USD budget it is not using.
     pools = {
         ANTHROPIC_POOL: Pool(settings.claude_monthly_usd, settings.claude_billing_day)
+        for lim in limits.values()
+        if lim.usd_pool == ANTHROPIC_POOL
     }
-    ledger = Ledger(
-        limits_from_settings(settings), settings.memory_root / "_ledger.json", clock, pools
-    )
+    ledger = Ledger(limits, settings.memory_root / "_ledger.json", clock, pools)
     factory = chain_factory or ProviderChain.from_settings
     chain = factory(settings, ledger)
 

@@ -4,12 +4,13 @@ import pytest
 from anthropic.types import Message as SdkMessage
 
 from ai_brain.config import load_settings
-from ai_brain.ledger import Ledger, Pool
+from ai_brain.ledger import Ledger, Limits, Pool
 from ai_brain.llm import (
     ANTHROPIC_POOL,
     Message,
     ProviderChain,
     ProviderError,
+    Reply,
     ToolCall,
     ToolSpec,
     Usage,
@@ -337,29 +338,30 @@ def test_from_settings_builds_anthropic_provider_with_effort(tmp_path):
 # ---------- chain integration ----------
 
 
-def pool_ledger(tmp_path, keys, monthly=30.0, t0=1_757_000_000.0):
-    from ai_brain.ledger import Limits
-
-    state = {"t": t0}
+def pool_ledger(tmp_path, keys):
     limits = {
         key: Limits(rpm=50, tpm=10**8, rpd=10**6, usd_pool=ANTHROPIC_POOL)
         if key.startswith("anthropic:")
         else Limits(rpm=50, tpm=10**8, rpd=10**6)
         for key in keys
     }
-    ledger = Ledger(
+    return Ledger(
         limits,
         tmp_path / "ledger.json",
-        clock=lambda: state["t"],
-        pools={ANTHROPIC_POOL: Pool(monthly, 1)},
+        clock=lambda: 1_757_000_000.0,
+        pools={ANTHROPIC_POOL: Pool(30.0, 1)},
     )
-    return ledger, state
+
+
+def backup():
+    return FakeProvider(
+        "gemini:x",
+        script=[Reply(text="ok", tool_calls=(), usage=Usage(1, 1), model="x", key="gemini:x")],
+    )
 
 
 async def test_exhausted_parks_pool_and_falls_through(tmp_path):
-    from ai_brain.llm import Reply
-
-    ledger, _ = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5", "gemini:x"])
+    ledger = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5", "gemini:x"])
     claude, _ = provider(
         status_error(
             anthropic.BadRequestError,
@@ -368,11 +370,7 @@ async def test_exhausted_parks_pool_and_falls_through(tmp_path):
             "invalid_request_error",
         )
     )
-    backup = FakeProvider(
-        "gemini:x",
-        script=[Reply(text="ok", tool_calls=(), usage=Usage(1, 1), model="x", key="gemini:x")],
-    )
-    chain = ProviderChain([claude, backup], ledger)
+    chain = ProviderChain([claude, backup()], ledger)
     reply = await chain.complete([Message("user", "go")], [], 512, "brain")
     assert reply.key == "gemini:x"
     decision = ledger.can_spend("anthropic:claude-opus-5-5", "brain")
@@ -380,7 +378,7 @@ async def test_exhausted_parks_pool_and_falls_through(tmp_path):
 
 
 async def test_success_charges_the_pool(tmp_path):
-    ledger, _ = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5"])
+    ledger = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5"])
     claude, _ = provider(sdk_message([{"type": "text", "text": "done"}]))
     chain = ProviderChain([claude], ledger)
     reply = await chain.complete([Message("user", "go")], [], 512, "brain")
@@ -390,15 +388,9 @@ async def test_success_charges_the_pool(tmp_path):
 
 
 async def test_refusal_is_charged_and_falls_through(tmp_path):
-    from ai_brain.llm import Reply
-
-    ledger, _ = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5", "gemini:x"])
+    ledger = pool_ledger(tmp_path, ["anthropic:claude-opus-5-5", "gemini:x"])
     claude, _ = provider(sdk_message([], stop_reason="refusal"))
-    backup = FakeProvider(
-        "gemini:x",
-        script=[Reply(text="ok", tool_calls=(), usage=Usage(1, 1), model="x", key="gemini:x")],
-    )
-    reply = await ProviderChain([claude, backup], ledger).complete(
+    reply = await ProviderChain([claude, backup()], ledger).complete(
         [Message("user", "go")], [], 512, "brain"
     )
     assert reply.key == "gemini:x"
