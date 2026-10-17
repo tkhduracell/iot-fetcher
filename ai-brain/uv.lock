@@ -28,7 +28,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = "==3.11.18" },
-    { name = "anthropic", specifier = ">=1.15.0" },
+    { name = "anthropic", specifier = "==1.15.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = "==2.2.0" },
     { name = "slack-bolt", specifier = "==1.23.0" },
