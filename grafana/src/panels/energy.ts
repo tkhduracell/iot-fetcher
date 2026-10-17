@@ -3,6 +3,7 @@ import { PanelBuilder as StatBuilder } from '@grafana/grafana-foundation-sdk/sta
 import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
+import { GRID_FEES_SEK_PER_KWH, VAT_MULTIPLIER } from '../energyCost.ts';
 import {
   thresholds, greenThreshold, paletteColor,
   legendBottom, tooltipSingle, tooltipMulti,
@@ -95,7 +96,7 @@ export function energyPanels(): cog.Builder<dashboard.Panel>[] {
     .withTarget(
       vmExpr(
         'Price',
-        'last_over_time(energy_price_SEK_per_kWh[$__interval]) + 0.307 + 0.54875',
+        `(last_over_time(energy_price_SEK_per_kWh[$__interval]) + ${GRID_FEES_SEK_PER_KWH}) * ${VAT_MULTIPLIER}`,
         'SEK_per_kWh',
       ),
     )
