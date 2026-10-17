@@ -10,7 +10,10 @@ that will not fix itself, so the key is disabled for a day. A ``rate_limited``
 key is fine but busy, so it is backed off. ``server``/``timeout`` are usually
 transient, so the same provider gets one more try before we move on. A
 ``bad_request`` is our own bug -- falling through would just repeat it against
-every key in the chain, so it is re-raised immediately.
+every key in the chain, so it is re-raised immediately. ``exhausted`` is a
+paid key whose prepaid credit has run out: parked until its USD pool's period
+resets, and the chain falls through. ``refused`` is a safety decline on one
+model that another may answer, so it falls through too.
 
 The per-call timeout lives here rather than around ``complete``. A budget on
 the whole chain lets a first provider that hangs eat the fallback's time --
@@ -24,6 +27,7 @@ the only way ``ai_brain_ledger_remaining`` stays honest.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextvars import ContextVar
 from abc import ABC, abstractmethod
@@ -40,11 +44,17 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checke
 
 log = logging.getLogger(__name__)
 
-ErrorKind = Literal["not_found", "rate_limited", "server", "timeout", "bad_request"]
+ErrorKind = Literal[
+    "not_found", "rate_limited", "server", "timeout", "bad_request", "exhausted", "refused"
+]
 
 # server/timeout are worth one more shot at the same provider before we burn a
 # fallback key on what is probably a blip.
 RETRYABLE: frozenset[str] = frozenset({"server", "timeout"})
+
+# Cache reads count 1/CACHE_READ_WEIGHT of a prompt token against the cycle's
+# prompt budget -- see Usage.budget_tokens.
+CACHE_READ_WEIGHT = 10
 
 # Seconds one provider call may take. Also what a timed-out call is charged:
 # we never saw a usage block, so we assume the request was as expensive as the
@@ -62,7 +72,7 @@ _BY_DESIGN_SKIPS = frozenset({"priority", "reserved", "rpm", "tpm"})
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
 # cycle, and so the two lists cannot drift apart.
-PROVIDER_PREFIXES: frozenset[str] = frozenset({"lan", "gemini", "ollama", "fake"})
+PROVIDER_PREFIXES: frozenset[str] = frozenset({"lan", "gemini", "ollama", "anthropic", "fake"})
 
 
 @dataclass(frozen=True)
@@ -99,6 +109,12 @@ class Message:
     # next round when that provider thinks -- Qwen3.8 is tuned to see its own
     # earlier reasoning in multi-turn agentic work ("preserve_thinking").
     thinking: str = ""
+    # A provider's own content blocks for this assistant turn, verbatim, for
+    # a provider that must be handed its turn back exactly as it produced it
+    # (Claude's thinking blocks are signed and bound to the model). Opaque to
+    # everything but that provider, which only echoes them when ``model`` is
+    # its own.
+    provider_blocks: tuple[dict, ...] = ()
 
 
 # Where a streaming-capable provider sends its reply as it is generated:
@@ -115,8 +131,24 @@ STREAM_SINK: ContextVar[Callable[[str, str], None] | None] = ContextVar(
 class Usage:
     prompt_tokens: int
     completion_tokens: int
-    # Prompt tokens served from the provider's cache. No provider fills it yet.
+    # Prompt tokens served from the provider's cache, and written to it. Both
+    # are already included in ``prompt_tokens``; only anthropic: fills them.
     cached_tokens: int = 0
+    cache_write_tokens: int = 0
+    # What the call cost, for a paid provider that prices its own usage. 0.0
+    # for the free tier and local models.
+    cost_usd: float = 0.0
+
+    @property
+    def budget_tokens(self) -> int:
+        """Prompt tokens as CYCLE_MAX_PROMPT_TOKENS should count them.
+
+        A cache read re-sends a prefix the provider already holds, at about a
+        tenth of the price of fresh input; counting it at full weight would
+        stop a well-cached cycle at a tenth of the work the budget was sized
+        for. So reads count a tenth. Providers without a cache are unchanged.
+        """
+        return self.prompt_tokens - self.cached_tokens + self.cached_tokens // CACHE_READ_WEIGHT
 
 
 @dataclass(frozen=True)
@@ -140,15 +172,62 @@ class Reply:
     # CYCLE_MAX_ROUNDS_BY_MODEL matches against. Empty means "not from a real
     # provider", the same convention ``model`` on a hand-built Message uses.
     key: str = ""
+    # See ``Message.provider_blocks``; the loop copies these onto the turn.
+    provider_blocks: tuple[dict, ...] = ()
+
+
+def is_foreign_turn(message: Message, model: str) -> bool:
+    """True when this tool-calling turn came from a different model.
+
+    The chain changes model mid-cycle whenever one runs out: the LAN host goes
+    away, a key is parked on 429s or out of credit. A provider whose turns
+    carry model-bound state (Gemini's thought signatures, Claude's signed
+    thinking blocks) cannot be handed another model's turn as if it were its
+    own, so such a turn is replayed as text instead (``as_transcript``).
+
+    A turn with no model recorded is left alone: that is a turn nobody
+    attributed, and the old behaviour is the safe one for it.
+    """
+    return bool(message.tool_calls) and bool(message.model) and message.model != model
+
+
+def as_transcript(message: Message) -> str:
+    """Another model's tool-calling turn as plain text any provider accepts.
+
+    The alternative to replaying it is dropping it, and the tool calls are the
+    entire content of a cycle: an agent handed its own history minus what it
+    did would repeat every call it had already made.
+    """
+    lines = [message.content] if message.content else []
+    lines += [
+        f"I called {call.name}({json.dumps(call.args, ensure_ascii=False, sort_keys=True)})"
+        for call in message.tool_calls
+    ]
+    return "\n".join(lines)
+
+
+def as_replayed_result(message: Message) -> str:
+    """A tool result belonging to a replayed turn, as plain user text."""
+    return f"Result of {message.name}: {message.content}"
 
 
 class ProviderError(Exception):
     """A provider call failed in a way the chain knows how to classify."""
 
-    def __init__(self, message: str, *, kind: ErrorKind, retry_after_s: float | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: ErrorKind,
+        retry_after_s: float | None = None,
+        usage: Usage | None = None,
+    ):
         super().__init__(message)
         self.kind: ErrorKind = kind
         self.retry_after_s: float | None = retry_after_s
+        # Set when the failed call was nonetheless billed (a refusal is an
+        # HTTP 200), so the chain can still charge it.
+        self.usage: Usage | None = usage
 
 
 class ChainExhausted(Exception):
@@ -174,6 +253,16 @@ class Provider(ABC):
     async def complete(
         self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> Reply: ...
+
+    def timeout_cost_usd(self, max_tokens: int) -> float:
+        """What a call that timed out may have cost, for a paid provider.
+
+        A timed-out request was sent and may well have been billed, but no
+        usage block ever came back. 0.0 for the free tier and local models;
+        a paid provider overrides this with a conservative estimate so its
+        USD pool is not left believing the call was free.
+        """
+        return 0.0
 
     def available(self) -> bool:
         """False when the provider has nothing to dial at all.
@@ -214,14 +303,28 @@ def _loops_for(key: str, settings: Settings) -> frozenset[str] | None:
     return frozenset(p for p, ok in (("brain", brain), ("expert", expert)) if ok)
 
 
+# The USD pool every anthropic: key spends from -- they all draw on the same
+# prepaid credit balance, so they share one dollar budget. See ledger.Pool.
+ANTHROPIC_POOL = "anthropic"
+
+
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
     """One budget per chain key: the env-configured tier, except for local
-    hosts (unmetered) and any key in KEY_RPD_OVERRIDES (a lower, measured rpd),
-    each restricted to the loops BRAIN_MODELS / EXPERT_MODELS allow."""
+    hosts (unmetered), any key in KEY_RPD_OVERRIDES (a lower, measured rpd)
+    and anthropic: keys (paced in dollars by the shared pool, with request
+    and token counts left effectively unlimited), each restricted to the
+    loops BRAIN_MODELS / EXPERT_MODELS allow."""
     out: dict[str, Limits] = {}
     for key in settings.llm_chain:
         if key.startswith("lan:"):
             base = UNMETERED
+        elif key.startswith("anthropic:"):
+            base = Limits(
+                rpm=settings.anthropic_rpm,
+                tpm=UNMETERED.tpm,
+                rpd=UNMETERED.rpd,
+                usd_pool=ANTHROPIC_POOL,
+            )
         elif key in KEY_RPD_OVERRIDES:
             base = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=KEY_RPD_OVERRIDES[key])
         else:
@@ -288,6 +391,14 @@ class ProviderChain:
                         settings.gemini_api_key,
                         thinking_budget=settings.thinking_budget,
                     )
+                )
+            elif name == "anthropic":
+                # Imported lazily to match the gemini branch above.
+                from ai_brain.llm.claude import AnthropicProvider, effort_for
+
+                effort = effort_for(match_by_model(settings.think_by_model, entry, None))
+                providers.append(
+                    AnthropicProvider(model, settings.anthropic_api_key, effort=effort)
                 )
             elif name == "ollama":
                 # Imported lazily to match the gemini branch above.
@@ -371,12 +482,16 @@ class ProviderChain:
 
             reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
             if reply is not None:
+                usage = reply.usage
                 log.info(
-                    "%s%s answered (in=%d out=%d tokens)",
+                    "%s%s answered (in=%d out=%d tokens%s)",
                     who,
                     key,
-                    reply.usage.prompt_tokens,
-                    reply.usage.completion_tokens,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    f", cached={usage.cached_tokens} ${usage.cost_usd:.4f}"
+                    if usage.cost_usd
+                    else "",
                 )
                 return reply
 
@@ -418,7 +533,13 @@ class ProviderChain:
                 # The request was sent and may already have been billed, so
                 # charge it before deciding what to do next -- an unrecorded
                 # spend makes the remaining-budget metric overstate the truth.
-                self.ledger.record(key, TIMEOUT_CHARGE_TOKENS, 0)
+                self.ledger.record(
+                    key,
+                    TIMEOUT_CHARGE_TOKENS,
+                    0,
+                    usd=provider.timeout_cost_usd(max_tokens),
+                    priority=priority,
+                )
                 err = ProviderError(f"call exceeded {timeout_s}s", kind="timeout")
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
                 if attempt < attempts:
@@ -429,6 +550,18 @@ class ProviderChain:
                     # Our payload is wrong; every other key would reject it too.
                     raise
                 log.warning("%s failed (%s, attempt %d): %s", key, err.kind, attempt, err)
+                if err.usage is not None:
+                    self._record(key, err.usage, priority)
+                if err.kind == "exhausted":
+                    # Out of prepaid credit. Loud, because it means the month's
+                    # budget is gone (or the pool cap is above the real
+                    # balance), and the key is parked until the pool resets.
+                    log.error("%s is out of credit; parked until the pool resets", key)
+                    self.ledger.record_exhausted(key)
+                    remember(self.ledger.can_spend(key, priority).retry_at)
+                    return None
+                if err.kind == "refused":
+                    return None
                 if err.kind == "not_found":
                     self.ledger.record_not_found(key)
                     remember(self.ledger.can_spend(key, priority).retry_at)
@@ -441,7 +574,16 @@ class ProviderChain:
                     continue
                 return None
             else:
-                self.ledger.record(key, reply.usage.prompt_tokens, reply.usage.completion_tokens)
+                self._record(key, reply.usage, priority)
                 self.ledger.record_ok(key)
                 return reply
         return None
+
+    def _record(self, key: str, usage: Usage, priority: Priority) -> None:
+        self.ledger.record(
+            key,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usd=usage.cost_usd,
+            priority=priority,
+        )

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import fnmatch
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,7 +73,7 @@ NO_MAX_ROUNDS_BY_MODEL = frozenset({"none", "off"})
 # ``gemini:*3.8*`` or ``lan:qwen3.8*`` matches the chain key regardless of the
 # exact model string a provider hands back. First match wins; no match falls
 # back to CYCLE_MAX_ROUNDS. See loop.py's _rounds_cap.
-DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32"
+DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32,anthropic:*opus*=32"
 
 # No cycle may run longer than this regardless of CYCLE_MAX_ROUNDS_BY_MODEL --
 # a typo'd env value is a startup error (see _parse_max_rounds_by_model), but
@@ -158,7 +159,11 @@ def _parse_num_ctx_by_model(raw: str) -> list[tuple[str, int]]:
 # false/low/medium/xhigh and silently runs its default for anything else
 # ("high", "max"), so only these spellings are accepted. No match sends no
 # ``think`` at all -- the model's own default.
-DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh"
+# anthropic: entries map onto ``output_config.effort`` (see llm/claude.py:
+# ``false`` is ``low`` there, since thinking cannot be switched off). The brain
+# on Opus gets ``high`` -- Opus 5.5 defaults to ``medium``, a level below what
+# reviewing other agents' reasoning deserves; Haiku keeps its own default.
+DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh,anthropic:*opus*=high"
 THINK_VALUES = frozenset({"true", "false", "low", "medium", "high", "xhigh"})
 
 
@@ -212,6 +217,15 @@ class Settings:
     brain_models: frozenset[str] | None
     expert_models: frozenset[str] | None
     gemini_api_key: str
+    anthropic_api_key: str
+    # Start-tier requests/min for anthropic: keys. Spend is paced by the USD
+    # pool, not by requests or tokens.
+    anthropic_rpm: int
+    # The month's dollar budget for every anthropic: key together, and the day
+    # of month the plan's API credits refresh. Kept below the credit itself so
+    # a last call over the line still lands inside it.
+    claude_monthly_usd: float
+    claude_billing_day: int
     ollama_url: str
     num_ctx_by_model: list[tuple[str, int]]
     think_by_model: list[tuple[str, str]]
@@ -340,6 +354,29 @@ def _num_ctx_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
     return _parse_num_ctx_by_model(raw) or _parse_num_ctx_by_model(DEFAULT_NUM_CTX_BY_MODEL)
 
 
+def _float(raw: str, default: float) -> float:
+    raw = raw.strip()
+    if not raw:
+        return default
+    value = float(raw)
+    # nan compares False against everything and inf never runs out, so
+    # either would silently switch the cap off.
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"expected a finite, non-negative number, got {raw!r}")
+    return value
+
+
+def _billing_day(raw: str) -> int:
+    """CLAUDE_BILLING_DAY: 1-31, the day of month the API credits refresh."""
+    raw = raw.strip()
+    if not raw:
+        return 1
+    day = int(raw)
+    if not 1 <= day <= 31:
+        raise ValueError(f"CLAUDE_BILLING_DAY must be 1-31, got {raw!r}")
+    return day
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if env is None:
         import os
@@ -369,6 +406,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         if get("EXPERT_MODELS").strip()
         else _experts_default(llm_chain, brain_models),
         gemini_api_key=get("GEMINI_API_KEY"),
+        anthropic_api_key=get("ANTHROPIC_API_KEY"),
+        anthropic_rpm=get_int("ANTHROPIC_RPM", 50),
+        claude_monthly_usd=_float(get("CLAUDE_MONTHLY_USD"), 95.0),
+        claude_billing_day=_billing_day(get("CLAUDE_BILLING_DAY")),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
         num_ctx_by_model=_num_ctx_by_model(env),
         think_by_model=_think_by_model(env),
