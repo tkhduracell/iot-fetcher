@@ -289,7 +289,7 @@ def test_chain_applies_num_ctx_per_model_with_kind_fallback(tmp_path):
 
 
 def test_think_by_model_default_and_parsing():
-    assert load_settings({}).think_by_model == [("lan:qwen3.8*", "xhigh"), ("anthropic:*opus*", "high")]
+    assert load_settings({}).think_by_model == [("lan:qwen3.8*", "xhigh"), ("anthropic:*opus*", "medium")]
     s = load_settings({"THINK_BY_MODEL": "lan:qwen3-coder*=false, ollama:*=Low"})
     assert s.think_by_model == [("lan:qwen3-coder*", "false"), ("ollama:*", "low")]
     assert load_settings({"THINK_BY_MODEL": "off"}).think_by_model == []
@@ -339,6 +339,7 @@ def test_max_prompt_tokens_by_model_default_and_overrides():
     assert load_settings({}).max_prompt_tokens_by_model == [
         ("lan:*", 2_000_000),
         ("ollama:*", 2_000_000),
+        ("anthropic:*opus*", 200_000),
     ]
     s = load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "lan:qwen3.8*=0"})
     assert s.max_prompt_tokens_by_model == [("lan:qwen3.8*", 0)]

@@ -227,6 +227,21 @@ def test_build_request_maps_tool_role_directly():
     assert payload["messages"] == [{"role": "tool", "content": "1"}]
 
 
+def test_build_request_joins_the_loops_two_system_messages():
+    """Chat templates expect one system turn; the loop sends a stable and a
+    volatile half for anthropic:'s cache, so they are joined back here."""
+    messages = [
+        Message(role="system", content="stable"),
+        Message(role="system", content="volatile"),
+        Message(role="user", content="go"),
+    ]
+    payload = build_request("llama3.2:3b", messages, [], 64)
+    assert payload["messages"] == [
+        {"role": "system", "content": "stable\n\nvolatile"},
+        {"role": "user", "content": "go"},
+    ]
+
+
 # --- num_ctx ----------------------------------------------------------------
 
 

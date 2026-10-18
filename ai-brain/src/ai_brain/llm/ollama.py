@@ -358,6 +358,15 @@ def build_request(
                     for call in message.tool_calls
                 ]
             out_messages.append(entry)
+        elif (
+            message.role == "system"
+            and out_messages
+            and out_messages[-1]["role"] == "system"
+        ):
+            # The loop sends its system prompt as two messages (a stable half
+            # for anthropic:'s prefix cache, then the rest). Chat templates
+            # expect one system turn up front, so they are joined again here.
+            out_messages[-1]["content"] += "\n\n" + message.content
         else:
             out_messages.append({"role": message.role, "content": message.content})
 

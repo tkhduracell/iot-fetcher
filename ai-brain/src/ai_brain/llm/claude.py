@@ -24,8 +24,12 @@ Three details of the API shape the request builder:
   tool list never change and the conversation only grows, so one automatic
   top-level breakpoint (which moves forward with the conversation) is enough
   for every round to read the previous round's prefix from cache. Across
-  cycles nothing survives anyway: heartbeats are hours apart, far beyond the
-  5-minute TTL, and the system prompt carries the journal, which has changed.
+  cycles only the stable head can survive -- tools, constitution, identity,
+  cycle instructions, which the loop sends as its first system message and
+  which gets a breakpoint of its own -- and only when the next cycle starts
+  within the 5-minute TTL (a note waking the loop right after a cycle).
+  Heartbeats are hours apart; the 1-hour TTL writes at 2x input and would
+  still expire between them, so it is not used.
 
 Running out of credits is a 400 or 402 saying "credit balance is too low", not
 a 429. It is classified as ``exhausted`` so the chain parks this key and falls
@@ -355,8 +359,18 @@ def build_request(
         "thinking": {"type": "adaptive", "display": "summarized"},
         "cache_control": {"type": "ephemeral"},
     }
-    if system:
-        kwargs["system"] = "\n\n".join(system)
+    if len(system) == 1:
+        kwargs["system"] = system[0]
+    elif system:
+        # The loop's first system message is the part that does not change
+        # between cycles. A breakpoint right after it lets a cycle that starts
+        # within the TTL of the previous one read tools + that prefix from
+        # cache instead of writing it again; the top-level breakpoint still
+        # moves with the conversation for the rounds within a cycle. A
+        # breakpoint costs nothing by itself -- tokens are written once
+        # whichever breakpoint covers them.
+        kwargs["system"] = [_text(text) for text in system]
+        kwargs["system"][0]["cache_control"] = {"type": "ephemeral"}
     if tools:
         kwargs["tools"] = [
             {"name": t.name, "description": t.description, "input_schema": t.parameters}

@@ -138,9 +138,12 @@ def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
 # Per-model override of CYCLE_MAX_PROMPT_TOKENS, matched against the chain key
 # of whichever model answered the latest round (like CYCLE_MAX_ROUNDS_BY_MODEL).
 # Local models cost nothing per token, so they get a far larger budget -- still
-# finite, as a backstop against a cycle looping on huge tool results. 0 is
-# "no budget" for that model, same as CYCLE_MAX_PROMPT_TOKENS=0.
-DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL = "lan:*=2000000,ollama:*=2000000"
+# finite, as a backstop against a cycle looping on huge tool results. Opus is
+# paid by the token: 200k budget tokens (cache reads count a tenth) is about
+# $0.70-1.00 of prompt, twice a normal brain cycle's whole bill (~$0.4,
+# ~75k), so it only stops a cycle that is running away. 0 is "no budget" for
+# that model, same as CYCLE_MAX_PROMPT_TOKENS=0.
+DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL = "lan:*=2000000,ollama:*=2000000,anthropic:*opus*=200000"
 MAX_PROMPT_TOKENS_CEILING = 10_000_000
 
 
@@ -161,9 +164,12 @@ def _parse_num_ctx_by_model(raw: str) -> list[tuple[str, int]]:
 # ``think`` at all -- the model's own default.
 # anthropic: entries map onto ``output_config.effort`` (see llm/claude.py:
 # ``false`` is ``low`` there, since thinking cannot be switched off). The brain
-# on Opus gets ``high`` -- Opus 5.5 defaults to ``medium``, a level below what
-# reviewing other agents' reasoning deserves; Haiku keeps its own default.
-DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh,anthropic:*opus*=high"
+# on Opus runs at ``medium``, Opus 5.5's own default, spelled out so a model
+# swap cannot silently change it. ``high`` was tried first: output (thinking
+# included) was a third of a brain cycle's bill, and the thinking blocks are
+# echoed back as input on every later round, so it costs twice. Raise it per
+# deployment with THINK_BY_MODEL=anthropic:*opus*=high. Haiku keeps its default.
+DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh,anthropic:*opus*=medium"
 THINK_VALUES = frozenset({"true", "false", "low", "medium", "high", "xhigh"})
 
 
