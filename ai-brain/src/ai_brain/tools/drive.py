@@ -99,8 +99,8 @@ def register_drive_tools(registry: ToolRegistry) -> None:
                     "Semantic search over the user's Google Drive documents. Returns the "
                     "best-matching chunks grouped by file (name, folder, link). Ask in natural "
                     "language -- this matches on meaning, not on exact words. top_k 1-8, "
-                    "default 3; chunks are excerpts, so search again with a sharper query "
-                    "rather than raising top_k."
+                    "default 3; each chunk is a ~3,000 character slice of a document, so a "
+                    "long file needs a sharper query to land on the right slice, not a bigger top_k."
                 ),
                 parameters={
                     "type": "object",

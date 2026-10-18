@@ -1042,6 +1042,31 @@ async def test_drive_search_compacts(registry, research_ctx):
 
 
 @respx.mock
+async def test_drive_search_keeps_full_size_chunk(registry, research_ctx):
+    text = ("word " * 640).strip()  # ~3,200 chars, one gdrive-rag chunk
+    respx.post("http://gdrive:8090/query").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "file_name": "Long.pdf",
+                    "folder_path": "/",
+                    "text": text,
+                    "web_view_link": "l",
+                    "similarity": 0.9,
+                }
+            ],
+        )
+    )
+    out = await call(registry, research_ctx, "drive_search", query="x")
+
+    assert out["files"][0]["chunks"] == [
+        f'<external source="google-drive">{text}</external>'
+    ]
+    assert out["truncated"] is False
+
+
+@respx.mock
 async def test_drive_search_backend_500(registry, research_ctx):
     respx.post("http://gdrive:8090/query").mock(
         return_value=httpx.Response(500, text="err")
