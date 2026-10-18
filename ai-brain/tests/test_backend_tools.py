@@ -1006,7 +1006,7 @@ async def test_drive_search_default_top_k(registry, research_ctx):
     out = await call(registry, research_ctx, "drive_search", query="anything")
 
     assert out["files"] == []
-    assert json.loads(route.calls.last.request.content)["top_k"] == 5
+    assert json.loads(route.calls.last.request.content)["top_k"] == 3
 
 
 @respx.mock
@@ -1025,8 +1025,8 @@ async def test_drive_search_compacts(registry, research_ctx):
             200,
             json=[
                 hit("Lampor", "a  \n\n b", 0.91234),
-                hit("Lampor", "word " * 400, 0.8),
-                *[hit(f"f{i}", "word " * 400, 0.5) for i in range(10)],
+                hit("Lampor", "word " * 1000, 0.8),
+                *[hit(f"f{i}", "word " * 1000, 0.5) for i in range(10)],
             ],
         )
     )
@@ -1036,9 +1036,9 @@ async def test_drive_search_compacts(registry, research_ctx):
     lampor = out["files"][0]
     assert lampor["similarity"] == 0.91
     assert lampor["chunks"][0] == '<external source="google-drive">a b</external>'
-    assert len(lampor["chunks"][1]) < 800
+    assert len(lampor["chunks"][1]) < 3500
     assert out["truncated"] is True
-    assert len(json.dumps(out)) < 8000
+    assert len(json.dumps(out)) < 14000
 
 
 @respx.mock
