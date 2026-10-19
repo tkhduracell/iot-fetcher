@@ -83,7 +83,7 @@ describe('POST /api/news/briefing', () => {
     // One /say call: the transcript must be short enough to send whole.
     expect(encodeURIComponent(body.transcript).length).toBeLessThan(3000);
     expect(body.room).toBe('Kontor');
-    expect(body.volume).toBe('20');
+    expect(body.volume).toBe('30');
     expect(body.stories.length).toBeGreaterThanOrEqual(2);
     expect(body.sources.every((s: { error: null }) => s.error === null)).toBe(true);
   });

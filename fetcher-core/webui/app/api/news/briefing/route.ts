@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 
 /** Defaults match the wall dashboard; overridable without a rebuild. */
 const DEFAULT_ROOM = 'Kontor';
-const DEFAULT_VOLUME = 20;
+const DEFAULT_VOLUME = 30;
 
 /**
  * The volume reaches Sonos as a bare URL path segment, and node-sonos-http-api
