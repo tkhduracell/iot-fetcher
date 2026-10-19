@@ -180,7 +180,7 @@ def _echoes_a_prompt(text: str) -> str | None:
 # are short identifiers, not sentences a model would restate its own prompt
 # into, and checking them against MIN_ITEM_WORDS would reject every ordinary
 # entity id for being "too short".
-_PROSE_FIELDS = frozenset({"item", "text"})
+_PROSE_FIELDS = frozenset({"item", "text", "why"})
 
 
 def junk_proposal_reason(kind: str, payload: dict, topic: str) -> str | None:
@@ -343,8 +343,12 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                     "optional \"data\": {\"brightness_pct\": 40}}) for lights, switches, scenes, "
                     "scripts, covers, fans, climate and media players -- look the entity up with "
                     "ha_context first, and expect anything outside that allowlist to be refused -- "
-                    "and docker_restart (payload {\"container\": \"iot-fetcher\"}) for a container "
-                    "that is crash-looping or stuck, found with docker_ps first."
+                    "docker_restart (payload {\"container\": \"iot-fetcher\"}) for a container "
+                    "that is crash-looping or stuck, found with docker_ps first -- "
+                    "and idea (payload {\"title\": ..., \"why\": ...}) to pitch an "
+                    "addition to yourself: a tool, data source, expert or use case. 'why' names "
+                    "the evidence (what you could not do, what Filip asked for). Approving runs "
+                    "nothing; it tells you he wants it built."
                 ),
                 parameters={
                     "type": "object",

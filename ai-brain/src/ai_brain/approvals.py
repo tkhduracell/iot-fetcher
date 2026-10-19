@@ -59,6 +59,11 @@ KINDS: dict[str, tuple[str, ...]] = {
     "ha_todo_add": ("item",),
     "ha_service": ("service", "entity_id"),
     "docker_restart": ("container",),
+    # Not an action: the brain pitching an addition to itself (a tool, a data
+    # source, an expert, a use case). Approving it runs nothing -- it records
+    # that Filip wants it built; rejecting it puts it in rejection memory, so
+    # the same idea is not pitched again for REJECTION_MEMORY_DAYS.
+    "idea": ("title", "why"),
 }
 
 # Which payload key names *what a proposal is about*, for a given kind -- the
@@ -72,6 +77,7 @@ TARGET_KEY: dict[str, str] = {
     "sonos_say": "text",
     "ha_todo_add": "item",
     "docker_restart": "container",
+    "idea": "title",
 }
 
 # ha_service payload data keys whose *value* is excluded from the target, so

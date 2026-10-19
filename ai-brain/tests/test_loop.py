@@ -2467,3 +2467,12 @@ async def test_run_forever_does_not_rerun_on_expert_chatter(make_loop, wall, bra
     task.cancel()
     assert loop.cycle_counts["ok"] == 2
     assert len(provider.calls) == 2
+
+
+
+def test_brain_rotation_includes_judging_itself():
+    from ai_brain.loop import BRAIN_ANGLES
+
+    judge = [a for a in BRAIN_ANGLES if a.startswith("Judge yourself")]
+    assert len(judge) == 1
+    assert "self_review" in judge[0] and "kind idea" in judge[0]

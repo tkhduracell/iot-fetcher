@@ -223,6 +223,14 @@ BRAIN_ANGLES: tuple[str, ...] = (
     "Understand the machine. Use code_overview, then read how one expert's "
     "tools or data sources work, so you can tell a data problem from a "
     "reasoning problem.",
+    "Judge yourself, at most once a week (your self_review fact says when you "
+    "last did; if it was under 7 days ago, take another angle). Are you, and the "
+    "experts, useful to Filip? Use system_status (which cycles did anything, "
+    "what they cost), list_proposals (what he approved, rejected or let expire) "
+    "and which of your Slack questions he answered. Rewrite self_review: the "
+    "date, what helped him, what was noise, and what nobody could do for lack of "
+    "a tool, data source or expert. Then, only if that evidence points at one, "
+    "propose a single addition with kind idea.",
 )
 
 EXPERT_ANGLES: tuple[str, ...] = (

@@ -181,3 +181,18 @@ def test_unknown_kind_is_not_junk_by_this_guard():
     # approvals.propose is what rejects an unknown kind; this guard only
     # judges the text of kinds it recognises.
     assert junk_proposal_reason("launch_missiles", {}, "oops") is None
+
+
+
+def test_idea_why_is_checked_as_prose():
+    from ai_brain.tools.propose import junk_proposal_reason
+
+    assert junk_proposal_reason("idea", {"title": "digest", "why": "x"}, "self-review") is not None
+    assert (
+        junk_proposal_reason(
+            "idea",
+            {"title": "Weekly energy digest", "why": "Filip asked for the October cost twice this month"},
+            "energy-digest",
+        )
+        is None
+    )
