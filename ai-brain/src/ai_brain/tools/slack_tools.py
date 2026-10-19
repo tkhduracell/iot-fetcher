@@ -22,12 +22,12 @@ from __future__ import annotations
 
 from ai_brain.config import Settings
 from ai_brain.llm import ToolSpec
-from ai_brain.memory import Note
+from ai_brain.memory import OWNER_SENDER, Note
 from ai_brain.slack_io import SlackRateCapped
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 
 BRAIN_ONLY = frozenset({"brain"})
-NOTE_SENDER = "filip"
+NOTE_SENDER = OWNER_SENDER
 ANY_TOPIC = "*"
 
 

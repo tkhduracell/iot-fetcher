@@ -33,6 +33,14 @@ MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
 MAX_REVISIONS = 20
 MAX_CONTEXT_GAPS = 10
+# The inbox's share of the system prompt. A brain that sat out an outage came
+# back to 118 notes (~46k tokens) and paid for them on every round of the
+# cycle; past this, the oldest notes from other loops shrink to one line each.
+# Filip's own notes are always shown in full and do not count against it.
+MAX_CONTEXT_INBOX_CHARS = 12_000
+INBOX_PREVIEW_CHARS = 160
+# The sender of Filip's own notes (Slack, the MCP server). Never shortened.
+OWNER_SENDER = "filip"
 MAX_TITLE_TOKENS = 20
 
 # The fact sidecar lives beside the facts but is not one: ``list_facts`` globs
@@ -77,7 +85,7 @@ def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """A persona file's leading ``---\\nkey: value\\n---`` block, and the rest.
 
     A persona is fed straight into the model's own system prompt (see
-    ``read_context``), so whatever lives in the frontmatter must never reach
+    ``context_parts``), so whatever lives in the frontmatter must never reach
     it -- this is the one place that boundary is drawn, and every reader of a
     persona (the prompt, the API) goes through it rather than reading the
     file directly. Deliberately not YAML: one ``key: value`` per line, no
@@ -273,7 +281,7 @@ class MemoryDir:
 
     def persona_text(self) -> str:
         """The persona body only -- never the frontmatter. This is what goes
-        into the model's own prompt (see ``read_context``), so the split
+        into the model's own prompt (see ``context_parts``), so the split
         happens here rather than trusting every caller to remember it."""
         _, body = split_frontmatter(self._read(self.persona_path))
         return body.strip()
@@ -742,24 +750,33 @@ class MemoryDir:
     # -- context -------------------------------------------------------
 
     def read_context(self, constitution: str, notes: list[Note] | None = None) -> str:
-        """Render the whole system prompt.
+        """Render the whole system prompt (both halves of ``context_parts``)."""
+        return "\n\n".join(self.context_parts(constitution, notes))
+
+    def context_parts(
+        self, constitution: str, notes: list[Note] | None = None
+    ) -> tuple[str, str]:
+        """The system prompt as (stable, volatile).
+
+        The stable half -- constitution and identity/persona -- changes only
+        when someone rewrites it, so a provider with a prefix cache can keep
+        it (and the tool list ahead of it) warm across cycles that run close
+        together. Everything that moves from cycle to cycle is in the second.
 
         ``notes`` is the inbox the caller already read. A loop marks exactly
         that list done at the end of the cycle, so re-reading the directory
         here would render a note that then stays unread -- shown once for free,
         and again next cycle.
         """
-        parts = [f"# Constitution\n{constitution}"]
-        parts.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
+        stable = [f"# Constitution\n{constitution}"]
+        stable.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
+        parts = []
         if self.is_brain:
             parts.append(f"# Goals\n{self.goals_text()}")
         parts.append(f"# Journal (last 2 days)\n{self.journal_text(2)}")
         facts = "\n".join(f"- {n}" for n in self.list_facts())
         parts.append(f"# Facts available (use read_fact)\n{facts}")
-        inbox = "\n\n".join(
-            f"## from: {n.sender} ({_iso(n.created)})\n{n.body}"
-            for n in (self.unread_notes() if notes is None else notes)
-        )
+        inbox = render_inbox(self.unread_notes() if notes is None else notes)
         parts.append(f"# Inbox\n{inbox}")
         open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
         # Silence when there is nothing unknown: an empty heading is pure
@@ -773,7 +790,7 @@ class MemoryDir:
                 for g in open_gaps
             )
             parts.append(f"## Öppna luckor\n{luckor}")
-        return "\n\n".join(parts)
+        return "\n\n".join(stable), "\n\n".join(parts)
 
     # -- housekeeping --------------------------------------------------
 
@@ -815,6 +832,39 @@ class MemoryDir:
         if not sender:
             return None
         return Note(path=path, sender=sender, body=body, created=created)
+
+
+def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
+    """The inbox section, held to ``budget`` characters of note bodies.
+
+    Notes are kept in full newest first while they fit the budget; a note
+    that does not fit becomes a one-line preview (sender, time, the opening
+    words), enough to tell what it was about and ask its sender if it
+    matters, and older notes that still fit stay in full. Filip's notes never
+    shrink and never spend the budget. Output stays in arrival order.
+    """
+    shown: list[str] = []
+    short = 0
+    left = budget
+    for note in reversed(notes):
+        head = f"from: {note.sender} ({_iso(note.created)})"
+        if note.sender == OWNER_SENDER:
+            shown.append(f"## {head}\n{note.body}")
+        elif len(note.body) <= left:
+            left -= len(note.body)
+            shown.append(f"## {head}\n{note.body}")
+        else:
+            short += 1
+            preview = " ".join(note.body[: INBOX_PREVIEW_CHARS * 2].split())
+            if len(preview) > INBOX_PREVIEW_CHARS:
+                preview = preview[:INBOX_PREVIEW_CHARS] + "…"
+            shown.append(f"- {head}: {preview}")
+    if short:
+        shown.append(
+            f"({short} note(s) shortened to one line to keep the inbox "
+            f"under {budget} characters; ask the sender if one matters.)"
+        )
+    return "\n\n".join(reversed(shown))
 
 
 def _stamps(directory: Path) -> list[int]:

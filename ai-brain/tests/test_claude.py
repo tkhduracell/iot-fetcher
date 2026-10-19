@@ -95,7 +95,9 @@ def test_system_tools_cache_and_thinking_shape():
     kwargs = build_request(
         [Message("system", "be calm"), Message("user", "hi")], [TOOL], 8000, MODEL, "high"
     )
-    assert kwargs["system"] == "be calm"
+    assert kwargs["system"] == [
+        {"type": "text", "text": "be calm", "cache_control": {"type": "ephemeral"}}
+    ]
     assert kwargs["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
     assert kwargs["tools"] == [
         {"name": "read_fact", "description": "Read a fact", "input_schema": TOOL.parameters}
@@ -107,6 +109,23 @@ def test_system_tools_cache_and_thinking_shape():
     assert kwargs["max_tokens"] == MIN_MAX_TOKENS
     # Forced tool choice 400s on these models; never sent.
     assert "tool_choice" not in kwargs
+
+
+def test_stable_system_half_gets_its_own_cache_breakpoint():
+    """The loop's first system message survives between cycles; a breakpoint
+    after it lets a cycle within the TTL read tools + that head from cache."""
+    kwargs = build_request(
+        [Message("system", "constitution"), Message("system", "journal"), Message("user", "hi")],
+        [TOOL],
+        8000,
+        MODEL,
+    )
+    assert kwargs["system"] == [
+        {"type": "text", "text": "constitution", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "journal"},
+    ]
+    # The moving top-level breakpoint is still there for the rounds in a cycle.
+    assert kwargs["cache_control"] == {"type": "ephemeral"}
 
 
 def test_no_effort_sends_no_output_config():
@@ -330,7 +349,7 @@ def test_from_settings_builds_anthropic_provider_with_effort(tmp_path):
     ledger = Ledger(limits, tmp_path / "ledger.json")
     chain = ProviderChain.from_settings(settings, ledger)
     opus, haiku = chain.providers
-    assert isinstance(opus, AnthropicProvider) and opus._effort == "high"
+    assert isinstance(opus, AnthropicProvider) and opus._effort == "medium"
     assert isinstance(haiku, AnthropicProvider) and haiku._effort is None
     assert opus.call_timeout_s == 300
 

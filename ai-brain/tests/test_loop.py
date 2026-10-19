@@ -67,6 +67,12 @@ def _static(text: str):
     return _fn
 
 
+def _system_text(messages) -> str:
+    """Every system message of a call joined: the loop sends a stable half and
+    a volatile half (see AgentLoop._opening_messages)."""
+    return "\n\n".join(m.content for m in messages if m.role == "system")
+
+
 def _last_journal_line(memory) -> str:
     """The most recent journal entry, with its ``HH:MM  `` stamp stripped."""
     lines = [ln for ln in memory.journal_text(1).splitlines() if ln and not ln.startswith("## ")]
@@ -324,12 +330,13 @@ async def test_system_and_user_messages_frame_the_cycle(make_loop, brain_dir):
     await loop.run_cycle()
 
     messages, tools = provider.calls[0]
-    assert messages[0].role == "system"
+    # Stable half first (constitution, identity, instructions), then the
+    # half that changes every cycle (goals, journal, facts, inbox).
+    assert [m.role for m in messages[:3]] == ["system", "system", "user"]
     assert "be useful" in messages[0].content
-    assert "pool" in messages[0].content
     assert "end_cycle" in messages[0].content
-    assert messages[1].role == "user"
-    assert "Begin your think cycle" in messages[1].content
+    assert "pool" in messages[1].content
+    assert "Begin your think cycle" in messages[2].content
     assert {t.name for t in tools} == {
         s.name for s in loop.registry.specs_for("brain", loop.ctx.settings)
     }
@@ -346,10 +353,12 @@ async def test_tool_results_are_fed_back_as_tool_messages(make_loop):
     await loop.run_cycle()
 
     # calls[i] aliases the one growing conversation, so index from the front:
-    # system, user, then assistant/tool for each round.
+    # system (stable), system (volatile), user, then assistant/tool per round.
     convo, _ = provider.calls[-1]
-    assert [m.role for m in convo] == ["system", "user", "assistant", "tool", "assistant", "tool"]
-    assistant, tool_msg = convo[2], convo[3]
+    assert [m.role for m in convo] == [
+        "system", "system", "user", "assistant", "tool", "assistant", "tool"
+    ]
+    assistant, tool_msg = convo[3], convo[4]
     assert assistant.content == "hm"
     assert assistant.tool_calls[0].name == "list_facts"
     assert tool_msg.tool_call_id == "a"
@@ -376,7 +385,7 @@ async def test_thought_signatures_are_carried_into_the_assistant_turn(make_loop)
     await loop.run_cycle()
 
     convo, _ = provider.calls[-1]
-    assistant = convo[2]
+    assistant = convo[3]
     assert assistant.thought_signature == "sig-T"
     assert assistant.tool_calls[0].thought_signature == "sig-A"
 
@@ -399,7 +408,7 @@ async def test_a_huge_tool_result_is_truncated_before_the_model_sees_it(make_loo
     await loop.run_cycle()
 
     convo, _ = provider.calls[-1]
-    tool_msg = convo[3]
+    tool_msg = convo[4]
     assert tool_msg.name == "firehose"
     assert len(tool_msg.content) <= MAX_TOOL_RESULT_CHARS + 100
     dropped = 40_000 - MAX_TOOL_RESULT_CHARS
@@ -424,7 +433,7 @@ async def test_a_small_tool_result_is_left_alone(make_loop, registry):
     await loop.run_cycle()
 
     convo, _ = provider.calls[-1]
-    assert convo[3].content == "y" * 100
+    assert convo[4].content == "y" * 100
 
 
 async def test_compaction_hint_added_when_memory_is_large(make_loop, brain_dir):
@@ -437,7 +446,8 @@ async def test_compaction_hint_added_when_memory_is_large(make_loop, brain_dir):
     await loop.run_cycle()
 
     messages, _ = provider.calls[0]
-    assert "memory is large" in messages[0].content
+    assert "memory is large" in messages[1].content
+    assert "memory is large" not in messages[0].content  # keeps the stable half stable
 
 
 async def test_notes_are_marked_done_after_the_cycle(make_loop, brain_dir):
@@ -1129,7 +1139,7 @@ async def test_a_note_from_filip_reaches_the_model_with_the_slack_guidance(make_
 
     await loop.run_cycle()
 
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "from: filip" in system
     assert "how warm is it?" in system
     assert "slack_post" in system
@@ -1316,10 +1326,10 @@ async def test_messages_are_rebuilt_each_cycle(make_loop):
     # message, freshly rebuilt from a journal that now mentions the first.
     second, _ = provider.calls[1]
     assert isinstance(second[0], Message)
-    assert second[0].role == "system"
-    assert second[1].role == "user"
-    assert "first" in second[0].content  # the previous cycle shows up via the journal
-    assert "second" not in second[0].content
+    assert second[0].role == second[1].role == "system"
+    assert second[2].role == "user"
+    assert "first" in second[1].content  # the previous cycle shows up via the journal
+    assert "second" not in second[1].content
 
 
 async def test_a_cancelled_cycle_still_closes_its_books(make_loop, brain_dir):
@@ -1506,7 +1516,7 @@ async def test_a_note_arriving_mid_context_is_not_rendered_or_consumed(make_loop
 
     await loop.run_cycle()
 
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "first note" in system
     assert "raced in late" not in system
     assert [n.body for n in brain_dir.unread_notes()] == ["raced in late"]
@@ -1829,7 +1839,7 @@ async def test_the_user_turn_carries_the_angle(make_loop, wall):
 
     await loop.run_cycle()
 
-    user = provider.calls[0][0][1]
+    user = provider.calls[0][0][2]
     assert user.role == "user"
     assert "Angle for this cycle:" in user.content
     assert _angle_for("brain", "brain", wall(), HEARTBEAT) in user.content
@@ -2159,7 +2169,7 @@ async def test_a_rejected_target_appears_in_the_opening_context(make_loop, brain
 
     await loop.run_cycle()
 
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "Filip has said no to" in system
     assert "buy filters" in system
 
@@ -2176,7 +2186,7 @@ async def test_no_rejections_means_no_section_at_all(make_loop, brain_dir, wall)
 
     await loop.run_cycle()
 
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "Filip has said no to" not in system
 
 
@@ -2190,7 +2200,7 @@ async def test_no_approvals_configured_is_silent_not_an_error(make_loop):
     result = await loop.run_cycle()
 
     assert result.status == "ok"
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "Filip has said no to" not in system
 
 
@@ -2207,7 +2217,7 @@ async def test_an_old_rejection_outside_the_window_is_not_shown(make_loop, brain
 
     await loop.run_cycle()
 
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "Filip has said no to" not in system
 
 
@@ -2252,7 +2262,7 @@ async def test_an_expert_loop_does_not_see_rejection_memory(
 
     await loop.run_cycle()
 
-    system = provider.calls[0][0][0].content
+    system = _system_text(provider.calls[0][0])
     assert "Filip has said no to" not in system
 
 

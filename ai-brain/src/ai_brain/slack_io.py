@@ -71,6 +71,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_brain.memory import OWNER_SENDER
+
 log = logging.getLogger(__name__)
 
 # Bolt hands listeners an ack callable; the tests call the handlers without one.
@@ -79,7 +81,7 @@ Ack = Callable[[], Awaitable[None]] | None
 MAX_PER_HOUR = 20
 WINDOW_S = 3600.0
 BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
-NOTE_SENDER = "filip"
+NOTE_SENDER = OWNER_SENDER
 CHAT_TOPIC = "chat"
 LOADING_REACTION = "loading"
 ERROR_REACTION = "red_circle"

@@ -2,7 +2,13 @@ from datetime import timedelta
 
 import pytest
 
-from ai_brain.memory import MemoryDir, safe_name, split_frontmatter
+from ai_brain.memory import (
+    INBOX_PREVIEW_CHARS,
+    MAX_CONTEXT_INBOX_CHARS,
+    MemoryDir,
+    safe_name,
+    split_frontmatter,
+)
 
 
 def test_safe_name_rejects_paths():
@@ -81,6 +87,60 @@ def test_read_context_contains_sections(brain_dir):
     for s in ["Be kind.", "I am curious", "watch the pool", "pool", "from: filip", "hello"]:
         assert s in ctx
     assert "28C" not in ctx  # fact bodies load on demand
+
+
+def test_context_parts_split_stable_from_volatile(brain_dir):
+    brain_dir.rewrite_identity("I am curious")
+    brain_dir.rewrite_goals("- watch the pool")
+    brain_dir.append_journal("looked at the pool")
+    brain_dir.drop_note("energy", "price spike")
+    stable, volatile = brain_dir.context_parts("Be kind.")
+    assert "Be kind." in stable and "I am curious" in stable
+    for moving in ("watch the pool", "looked at the pool", "price spike"):
+        assert moving in volatile and moving not in stable
+    assert brain_dir.read_context("Be kind.") == stable + "\n\n" + volatile
+
+
+def test_inbox_backlog_shrinks_oldest_notes_to_one_line(brain_dir, clock):
+    for i in range(30):
+        clock.state["now"] += timedelta(minutes=1)
+        brain_dir.drop_note("infra", f"note {i:02d} " + "x" * 1000)
+    ctx = brain_dir.read_context("Be kind.")
+    inbox = ctx.split("# Inbox\n", 1)[1]
+    # Newest notes in full, oldest as previews, budget respected, order kept.
+    assert "note 29 " + "x" * 1000 in inbox
+    assert "note 00 " + "x" * 1000 not in inbox
+    assert "- from: infra" in inbox and "note 00 " in inbox
+    assert inbox.index("note 00") < inbox.index("note 29")
+    assert len(inbox) < MAX_CONTEXT_INBOX_CHARS + 30 * (INBOX_PREVIEW_CHARS + 80)
+    assert "note(s) shortened" in inbox
+
+
+def test_inbox_never_shortens_filips_notes(brain_dir, clock):
+    brain_dir.drop_note("filip", "please check " + "y" * 20_000)
+    for i in range(20):
+        clock.state["now"] += timedelta(minutes=1)
+        brain_dir.drop_note("house-ops", f"n{i} " + "z" * 1000)
+    inbox = brain_dir.read_context("Be kind.").split("# Inbox\n", 1)[1]
+    assert "please check " + "y" * 20_000 in inbox
+    assert "n19 " + "z" * 1000 in inbox  # Filip's note did not spend the budget
+
+
+def test_one_oversized_note_does_not_shorten_older_ones_that_fit(brain_dir, clock):
+    brain_dir.drop_note("approvals", "proposal p1 approved: done")
+    clock.state["now"] += timedelta(minutes=1)
+    brain_dir.drop_note("infra", "huge " + "q" * 20_000)
+    inbox = brain_dir.read_context("Be kind.").split("# Inbox\n", 1)[1]
+    assert "## from: approvals" in inbox and "proposal p1 approved: done" in inbox
+    assert "- from: infra" in inbox and "q" * 1000 not in inbox
+    assert "1 note(s) shortened" in inbox
+
+
+def test_small_inbox_is_rendered_unchanged(brain_dir):
+    brain_dir.drop_note("energy", "short")
+    inbox = brain_dir.read_context("Be kind.").split("# Inbox\n", 1)[1]
+    assert "## from: energy" in inbox and "short" in inbox
+    assert "shortened" not in inbox
 
 
 def test_needs_compaction(brain_dir):

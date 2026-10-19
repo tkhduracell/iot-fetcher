@@ -648,7 +648,7 @@ class AgentLoop:
             )
 
         try:
-            # Read the inbox once. Reading it again inside read_context would
+            # Read the inbox once. Reading it again inside context_parts would
             # render whatever arrived in between -- and mark_done only archives
             # this list, so that note would be shown to the model and then left
             # unread, to be shown again next cycle.
@@ -948,17 +948,26 @@ class AgentLoop:
         return result[:MAX_TOOL_RESULT_CHARS] + f"\n…[truncated by loop: {dropped} more chars]"
 
     def _opening_messages(self, notes: list[Note]) -> list[Message]:
-        context = self.memory.read_context(self.constitution, notes=notes)
+        # Two system messages, stable first: the constitution, the identity
+        # and the cycle instructions do not change between cycles, so with the
+        # tool list ahead of them they form a prefix anthropic: can cache
+        # (claude.py puts a breakpoint after the first system message) and a
+        # cycle starting within the cache TTL of the last one reads it back
+        # instead of paying to write it again. Everything that moves --
+        # goals, journal, inbox, gaps, rejections, the compaction hint --
+        # comes after.
+        stable, volatile = self.memory.context_parts(self.constitution, notes=notes)
+        stable += "\n\n" + CYCLE_INSTRUCTIONS
         rejections = self._rejection_memory_section()
         if rejections:
-            context += "\n\n" + rejections
-        system = context + "\n\n" + CYCLE_INSTRUCTIONS
+            volatile += "\n\n" + rejections
         if self.memory.needs_compaction():
-            system += "\n\n" + COMPACTION_INSTRUCTIONS
+            volatile += "\n\n" + COMPACTION_INSTRUCTIONS
         now = datetime.fromtimestamp(self.clock(), UTC).isoformat()
         angle = _angle_for(self.name, self.priority, self.clock(), self.heartbeat_s)
         return [
-            Message("system", system),
+            Message("system", stable),
+            Message("system", volatile),
             Message(
                 "user",
                 f"Begin your think cycle. Current time: {now}.\n\nAngle for this cycle: {angle}",
