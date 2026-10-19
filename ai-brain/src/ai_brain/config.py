@@ -140,7 +140,7 @@ def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
 # Local models cost nothing per token, so they get a far larger budget -- still
 # finite, as a backstop against a cycle looping on huge tool results. Opus is
 # paid by the token: 200k budget tokens (cache reads count a tenth) is about
-# $0.70-1.00 of prompt, twice a normal brain cycle's whole bill (~$0.4,
+# $0.60-1.00 of prompt, twice a normal brain cycle's whole bill (~$0.4,
 # ~75k), so it only stops a cycle that is running away. 0 is "no budget" for
 # that model, same as CYCLE_MAX_PROMPT_TOKENS=0.
 DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL = "lan:*=2000000,ollama:*=2000000,anthropic:*opus*=200000"

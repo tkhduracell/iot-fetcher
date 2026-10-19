@@ -95,7 +95,9 @@ def test_system_tools_cache_and_thinking_shape():
     kwargs = build_request(
         [Message("system", "be calm"), Message("user", "hi")], [TOOL], 8000, MODEL, "high"
     )
-    assert kwargs["system"] == "be calm"
+    assert kwargs["system"] == [
+        {"type": "text", "text": "be calm", "cache_control": {"type": "ephemeral"}}
+    ]
     assert kwargs["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
     assert kwargs["tools"] == [
         {"name": "read_fact", "description": "Read a fact", "input_schema": TOOL.parameters}

@@ -113,7 +113,7 @@ def test_inbox_backlog_shrinks_oldest_notes_to_one_line(brain_dir, clock):
     assert "- from: infra" in inbox and "note 00 " in inbox
     assert inbox.index("note 00") < inbox.index("note 29")
     assert len(inbox) < MAX_CONTEXT_INBOX_CHARS + 30 * (INBOX_PREVIEW_CHARS + 80)
-    assert "older note(s) shortened" in inbox
+    assert "note(s) shortened" in inbox
 
 
 def test_inbox_never_shortens_filips_notes(brain_dir, clock):
@@ -124,6 +124,16 @@ def test_inbox_never_shortens_filips_notes(brain_dir, clock):
     inbox = brain_dir.read_context("Be kind.").split("# Inbox\n", 1)[1]
     assert "please check " + "y" * 20_000 in inbox
     assert "n19 " + "z" * 1000 in inbox  # Filip's note did not spend the budget
+
+
+def test_one_oversized_note_does_not_shorten_older_ones_that_fit(brain_dir, clock):
+    brain_dir.drop_note("approvals", "proposal p1 approved: done")
+    clock.state["now"] += timedelta(minutes=1)
+    brain_dir.drop_note("infra", "huge " + "q" * 20_000)
+    inbox = brain_dir.read_context("Be kind.").split("# Inbox\n", 1)[1]
+    assert "## from: approvals" in inbox and "proposal p1 approved: done" in inbox
+    assert "- from: infra" in inbox and "q" * 1000 not in inbox
+    assert "1 note(s) shortened" in inbox
 
 
 def test_small_inbox_is_rendered_unchanged(brain_dir):

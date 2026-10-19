@@ -359,9 +359,7 @@ def build_request(
         "thinking": {"type": "adaptive", "display": "summarized"},
         "cache_control": {"type": "ephemeral"},
     }
-    if len(system) == 1:
-        kwargs["system"] = system[0]
-    elif system:
+    if system:
         # The loop's first system message is the part that does not change
         # between cycles. A breakpoint right after it lets a cycle that starts
         # within the TTL of the previous one read tools + that prefix from

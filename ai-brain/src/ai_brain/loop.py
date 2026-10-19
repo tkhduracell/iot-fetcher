@@ -648,7 +648,7 @@ class AgentLoop:
             )
 
         try:
-            # Read the inbox once. Reading it again inside read_context would
+            # Read the inbox once. Reading it again inside context_parts would
             # render whatever arrived in between -- and mark_done only archives
             # this list, so that note would be shown to the model and then left
             # unread, to be shown again next cycle.

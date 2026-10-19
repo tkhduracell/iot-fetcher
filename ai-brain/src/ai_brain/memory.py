@@ -39,8 +39,8 @@ MAX_CONTEXT_GAPS = 10
 # Filip's own notes are always shown in full and do not count against it.
 MAX_CONTEXT_INBOX_CHARS = 12_000
 INBOX_PREVIEW_CHARS = 160
-# Notes from these senders are never shortened (slack_io's NOTE_SENDER).
-FULL_NOTE_SENDERS = frozenset({"filip"})
+# The sender of Filip's own notes (Slack, the MCP server). Never shortened.
+OWNER_SENDER = "filip"
 MAX_TITLE_TOKENS = 20
 
 # The fact sidecar lives beside the facts but is not one: ``list_facts`` globs
@@ -85,7 +85,7 @@ def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """A persona file's leading ``---\\nkey: value\\n---`` block, and the rest.
 
     A persona is fed straight into the model's own system prompt (see
-    ``read_context``), so whatever lives in the frontmatter must never reach
+    ``context_parts``), so whatever lives in the frontmatter must never reach
     it -- this is the one place that boundary is drawn, and every reader of a
     persona (the prompt, the API) goes through it rather than reading the
     file directly. Deliberately not YAML: one ``key: value`` per line, no
@@ -281,7 +281,7 @@ class MemoryDir:
 
     def persona_text(self) -> str:
         """The persona body only -- never the frontmatter. This is what goes
-        into the model's own prompt (see ``read_context``), so the split
+        into the model's own prompt (see ``context_parts``), so the split
         happens here rather than trusting every caller to remember it."""
         _, body = split_frontmatter(self._read(self.persona_path))
         return body.strip()
@@ -837,41 +837,34 @@ class MemoryDir:
 def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
     """The inbox section, held to ``budget`` characters of note bodies.
 
-    Notes are kept in full newest first until the budget runs out; the older
-    ones left over become one-line previews (sender, time, the opening words),
-    enough to tell what they were about and ask their sender if it matters.
-    Notes from FULL_NOTE_SENDERS never shrink and never spend the budget.
-    Output stays in arrival order.
+    Notes are kept in full newest first while they fit the budget; a note
+    that does not fit becomes a one-line preview (sender, time, the opening
+    words), enough to tell what it was about and ask its sender if it
+    matters, and older notes that still fit stay in full. Filip's notes never
+    shrink and never spend the budget. Output stays in arrival order.
     """
-    full: set[int] = set()
-    left = budget
-    for i in range(len(notes) - 1, -1, -1):
-        note = notes[i]
-        if note.sender in FULL_NOTE_SENDERS:
-            full.add(i)
-        elif len(note.body) <= left:
-            full.add(i)
-            left -= len(note.body)
-        else:
-            left = 0  # older notes than one that did not fit stay short too
     shown: list[str] = []
-    for i, note in enumerate(notes):
+    short = 0
+    left = budget
+    for note in reversed(notes):
         head = f"from: {note.sender} ({_iso(note.created)})"
-        if i in full:
+        if note.sender == OWNER_SENDER:
+            shown.append(f"## {head}\n{note.body}")
+        elif len(note.body) <= left:
+            left -= len(note.body)
             shown.append(f"## {head}\n{note.body}")
         else:
-            preview = " ".join(note.body.split())
+            short += 1
+            preview = " ".join(note.body[: INBOX_PREVIEW_CHARS * 2].split())
             if len(preview) > INBOX_PREVIEW_CHARS:
                 preview = preview[:INBOX_PREVIEW_CHARS] + "…"
             shown.append(f"- {head}: {preview}")
-    short = len(notes) - len(full)
     if short:
-        shown.insert(
-            0,
-            f"({short} older note(s) shortened to one line to keep the inbox "
-            f"under {budget} characters; ask the sender if one matters.)",
+        shown.append(
+            f"({short} note(s) shortened to one line to keep the inbox "
+            f"under {budget} characters; ask the sender if one matters.)"
         )
-    return "\n\n".join(shown)
+    return "\n\n".join(reversed(shown))
 
 
 def _stamps(directory: Path) -> list[int]:

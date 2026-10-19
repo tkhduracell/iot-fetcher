@@ -476,7 +476,7 @@ def _parse(stamp: str) -> datetime:
 # thing, and a model rereading its own journal has no reason to connect a
 # vaguely-remembered no from four days ago to the payload it is about to send.
 # The functions below turn the outbox into that memory, in two places: a
-# summary injected into every brain cycle's opening context (read_context has
+# summary injected into every brain cycle's opening context (context_parts has
 # no notion of approvals, so this lives beside Proposal instead), and a guard
 # in propose.py that refuses a proposal outright when its kind+target matches
 # a recent rejection.
@@ -579,7 +579,7 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
 
     Empty when there is nothing to say -- a heading with no rows under it
     would cost prompt budget for zero information, the same reasoning
-    ``read_context`` uses for an empty gaps list.
+    ``context_parts`` uses for an empty gaps list.
 
     The char cap drops whole trailing lines rather than cutting mid-line: a
     line sliced in half reads as a truncated, possibly misleading claim about
