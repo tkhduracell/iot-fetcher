@@ -27,6 +27,7 @@ import fnmatch
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -126,6 +127,88 @@ def _lan_summary(chain) -> list[dict]:
     return hosts
 
 
+# system_status is re-read from the prompt cache on every later round of the
+# cycle that called it, so it carries the loop-health summary only. The full
+# ledger is usage_status; the per-proposal history is in the HTTP API.
+STATUS_MAX_TOPICS = 8
+STATUS_RESULT_CHARS = 80
+# A key whose remaining daily fraction drops below this is listed by name.
+STATUS_LOW_FRACTION = 0.1
+_TOPIC_FIELDS = ("topic", "laps", "pending", "approved", "rejected", "kinds", "last_at")
+_POOL_FIELDS = (
+    "pool", "usd_period", "usd_limit", "usd_day", "usd_day_allowance", "exhausted_until",
+)  # fmt: skip
+
+
+def _loop_rows(loops: dict) -> list[dict]:
+    """One row per loop: live state, last cycle, buckets and token cost merged."""
+    useful = {row["name"]: row for row in usefulness_rows(loops)["loops"]}
+    tokens = {row["name"]: row for row in token_rows(loops)["loops"]}
+    rows = []
+    for name in ["brain"] + sorted(n for n in loops if n != "brain"):
+        loop = loops[name]
+        last = loop.last_cycle
+        u, t = useful[name], tokens[name]
+        summary = None if last is None else f"{last.status}/{last.rounds}r {last.model}".strip()
+        rows.append(
+            {
+                "name": name,
+                "running": loop.trace is not None and loop.trace.in_progress,
+                "last": summary,
+                "last_at": round(loop.last_cycle_at) or None,
+                "heartbeat_s": loop.heartbeat_s,
+                "cycles": {k: u[k] for k in ("total", "real", "repeat", "note", "nothing")},
+                "tokens_per_cycle": t["per_cycle"],
+                "token_share": t["share"],
+            }
+        )
+    return rows
+
+
+def _proposal_summary(approvals) -> dict:
+    """Topics proposed more than once, newest outcome only -- not every lap."""
+    topics = proposal_loops(approvals)["loops"]
+    # Most recent first, so a topic looping right now is never cut by old ones.
+    repeated = sorted(
+        (t for t in topics if t["laps"] > 1), key=lambda t: t["last_at"], reverse=True
+    )
+    rows = []
+    for t in repeated[:STATUS_MAX_TOPICS]:
+        last = t["proposals"][-1]
+        rows.append(
+            {
+                **{k: t[k] for k in _TOPIC_FIELDS},
+                "last_status": last["status"],
+                "last_result": (last["result"] or "")[:STATUS_RESULT_CHARS],
+            }
+        )
+    return {
+        "topics": len(topics),
+        "pending": sum(t["pending"] for t in topics),
+        "repeated": len(repeated),
+        "loops": rows,
+    }
+
+
+def _budget_summary(ledger: Ledger) -> dict:
+    """Only what explains a no_budget cycle: pools, plus keys that are throttled."""
+    usage = ledger.usage()
+    now = time.time()
+    limited = []
+    for key in usage["keys"]:
+        low = min(key["requests_remaining"], key["tokens_remaining"])
+        # The ledger leaves an expired block/disable in place until the key is
+        # next used, so only a timestamp still in the future means throttled.
+        blocked = any((key[k] or 0) > now for k in ("blocked_until", "disabled_until"))
+        if blocked or key["consecutive_429"] or low < STATUS_LOW_FRACTION:
+            limited.append(
+                {"key": key["key"], "remaining": round(low, 3)}
+                | {k: key[k] for k in ("consecutive_429", "blocked_until", "disabled_until")}
+            )
+    pools = [{k: p[k] for k in _POOL_FIELDS} for p in usage.get("pools", [])]
+    return {"day": usage["day"], "pools": pools, "limited_keys": limited}
+
+
 async def _system_status(ctx: ToolContext, _args: dict) -> str:
     loops = ctx.extras.get("loops")
     approvals = ctx.extras.get("approvals")
@@ -133,38 +216,12 @@ async def _system_status(ctx: ToolContext, _args: dict) -> str:
     if not isinstance(loops, dict) or approvals is None or not isinstance(ledger, Ledger):
         return err("system_status: runtime state unavailable")
 
-    cycles = []
-    for name in ["brain"] + sorted(n for n in loops if n != "brain"):
-        loop = loops[name]
-        last = loop.last_cycle
-        cycles.append(
-            {
-                "name": name,
-                "priority": loop.priority,
-                "running": loop.trace is not None and loop.trace.in_progress,
-                "last_cycle": (
-                    None
-                    if last is None
-                    else {"status": last.status, "rounds": last.rounds, "model": last.model}
-                ),
-                "last_cycle_at": loop.last_cycle_at or None,
-            }
-        )
-
     return ok(
         {
-            "cycles": cycles,
-            "usefulness": usefulness_rows(loops),
-            "tokens": token_rows(loops),
-            "proposal_loops": proposal_loops(approvals)["loops"],
-            "ledger": ledger.usage(),
+            "loops": _loop_rows(loops),
+            "proposal_loops": _proposal_summary(approvals),
+            "budget": _budget_summary(ledger),
             "lan_hosts": _lan_summary(ctx.extras.get("chain")),
-            "metrics": [
-                "ai_brain_cycle_total (labels: loop, status)",
-                "ai_brain_loop_last_cycle_seconds (labels: loop)",
-                "ai_brain_ledger_remaining (labels: model, kind)",
-                "ai_brain_loop_tokens_total (labels: loop, kind)",
-            ],
         }
     )
 
@@ -1003,11 +1060,15 @@ def register_introspect(registry: ToolRegistry) -> None:
             spec=ToolSpec(
                 name="system_status",
                 description=(
-                    "Your own runtime state: every loop's recent cycle outcomes bucketed "
-                    "by usefulness, whether it is running now, proposal loops (a topic asked "
-                    "again and again), the quota ledger, the discovered LAN model host, and "
-                    "the ai_brain_* metrics you can vm_query for a longer history. Use it for "
-                    "'why am I / is the system behaving like this' questions."
+                    "Your own runtime state: per loop, whether it is running, its last "
+                    "cycle (status/rounds model), cycle outcomes bucketed by usefulness "
+                    "(real/repeat/note/nothing) and token cost; proposal loops (a topic "
+                    "proposed again and again); budget pools and any throttled key (full "
+                    "ledger: usage_status); the discovered LAN model host. For longer "
+                    "history vm_query ai_brain_cycle_total{loop,status}, "
+                    "ai_brain_loop_last_cycle_seconds{loop}, "
+                    "ai_brain_ledger_remaining{model,kind}, ai_brain_loop_tokens_total{loop,kind}. "
+                    "Use it for 'why am I / is the system behaving like this' questions."
                 ),
                 parameters=_NO_ARGS,
             ),
