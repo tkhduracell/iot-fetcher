@@ -69,6 +69,26 @@ def test_expert_starves_at_40_percent(tmp_path):
     assert ledger.can_spend("gemini:a", "brain").allowed
 
 
+def test_expert_only_key_has_no_floor(tmp_path):
+    # Nothing to hold back for a brain that may not spend here: experts get
+    # the whole day, up to rpd.
+    limits = {"gemini:lite": Limits(rpm=100, tpm=10**6, rpd=10, loops=frozenset({"expert"}))}
+    ledger = Ledger(limits, tmp_path / "l.json", clock=lambda: 1_757_000_000.0)
+    for _ in range(9):
+        ledger.record("gemini:lite", 1, 1)
+    assert ledger.can_spend("gemini:lite", "expert").allowed
+    ledger.record("gemini:lite", 1, 1)
+    assert ledger.can_spend("gemini:lite", "expert").reason == "rpd"
+
+
+def test_shared_key_keeps_the_floor(tmp_path):
+    limits = {"gemini:a": Limits(rpm=100, tpm=10**6, rpd=10, loops=frozenset({"brain", "expert"}))}
+    ledger = Ledger(limits, tmp_path / "l.json", clock=lambda: 1_757_000_000.0)
+    for _ in range(6):
+        ledger.record("gemini:a", 1, 1)
+    assert ledger.can_spend("gemini:a", "expert").reason == "priority"
+
+
 def test_expert_allowed_above_40_percent(tmp_path):
     ledger, st = make(tmp_path)
     for _ in range(5):  # 5 of 10 used -> 50% left
