@@ -38,12 +38,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from ai_brain.approvals import NOTE_SENDER as APPROVALS_SENDER
 from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
 from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain
-from ai_brain.memory import MemoryDir, Note
+from ai_brain.memory import OWNER_SENDER, MemoryDir, Note
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.slack_io import CHAT_TOPIC
 from ai_brain.tools.slack_tools import ANY_TOPIC, owed_replies
@@ -466,6 +467,7 @@ class AgentLoop:
         max_prompt_tokens_by_model: list[tuple[str, int]] | None = None,
         call_timeout_s: int = 60,
         events: EventBus | None = None,
+        min_wake_gap_s: int = 0,
     ) -> None:
         self.name = name
         self.memory = memory
@@ -498,6 +500,9 @@ class AgentLoop:
         ) or (call_timeout_s * CHAIN_TIMEOUT_FACTOR)
 
         self.wake = asyncio.Event()
+        # See _wake_hold_s. 0 (the default, and every expert) means a ring
+        # always starts a cycle at once.
+        self.min_wake_gap_s = max(0, int(min_wake_gap_s))
         self.last_cycle: CycleResult | None = None
         self.last_cycle_at: float = 0.0
         self.cycle_counts: dict[str, int] = {}
@@ -886,11 +891,44 @@ class AgentLoop:
         told about. A timed-out sleep consumed nothing, so it clears nothing,
         and the ring is honoured by the next sleep instead.
         """
-        try:
-            await asyncio.wait_for(self.wake.wait(), timeout=seconds)
-        except TimeoutError:
-            return
-        self.wake.clear()
+        aio = asyncio.get_running_loop()
+        deadline = aio.time() + seconds
+        timeout = seconds
+        while True:
+            try:
+                await asyncio.wait_for(self.wake.wait(), timeout=timeout)
+            except TimeoutError:
+                return
+            self.wake.clear()
+            hold = self._wake_hold_s()
+            if hold <= 0:
+                return
+            # Gated ring: the note stays unread in the inbox and the cycle
+            # starts once the gap is over -- or sooner, if the original sleep
+            # was shorter, or if Filip or an approval rings meanwhile.
+            timeout = min(hold, max(0.0, deadline - aio.time()))
+            log.info("[%s] wake held %ds (min gap since last cycle)", self.name, int(timeout))
+
+    def _wake_hold_s(self) -> float:
+        """How long a ring must wait before it may start a cycle; 0 = now.
+
+        An expert's ``send_note`` rings the brain at once, and the brain's
+        own cycle sends notes back to experts -- so one question bounced into
+        a burst of back-to-back cycles minutes apart (8 Opus cycles in 26
+        minutes on 2026-10-19). Notes from Filip (Slack, MCP) and from
+        approvals still start a cycle at once; anything else waits until
+        ``min_wake_gap_s`` after the previous cycle ended. The inbox, not the
+        caller, decides: the senders of what is actually unread are the
+        truth, and no call site has to remember to say how urgent it is.
+        """
+        if self.min_wake_gap_s <= 0 or self.memory is None:
+            return 0.0
+        left = self.last_cycle_at + self.min_wake_gap_s - self.clock()
+        if left <= 0:
+            return 0.0
+        if any(n.sender in URGENT_SENDERS for n in self.memory.unread_notes()):
+            return 0.0
+        return left
 
     # -- internals -----------------------------------------------------
 
@@ -1072,6 +1110,10 @@ class AgentLoop:
             # over and any such entry should resolve, one way or another.
             self.events.publish({"type": "cycle_ended", "loop": self.name, "status": status})
         return result
+
+
+# Senders whose note starts a brain cycle at once, ignoring min_wake_gap_s.
+URGENT_SENDERS = frozenset({OWNER_SENDER, APPROVALS_SENDER})
 
 
 def _clamp_wake(minutes: int, heartbeat_s: int) -> int:
