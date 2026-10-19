@@ -143,29 +143,84 @@ async def test_system_status_reports_cycles_usefulness_and_ledger(registry, make
     out = await call(registry, ctx, "system_status")
 
     assert out["ok"] is True
-    names = [c["name"] for c in out["cycles"]]
+    names = [row["name"] for row in out["loops"]]
     assert names == ["brain", "energy"]
-    brain_row = out["cycles"][0]
-    assert brain_row["running"] is True
-    assert brain_row["last_cycle"] == {"status": "ok", "rounds": 4, "model": "fake:1"}
-    assert out["usefulness"]["loops"][0]["real"] == 3
-    assert out["usefulness"]["loops"][0]["repeat"] == 1
-    assert out["proposal_loops"][0]["topic"] == "pool"
-    assert out["proposal_loops"][0]["laps"] == 2
-    assert out["ledger"]["day"] == ledger.day
-    assert any("ai_brain_cycle_total" in m for m in out["metrics"])
-    assert out["tokens"]["total"] == 4000
-    brain_tokens, energy_tokens = out["tokens"]["loops"]
-    assert brain_tokens == {
+    brain_row, energy_row = out["loops"]
+    assert brain_row == {
         "name": "brain",
-        "prompt": 2800,
-        "completion": 200,
-        "share": 0.75,
-        "per_cycle": 750,
+        "running": True,
+        "last": "ok/4r fake:1",
+        "last_at": 100,
         "heartbeat_s": 1800,
+        "cycles": {"total": 4, "real": 3, "repeat": 1, "note": 0, "nothing": 0},
+        "tokens_per_cycle": 750,
+        "token_share": 0.75,
     }
-    assert energy_tokens["share"] == 0.25
-    assert any("ai_brain_loop_tokens_total" in m for m in out["metrics"])
+    assert energy_row["token_share"] == 0.25
+    assert energy_row["last"] is None
+    assert out["proposal_loops"]["topics"] == 1
+    pool = out["proposal_loops"]["loops"][0]
+    assert pool["topic"] == "pool"
+    assert pool["laps"] == 2
+    assert pool["rejected"] == 2
+    assert pool["last_status"] == "rejected"
+    assert "proposals" not in pool
+    assert out["budget"]["day"] == ledger.day
+    assert out["budget"]["limited_keys"] == []
+    # The full ledger and the metric list live in usage_status / the tool
+    # description, not in every result the brain re-reads from cache.
+    assert "ledger" not in out
+    assert "metrics" not in out
+    spec = next(s for s in registry.specs_for("brain") if s.name == "system_status")
+    assert "ai_brain_cycle_total" in spec.description
+    assert "usage_status" in spec.description
+
+
+async def test_system_status_stays_small_with_a_long_history(registry, make_ctx, tmp_path):
+    """Many proposal laps and many keys must not grow the result past a few k."""
+    loops = {
+        name: FakeLoop(
+            cycle_counts={"ok": 300, "no_budget": 200, "max_rounds": 10},
+            last_cycle_at=1792429683.47,
+            last_cycle=FakeCycleResult(model="qwen3.8:27b-mlx @ http://192.168.68.86:11434"),
+            token_counts={"prompt": 1_000_000, "completion": 50_000},
+        )
+        for name in ["brain", "energy", "health", "house-ops", "infra", "researcher"]
+    }
+    limits = {f"prov:model-{i}": Limits(rpm=10, tpm=1000, rpd=100) for i in range(8)}
+    ledger = Ledger(limits, tmp_path / "ledger.json")
+    proposals = []
+    for topic in range(30):
+        for lap in range(5):
+            p = FakeProposal(f"topic-{topic}", "expired", f"2026-09-{lap + 10}T10:00:00Z")
+            p.result = "x" * 500
+            proposals.append(p)
+    ctx = make_ctx(
+        extras={"loops": loops, "approvals": FakeApprovals(proposals), "ledger": ledger}
+    )
+
+    raw = await registry.dispatch(ctx, ToolCall(id="1", name="system_status", args={}))
+    out = json.loads(raw)
+
+    assert len(raw) < 4000
+    assert out["proposal_loops"]["topics"] == 30
+    assert out["proposal_loops"]["repeated"] == 30
+    assert len(out["proposal_loops"]["loops"]) == 8
+    assert all(len(t["last_result"]) <= 80 for t in out["proposal_loops"]["loops"])
+
+
+async def test_system_status_lists_only_throttled_keys(registry, make_ctx, tmp_path):
+    limits = {"ok:1": Limits(rpm=10, tpm=1000, rpd=100), "low:1": Limits(rpm=10, tpm=1000, rpd=10)}
+    ledger = Ledger(limits, tmp_path / "ledger.json")
+    for _ in range(10):
+        ledger.record("low:1", 10, 10)
+    extras = {"loops": {"brain": FakeLoop()}, "approvals": FakeApprovals(), "ledger": ledger}
+    ctx = make_ctx(extras=extras)
+
+    out = await call(registry, ctx, "system_status")
+
+    assert [k["key"] for k in out["budget"]["limited_keys"]] == ["low:1"]
+    assert out["budget"]["limited_keys"][0]["remaining"] == 0.0
 
 
 async def test_system_status_without_runtime_state_is_an_error(registry, make_ctx):

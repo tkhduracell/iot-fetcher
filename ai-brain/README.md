@@ -38,8 +38,8 @@ The brain also has a read-only window onto the rest of the system that no
 expert gets: it can read (never write) any expert's persona, journal, facts
 and open gaps (`expert_overview`, `read_expert`), record a verdict on what it
 finds (`review_expert` — see [Reviewing the experts](#reviewing-the-experts)),
-see its own runtime state (`system_status` — cycle health, proposal loops, the
-ledger), and read the whole iot-fetcher repo's tracked source (`code_overview`,
+see its own runtime state (`system_status` — cycle health, proposal loops, budget
+pools and throttled keys), and read the whole iot-fetcher repo's tracked source (`code_overview`,
 `code_list`, `code_read`, `code_grep`, `code_log` — see
 [Reading the repo](#reading-the-repo)). Nothing here mutates anything but the
 brain's own `reviews/` directory and a note in the reviewed expert's inbox —
