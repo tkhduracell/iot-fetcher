@@ -267,6 +267,7 @@ def build(
             max_prompt_tokens_by_model=settings.max_prompt_tokens_by_model,
             call_timeout_s=settings.call_timeout_s,
             events=events,
+            min_wake_gap_s=settings.brain_min_wake_gap_s if is_brain else 0,
         )
 
     return System(

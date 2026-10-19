@@ -125,6 +125,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `EXPERTS` | `energy,health,house-ops,researcher,infra` | Which expert loops to start. Unset **or blank** means all five; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `240` | Minutes between brain cycles. The brain reflects on the experts rather than watching the house, so it wakes rarely. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
+| `BRAIN_MIN_WAKE_GAP_MIN` | `30` | Least minutes from the end of one brain cycle to the start of one rung by an expert's `send_note` or the ledger. The note waits unread in the inbox until then. Notes from Filip (Slack, MCP) and from approvals still wake the brain at once. `0` turns the gate off. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
 | `INFLUX_TOKEN` | — | Bearer token for VM reads and for writing its own metrics. |
 | `HA_URL` | `http://192.168.68.87:8123` | Home Assistant base URL. |

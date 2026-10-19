@@ -2358,3 +2358,112 @@ async def test_a_cloud_model_still_uses_the_flat_budget(make_loop, brain_dir):
 
     assert result.status == "max_rounds"
     assert "CYCLE_MAX_PROMPT_TOKENS (10000)" in brain_dir.journal_text(1)
+
+
+# -- min wake gap ------------------------------------------------------
+
+GAP = 30 * 60
+
+
+def _just_ended(loop, wall, ago_s: float = 60) -> None:
+    loop.last_cycle_at = wall() - ago_s
+
+
+@pytest.mark.parametrize("sender", ["energy", "ledger", "brain"])
+def test_an_expert_or_ledger_note_is_held_until_the_gap_is_over(make_loop, wall, brain_dir, sender):
+    loop, _ = make_loop([], min_wake_gap_s=GAP)
+    _just_ended(loop, wall, ago_s=120)
+    brain_dir.drop_note(sender, "chatter")
+    assert loop._wake_hold_s() == GAP - 120
+
+
+@pytest.mark.parametrize("sender", ["filip", "approvals"])
+def test_filip_and_approval_notes_skip_the_gap(make_loop, wall, brain_dir, sender):
+    loop, _ = make_loop([], min_wake_gap_s=GAP)
+    _just_ended(loop, wall)
+    brain_dir.drop_note("energy", "chatter")
+    brain_dir.drop_note(sender, "urgent")
+    assert loop._wake_hold_s() == 0
+
+
+def test_no_hold_once_the_gap_has_passed(make_loop, wall, brain_dir):
+    loop, _ = make_loop([], min_wake_gap_s=GAP)
+    _just_ended(loop, wall, ago_s=GAP + 1)
+    brain_dir.drop_note("energy", "chatter")
+    assert loop._wake_hold_s() == 0
+
+
+def test_the_gate_is_off_by_default(make_loop, wall, brain_dir):
+    loop, _ = make_loop([])
+    _just_ended(loop, wall)
+    brain_dir.drop_note("energy", "chatter")
+    assert loop._wake_hold_s() == 0
+
+
+async def test_a_held_ring_does_not_end_the_sleep_but_a_filip_ring_does(make_loop, wall, brain_dir):
+    loop, _ = make_loop([], min_wake_gap_s=GAP)
+    _just_ended(loop, wall)
+    sleeping = asyncio.create_task(loop._sleep(3600))
+
+    brain_dir.drop_note("energy", "chatter")
+    loop.wake.set()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert not sleeping.done()
+    assert not loop.wake.is_set()  # consumed, but held
+
+    brain_dir.drop_note("filip", "hej")
+    loop.wake.set()
+    await asyncio.wait_for(sleeping, timeout=1)
+    # Nothing was read: both notes wait for the cycle.
+    assert [n.sender for n in brain_dir.unread_notes()] == ["energy", "filip"]
+
+
+async def test_a_held_ring_starts_the_cycle_when_the_gap_ends(make_loop, wall, brain_dir):
+    loop, _ = make_loop([], min_wake_gap_s=GAP)
+    _just_ended(loop, wall, ago_s=GAP - 0.05)  # 50 ms of gap left
+    brain_dir.drop_note("energy", "chatter")
+    sleeping = asyncio.create_task(loop._sleep(3600))
+    await asyncio.sleep(0)
+    loop.wake.set()
+    await asyncio.wait_for(sleeping, timeout=1)
+
+
+async def test_a_held_ring_never_outlasts_the_original_sleep(make_loop, wall, brain_dir):
+    loop, _ = make_loop([], min_wake_gap_s=GAP)
+    _just_ended(loop, wall)
+    brain_dir.drop_note("energy", "chatter")
+    sleeping = asyncio.create_task(loop._sleep(0.1))
+    await asyncio.sleep(0)
+    loop.wake.set()
+    await asyncio.wait_for(sleeping, timeout=1)
+
+
+async def test_run_forever_does_not_rerun_on_expert_chatter(make_loop, wall, brain_dir):
+    script = [
+        reply("a", call("end_cycle", "c", next_wake_minutes=600, summary="first")),
+        reply("b", call("end_cycle", "c", next_wake_minutes=600, summary="second")),
+    ]
+    loop, provider = make_loop(script, min_wake_gap_s=GAP)
+    task = asyncio.create_task(loop.run_forever())
+    for _ in range(200):
+        await asyncio.sleep(0)
+        if loop.cycle_counts.get("ok"):
+            break
+    assert loop.cycle_counts["ok"] == 1
+
+    brain_dir.drop_note("energy", "reply to your question")
+    loop.wake.set()
+    for _ in range(200):
+        await asyncio.sleep(0)
+    assert loop.cycle_counts["ok"] == 1
+
+    brain_dir.drop_note("approvals", "proposal p1 approved: done")
+    loop.wake.set()
+    for _ in range(200):
+        await asyncio.sleep(0)
+        if loop.cycle_counts.get("ok", 0) >= 2:
+            break
+    task.cancel()
+    assert loop.cycle_counts["ok"] == 2
+    assert len(provider.calls) == 2

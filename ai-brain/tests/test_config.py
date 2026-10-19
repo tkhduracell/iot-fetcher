@@ -197,6 +197,7 @@ def test_env_overrides_and_list_parsing():
             "EXPERTS": "energy,health",
             "BRAIN_HEARTBEAT_MIN": "5",
             "EXPERT_HEARTBEAT_MIN": "15",
+            "BRAIN_MIN_WAKE_GAP_MIN": "10",
             "DRY_RUN": "1",
             "RPM": "3",
             "GEMINI_API_KEY": "k",
@@ -208,6 +209,7 @@ def test_env_overrides_and_list_parsing():
     assert s.experts == ["energy", "health"]
     assert s.brain_heartbeat_s == 300
     assert s.expert_heartbeat_s == 900
+    assert s.brain_min_wake_gap_s == 600
     assert s.dry_run is True
     assert s.rpm == 3
     assert s.gemini_api_key == "k"
@@ -346,3 +348,8 @@ def test_max_prompt_tokens_by_model_default_and_overrides():
     assert load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "off"}).max_prompt_tokens_by_model == []
     with pytest.raises(ValueError, match="CYCLE_MAX_PROMPT_TOKENS_BY_MODEL"):
         load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "lan:*=99999999999"})
+
+
+def test_brain_min_wake_gap_defaults_to_30_minutes():
+    assert load_settings({}).brain_min_wake_gap_s == 30 * 60
+    assert load_settings({"BRAIN_MIN_WAKE_GAP_MIN": "0"}).brain_min_wake_gap_s == 0
