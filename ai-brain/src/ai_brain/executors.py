@@ -176,6 +176,10 @@ class Executors:
             )
         if kind == "docker_restart":
             return await self.docker_restart(_require(payload, "container", kind))
+        if kind == "idea":
+            # Nothing to execute: the approval itself is the outcome, and it
+            # comes back to the brain as an inbox note like any other.
+            return f"Filip wants this: {_require(payload, 'title', kind)}"
         raise ValueError(f"unknown kind: {kind}")
 
 

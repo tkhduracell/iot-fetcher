@@ -675,6 +675,7 @@ def test_kinds_matches_the_executor_surface():
         "ha_todo_add": ("item",),
         "ha_service": ("service", "entity_id"),
         "docker_restart": ("container",),
+        "idea": ("title", "why"),
     }
 
 

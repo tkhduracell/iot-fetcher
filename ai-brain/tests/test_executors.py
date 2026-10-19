@@ -321,3 +321,11 @@ async def test_run_dispatches_docker_restart(settings, http):
 
     assert route.called
     assert result == "restarted ollama"
+
+
+
+async def test_run_idea_executes_nothing_and_records_the_title(settings, http):
+    result = await make_executors(settings, http).run(
+        "idea", {"title": "Weekly energy digest", "why": "Filip asked for October totals twice"}
+    )
+    assert result == "Filip wants this: Weekly energy digest"
