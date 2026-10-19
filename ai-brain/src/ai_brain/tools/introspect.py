@@ -27,6 +27,7 @@ import fnmatch
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,6 +134,10 @@ STATUS_MAX_TOPICS = 8
 STATUS_RESULT_CHARS = 80
 # A key whose remaining daily fraction drops below this is listed by name.
 STATUS_LOW_FRACTION = 0.1
+_TOPIC_FIELDS = ("topic", "laps", "pending", "approved", "rejected", "kinds", "last_at")
+_POOL_FIELDS = (
+    "pool", "usd_period", "usd_limit", "usd_day", "usd_day_allowance", "exhausted_until",
+)  # fmt: skip
 
 
 def _loop_rows(loops: dict) -> list[dict]:
@@ -163,58 +168,44 @@ def _loop_rows(loops: dict) -> list[dict]:
 def _proposal_summary(approvals) -> dict:
     """Topics proposed more than once, newest outcome only -- not every lap."""
     topics = proposal_loops(approvals)["loops"]
-    repeated = [t for t in topics if t["laps"] > 1]
+    # Most recent first, so a topic looping right now is never cut by old ones.
+    repeated = sorted(
+        (t for t in topics if t["laps"] > 1), key=lambda t: t["last_at"], reverse=True
+    )
     rows = []
     for t in repeated[:STATUS_MAX_TOPICS]:
         last = t["proposals"][-1]
         rows.append(
             {
-                "topic": t["topic"],
-                "laps": t["laps"],
-                "pending": t["pending"],
-                "approved": t["approved"],
-                "rejected": t["rejected"],
-                "kinds": t["kinds"],
-                "last_at": t["last_at"],
+                **{k: t[k] for k in _TOPIC_FIELDS},
                 "last_status": last["status"],
                 "last_result": (last["result"] or "")[:STATUS_RESULT_CHARS],
             }
         )
-    return {"topics": len(topics), "repeated": len(repeated), "loops": rows}
+    return {
+        "topics": len(topics),
+        "pending": sum(t["pending"] for t in topics),
+        "repeated": len(repeated),
+        "loops": rows,
+    }
 
 
 def _budget_summary(ledger: Ledger) -> dict:
     """Only what explains a no_budget cycle: pools, plus keys that are throttled."""
     usage = ledger.usage()
+    now = time.time()
     limited = []
     for key in usage["keys"]:
         low = min(key["requests_remaining"], key["tokens_remaining"])
-        if (
-            key["blocked_until"]
-            or key["disabled_until"]
-            or key["consecutive_429"]
-            or low < STATUS_LOW_FRACTION
-        ):
+        # The ledger leaves an expired block/disable in place until the key is
+        # next used, so only a timestamp still in the future means throttled.
+        blocked = any((key[k] or 0) > now for k in ("blocked_until", "disabled_until"))
+        if blocked or key["consecutive_429"] or low < STATUS_LOW_FRACTION:
             limited.append(
-                {
-                    "key": key["key"],
-                    "remaining": round(low, 3),
-                    "consecutive_429": key["consecutive_429"],
-                    "blocked_until": key["blocked_until"],
-                    "disabled_until": key["disabled_until"],
-                }
+                {"key": key["key"], "remaining": round(low, 3)}
+                | {k: key[k] for k in ("consecutive_429", "blocked_until", "disabled_until")}
             )
-    pools = [
-        {
-            "pool": p["pool"],
-            "usd_period": p["usd_period"],
-            "usd_limit": p["usd_limit"],
-            "usd_day": p["usd_day"],
-            "usd_day_allowance": p["usd_day_allowance"],
-            "exhausted_until": p["exhausted_until"],
-        }
-        for p in usage.get("pools", [])
-    ]
+    pools = [{k: p[k] for k in _POOL_FIELDS} for p in usage.get("pools", [])]
     return {"day": usage["day"], "pools": pools, "limited_keys": limited}
 
 

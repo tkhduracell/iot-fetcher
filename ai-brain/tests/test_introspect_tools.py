@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 
 import pytest
@@ -221,6 +222,42 @@ async def test_system_status_lists_only_throttled_keys(registry, make_ctx, tmp_p
 
     assert [k["key"] for k in out["budget"]["limited_keys"]] == ["low:1"]
     assert out["budget"]["limited_keys"][0]["remaining"] == 0.0
+
+
+async def test_system_status_ignores_expired_blocks(registry, make_ctx, tmp_path):
+    limits = {k: Limits(rpm=10, tpm=1000, rpd=100) for k in ("old:1", "now:1")}
+    ledger = Ledger(limits, tmp_path / "ledger.json")
+    ledger._buckets["old:1"].disabled_until = time.time() - 3600
+    ledger._buckets["now:1"].blocked_until = time.time() + 3600
+    extras = {"loops": {"brain": FakeLoop()}, "approvals": FakeApprovals(), "ledger": ledger}
+
+    out = await call(registry, make_ctx(extras=extras), "system_status")
+
+    assert [k["key"] for k in out["budget"]["limited_keys"]] == ["now:1"]
+
+
+async def test_system_status_keeps_recent_topics_and_counts_pending(registry, make_ctx, tmp_path):
+    proposals = []
+    for topic in range(10):
+        for lap in range(5):
+            created = f"2026-09-0{lap + 1}T10:00:00Z"
+            proposals.append(FakeProposal(f"old-{topic}", "expired", created))
+    proposals += [
+        FakeProposal("fresh", "rejected", "2026-10-18T10:00:00Z"),
+        FakeProposal("fresh", "pending", "2026-10-19T10:00:00Z"),
+        FakeProposal("single", "pending", "2026-10-19T11:00:00Z"),
+    ]
+    ledger = Ledger({}, tmp_path / "ledger.json")
+    approvals = FakeApprovals(proposals)
+    extras = {"loops": {"brain": FakeLoop()}, "approvals": approvals, "ledger": ledger}
+
+    out = await call(registry, make_ctx(extras=extras), "system_status")
+
+    summary = out["proposal_loops"]
+    assert summary["loops"][0]["topic"] == "fresh"
+    assert summary["loops"][0]["last_status"] == "pending"
+    assert summary["pending"] == 2
+    assert summary["repeated"] == 11
 
 
 async def test_system_status_without_runtime_state_is_an_error(registry, make_ctx):
