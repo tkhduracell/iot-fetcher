@@ -21,9 +21,10 @@ class EnergyData(TypedDict):
 
 def get_elpris_price_url(area: str, day_offset: int):
     now = datetime.now() + timedelta(days=day_offset)
-    yyyy = now.strftime("%Y")
-    mm = now.strftime("%m")
-    dd = (now + timedelta(days=1 if now.hour >= 12 else 0)).strftime("%d")
+    target = now + timedelta(days=1 if now.hour >= 12 else 0)
+    yyyy = target.strftime("%Y")
+    mm = target.strftime("%m")
+    dd = target.strftime("%d")
     baseUrl = 'https://www.elprisetjustnu.se/api/v1/prices'
     return f"{baseUrl}/{yyyy}/{mm}-{dd}_{area}.json"
 
