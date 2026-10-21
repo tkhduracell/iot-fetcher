@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from ai_brain.events import EventBus
 
 

@@ -164,7 +164,3 @@ End with a brief recommendation of the best options.
 export function getPersona(id: string): PersonaConfig | undefined {
   return personas[id];
 }
-
-export function listPersonas(): PersonaConfig[] {
-  return Object.values(personas);
-}

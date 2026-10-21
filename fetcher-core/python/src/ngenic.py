@@ -243,7 +243,7 @@ def _ngenic():
                     measurements: List[Measurement] = node.measurements()
                     for measurement in measurements:
                         points.append(
-                            Point(f"ngenic_node_sensor_measurement_value")
+                            Point("ngenic_node_sensor_measurement_value")
                             .tag("node", node.uuid())
                             .tag("node_type", type.name)
                             .field(measurement.get_type().value, float(measurement["value"]))
@@ -253,7 +253,7 @@ def _ngenic():
                         measurement: Optional[Measurement] = node.measurement(
                             MeasurementType.TEMPERATURE)
                         points.append(
-                            Point(f"ngenic_node_sensor_measurement_value")
+                            Point("ngenic_node_sensor_measurement_value")
                             .tag("node", node.uuid())
                             .tag("node_type", type.name)
                             .field(measurement.get_type().value, float(measurement["value"]))
