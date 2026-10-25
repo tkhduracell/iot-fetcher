@@ -3,9 +3,14 @@
 # Rerunning updates existing budgets in place (matched by display name).
 set -euo pipefail
 
-BILLING_ACCOUNT="015858-1B075A-316C97"
-BILLING_PROJECT="filiplindqvist-com-ea66d"
-PROJECT_FILTER="projects/530377340060"
+# Account identifiers are read from the environment so they stay out of the repo.
+# Set them before running, e.g. in a shell profile or an untracked local file:
+#   BILLING_ACCOUNT=<billing-account-id>
+#   BILLING_PROJECT=<project-id>
+#   PROJECT_FILTER=projects/<project-number>
+: "${BILLING_ACCOUNT:?set BILLING_ACCOUNT to the Cloud Billing account ID}"
+: "${BILLING_PROJECT:?set BILLING_PROJECT to the project ID used for billing quota}"
+: "${PROJECT_FILTER:?set PROJECT_FILTER to projects/<project-number>}"
 
 # Service IDs (lookup: curl .../cloudbilling.googleapis.com/v1/services)
 SVC_ARTIFACT_REGISTRY="services/149C-F9EC-3994"
