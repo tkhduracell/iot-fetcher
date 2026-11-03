@@ -38,5 +38,5 @@ def test_a_bad_source_is_refused(source):
 def test_wrap_external_is_the_same_fence_with_masking():
     assert wrap_external("docker", "up 2 days") == fence("docker", "up 2 days")
     assert "AIza" not in wrap_external("docker", "key AIza" + "A" * 35)
-    with pytest.raises(ValueError, match="wrap_external: invalid source"):
+    with pytest.raises(ValueError, match="fence: invalid source"):
         wrap_external("Bad Source", "x")

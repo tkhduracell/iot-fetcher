@@ -12,7 +12,7 @@ no "restarting *that* is always safe" the way there is for HA services.
 
 from __future__ import annotations
 
-from ai_brain.executors import validate_container_name
+from ai_brain.docker_api import container_url
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 from ai_brain.tools.http import decode_json, request, stream_tail
@@ -78,12 +78,7 @@ async def _docker_ps(ctx: ToolContext, _args: dict) -> str:
 
 
 async def _docker_top(ctx: ToolContext, args: dict) -> str:
-    try:
-        name = validate_container_name(args["container"])
-    except ValueError as exc:
-        return err(f"docker_top: {exc}")
-    base = ctx.settings.docker_proxy_url.rstrip("/")
-    url = f"{base}/containers/{name}/top"
+    url = container_url(ctx.settings.docker_proxy_url, args["container"], "top")
     response, problem = await request(ctx, "GET", url, label="docker_top")
     if problem is not None:
         return err(problem)
@@ -105,13 +100,8 @@ async def _docker_top(ctx: ToolContext, args: dict) -> str:
 
 
 async def _docker_logs(ctx: ToolContext, args: dict) -> str:
-    try:
-        name = validate_container_name(args["container"])
-    except ValueError as exc:
-        return err(f"docker_logs: {exc}")
+    url = container_url(ctx.settings.docker_proxy_url, args["container"], "logs")
     wanted = _int_arg(args, "lines", DEFAULT_LOG_LINES, 1, MAX_LOG_LINES)
-    base = ctx.settings.docker_proxy_url.rstrip("/")
-    url = f"{base}/containers/{name}/logs"
 
     _, body, truncated, problem = await stream_tail(
         ctx,

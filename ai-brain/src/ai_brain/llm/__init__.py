@@ -461,7 +461,7 @@ class ProviderChain:
         not be cut short on the strength of the first model's budget. An
         unmetered ``lan:`` key lands here too, through its own ``requests_left``.
         """
-        if not key or self.ledger.limits(key) is None:
+        if self.ledger.limits(key) is None:
             return None
         for provider in self.providers:
             if provider.key == key or not provider.available():

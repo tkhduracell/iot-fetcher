@@ -44,7 +44,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ai_brain.executors import Executors, QuietHours, validate_container_name
+from ai_brain.docker_api import validate_container_name
+from ai_brain.executors import Executors, QuietHours
 from ai_brain.memory import MemoryDir
 from ai_brain.slack_io import CHAT_TOPIC
 

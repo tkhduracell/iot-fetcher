@@ -25,7 +25,6 @@ proposal is ``failed`` rather than a cycle is over.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable
 from datetime import datetime
 from urllib.parse import quote
@@ -34,6 +33,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from ai_brain.config import Settings
+from ai_brain.docker_api import container_url
 
 log = logging.getLogger(__name__)
 
@@ -81,31 +81,6 @@ HA_ALLOWED_DATA_KEYS = frozenset(
         "volume_level",
     }
 )
-
-
-# Docker's own rule for a container name (it also matches an id). The name is
-# model-supplied and goes straight into a URL path, so anything outside this
-# set can reshape the request instead of naming a container: ``x/json#`` makes
-# a logs read into an inspect (``Config.Env`` included), ``?`` and ``/`` do the
-# same by other means. Checked with ``fullmatch`` so a trailing newline cannot
-# slip past a ``$``.
-CONTAINER_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
-
-
-def validate_container_name(name: object) -> str:
-    """``name`` as a string if it is a legal container name, else ``ValueError``.
-
-    Lives here, the lowest layer that builds a container URL, so the read
-    tools, ``propose`` and the executor all apply the same rule without the
-    tools importing the approvals layer.
-    """
-    text = name if isinstance(name, str) else repr(name)
-    if not CONTAINER_NAME_RE.fullmatch(text):
-        raise ValueError(
-            f"invalid container name {text!r}: use the name or id from docker_ps "
-            "(letters, digits, '_', '.', '-')"
-        )
-    return text
 
 
 class QuietHours(Exception):
@@ -180,12 +155,10 @@ class Executors:
         # Before the dry-run shortcut, like the quiet-hours check: a rehearsal
         # must report the refusal a live run would. Also covers a proposal that
         # was stored before propose validated the name.
-        container = validate_container_name(container)
+        url = container_url(self.settings.docker_proxy_url, container, "restart")
         if self.settings.dry_run:
             log.info("[dry-run] docker_restart %s", container)
             return "dry-run"
-        base = self.settings.docker_proxy_url.rstrip("/")
-        url = f"{base}/containers/{container}/restart"
         response = await self.http.post(url, timeout=TIMEOUT_S)
         _raise_for_status(response, "docker_restart")
         return f"restarted {container}"

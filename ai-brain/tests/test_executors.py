@@ -310,7 +310,7 @@ async def test_docker_restart_is_silent_in_dry_run(http, caplog):
     assert "[dry-run] docker_restart" in caplog.text
 
 
-@pytest.mark.parametrize("name", ["iot-fetcher/json#", "../x", "a b", ""])
+@pytest.mark.parametrize("name", ["iot-fetcher/json#", "../x", "a b", "", None, 123])
 @respx.mock
 async def test_docker_restart_refuses_a_bad_name_without_a_request(settings, http, name):
     with pytest.raises(ValueError, match="container"):

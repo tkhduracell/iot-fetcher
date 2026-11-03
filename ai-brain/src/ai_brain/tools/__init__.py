@@ -93,10 +93,7 @@ def wrap_external(source: str, text: str) -> str:
     into a memory fact. Masking happens before fencing so a secret cannot
     hide the fence's own sentinel handling from itself.
     """
-    try:
-        return fence(source, redact(text))
-    except ValueError:
-        raise ValueError(f"wrap_external: invalid source {source!r}") from None
+    return fence(source, redact(text))
 
 
 class ToolRegistry:

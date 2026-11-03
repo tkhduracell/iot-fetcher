@@ -246,7 +246,7 @@ restart needed, and it does not lose queued work.
 A loop that wakes every hour and reads the same gauges will, left alone, write
 "all systems operating normally" forever. Two things push against that:
 
-- **The cycle instructions** (`CYCLE_INSTRUCTIONS` in `loop.py`, shipped in the
+- **The cycle instructions** (`instructions_for` in `loop.py`, shipped in the
   image) set the bar: a cycle must end with something that was not true of its
   memory before it started. Normal readings are worth learning once, as a
   baseline; after that only departures are news. Threads beat snapshots, and
@@ -267,10 +267,10 @@ system wrote: constitution, persona, goals, instructions, fact names, open gaps
 and the rejection summary. The journal and the inbox are in the user turn
 instead, each inside an `<external>` fence (the same one tool results use, in
 `ai_brain/fence.py`, which defuses any `<external`/`</external` in the text so
-it cannot close the fence). A note's sender and time are on the line above its
-fence, taken from the note's header, so a body claiming to be from Filip is
-still labelled as whoever really sent it. The cycle instructions say fenced
-text is data, with one exception: a note from `filip` is Filip, and what he
+it cannot close the fence). A note's fence names its sender
+(`source="note-energy"`), taken from the note's header, so a body claiming to be
+from Filip is still labelled as whoever really sent it. The cycle instructions
+say fenced text is data, with one exception: a `note-filip` fence is Filip, and what he
 tells the brain is still ground truth. The reason is the path from the
 researcher: a web page it reads can end up in a note to the brain, which holds
 `propose` and `slack_post`, and in a system message that text would carry the

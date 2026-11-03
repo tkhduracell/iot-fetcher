@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import math
 import os
 import time
 from collections import deque
@@ -66,6 +67,10 @@ class Limits:
     loops: frozenset[str] | None = None
     # The USD pool this key spends from, if it is paid in dollars. See Pool.
     usd_pool: str | None = None
+
+    @property
+    def brain_may_use(self) -> bool:
+        return self.loops is None or "brain" in self.loops
 
     @property
     def daily_tokens(self) -> int:
@@ -407,8 +412,7 @@ class Ledger:
         # The floor holds the last 40% back for the brain, so it only means
         # something on a key the brain may spend. On an expert-only key
         # (EXPERT_MODELS without BRAIN_MODELS) it just strands that share.
-        brain_may_use = limits.loops is None or "brain" in limits.loops
-        if priority == "expert" and brain_may_use:
+        if priority == "expert" and limits.brain_may_use:
             req_left, tok_left = self._fractions(bucket)
             if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
                 return Decision(False, _next_midnight(now), "priority")
@@ -449,20 +453,11 @@ class Ledger:
             return 0
         bucket = self._buckets[key]
         limits = bucket.limits
-        left = max(0, limits.rpd - bucket.requests_day)
-        brain_may_use = limits.loops is None or "brain" in limits.loops
-        if priority == "expert" and brain_may_use:
-            # First request count at which can_spend's floor check refuses:
-            # remaining fraction 1 - n/rpd no longer above EXPERT_FLOOR. Found
-            # with the same float expression it uses rather than by algebra,
-            # so a boundary cannot land one request off.
-            stop = int(limits.rpd * (1.0 - EXPERT_FLOOR))
-            while 1.0 - stop / limits.rpd > EXPERT_FLOOR:
-                stop += 1
-            while stop > 0 and not 1.0 - (stop - 1) / limits.rpd > EXPERT_FLOOR:
-                stop -= 1
-            left = min(left, max(0, stop - bucket.requests_day))
-        return left
+        if priority == "expert" and limits.brain_may_use:
+            # The request count at which can_spend's floor check starts
+            # refusing: remaining fraction 1 - n/rpd no longer above the floor.
+            return math.ceil(limits.rpd * (1.0 - EXPERT_FLOOR)) - bucket.requests_day
+        return limits.rpd - bucket.requests_day
 
     def limits(self, key: str) -> Limits | None:
         """The configured budget for a key, or None when it has no bucket.

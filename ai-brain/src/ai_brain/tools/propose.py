@@ -80,7 +80,7 @@ _DIGIT_RE = re.compile(r"^[0-9]+$")
 # a known prompt sentence to count as a restatement of it rather than a
 # coincidence. Stopwords are excluded from both sides before this is computed
 # (see _content_words) -- otherwise a short real item like "Water the plants
-# in the living room" shares "the"/"in" with half of CYCLE_INSTRUCTIONS and
+# in the living room" shares "the"/"in" with half of instructions_for("brain") and
 # nothing else, which is not what "restates your own instructions" means.
 _ANGLE_OVERLAP_THRESHOLD = 0.6
 
@@ -152,10 +152,10 @@ def _prompt_sentences() -> tuple[str, ...]:
     ``ai_brain.loop`` back at ``propose.py``'s own module scope would run
     while that package init is still mid-import.
     """
-    from ai_brain.loop import BRAIN_ANGLES, CYCLE_INSTRUCTIONS, EXPERT_ANGLES
+    from ai_brain.loop import BRAIN_ANGLES, EXPERT_ANGLES, instructions_for
 
     sentences = list(BRAIN_ANGLES) + list(EXPERT_ANGLES)
-    sentences.extend(s.strip() for s in CYCLE_INSTRUCTIONS.split(".") if s.strip())
+    sentences.extend(s.strip() for s in instructions_for("brain").split(".") if s.strip())
     return tuple(sentences)
 
 
