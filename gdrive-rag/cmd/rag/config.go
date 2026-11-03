@@ -19,10 +19,16 @@ type Config struct {
 	// Indexing.
 	WhitelistedFolders []string
 	EmbedModel         string
+	EmbedProvider      string // "gemini" or "ollama"
+	OllamaURL          string
+	OllamaBatchSize    int
+	OllamaTimeout      time.Duration
+	EmbedQueryPrefix   string // ollama only
 	ExtractModel       string
 
 	// Tuning.
 	SyncInterval   time.Duration
+	HealInterval   time.Duration
 	ChunkTokens    int
 	ChunkOverlap   int
 	EmbedBatchSize int
@@ -31,10 +37,10 @@ type Config struct {
 	LogLevel       string
 
 	// Budget caps.
-	EmbedTPMCap    int64
-	EmbedRPMCap    int64 // reserved; currently unused
-	FlashRPMCap    int
-	FlashDailyCap  int64
+	EmbedTPMCap   int64
+	EmbedRPMCap   int64 // reserved; currently unused
+	FlashRPMCap   int
+	FlashDailyCap int64
 
 	// File-size cutoffs.
 	MaxFileSizeMB      int
@@ -52,6 +58,10 @@ func LoadConfig() (*Config, error) {
 		GeminiAPIKey:       strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		WhitelistedFolders: splitCSV(os.Getenv("RAG_ROOT_FOLDER_IDS")),
 
+		EmbedProvider: getenv("RAG_EMBED_PROVIDER", "gemini"),
+		OllamaURL:     getenv("RAG_OLLAMA_URL", "http://ollama:11434"),
+		EmbedQueryPrefix: getenv("RAG_EMBED_QUERY_PREFIX",
+			"Instruct: Given a search query, retrieve relevant passages from the user's documents\nQuery: "),
 		EmbedModel:   getenv("RAG_EMBED_MODEL", "gemini-embedding-001"),
 		ExtractModel: getenv("RAG_EXTRACT_MODEL", "gemini-3.5-flash-lite"),
 		ListenAddr:   getenv("RAG_LISTEN_ADDR", ":8090"),
@@ -63,6 +73,9 @@ func LoadConfig() (*Config, error) {
 	if c.SyncInterval, err = getDuration("RAG_SYNC_INTERVAL", 10*time.Minute); err != nil {
 		return nil, err
 	}
+	if c.HealInterval, err = getDuration("RAG_HEAL_INTERVAL", 24*time.Hour); err != nil {
+		return nil, err
+	}
 	if c.ChunkTokens, err = getInt("RAG_CHUNK_TOKENS", 800); err != nil {
 		return nil, err
 	}
@@ -70,6 +83,12 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 	if c.EmbedBatchSize, err = getInt("RAG_EMBED_BATCH_SIZE", 25); err != nil {
+		return nil, err
+	}
+	if c.OllamaBatchSize, err = getInt("RAG_OLLAMA_BATCH_SIZE", 8); err != nil {
+		return nil, err
+	}
+	if c.OllamaTimeout, err = getDuration("RAG_OLLAMA_TIMEOUT", 15*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.EmbedTPMCap, err = getInt64("RAG_EMBED_TPM_CAP", 200_000); err != nil {
@@ -131,6 +150,9 @@ func (c *Config) validate() error {
 	}
 	if c.MaxFileSizeMB <= 0 {
 		return errors.New("RAG_MAX_FILE_SIZE_MB must be > 0")
+	}
+	if c.EmbedProvider != "gemini" && c.EmbedProvider != "ollama" {
+		return errors.New(`RAG_EMBED_PROVIDER must be "gemini" or "ollama"`)
 	}
 	if c.EmbedTPMCap <= 0 {
 		return errors.New("RAG_EMBED_TPM_CAP must be > 0")

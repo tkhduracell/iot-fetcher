@@ -132,6 +132,8 @@ def test_loop_allowlists(registry):
         "usage_status",
     }
     assert {s.name for s in registry.specs_for("house-ops")} == {
+        "vm_query",
+        "vm_metrics",
         "ha_context",
         "ha_error_log",
         "airbnb_calendar",
@@ -875,6 +877,68 @@ async def test_docker_top_reports_a_backend_error(registry, ctx):
     assert "404" in out["error"]
 
 
+# A model-supplied container name lands in the URL path. Anything outside
+# Docker's own name rule can reshape the request instead of naming a container:
+# '#' turns /containers/x/logs into an inspect (Config.Env and all), '?' and
+# '/' do the same by other means.
+BAD_CONTAINER_NAMES = [
+    "home-assistant/json#",
+    "home-assistant/json?",
+    "x/../json",
+    "../json",
+    "..",
+    ".hidden",
+    "-lead",
+    "a b",
+    "a%2Fb",
+    "name\n",
+    "",
+]
+
+
+@pytest.mark.parametrize("tool", ["docker_top", "docker_logs"])
+@pytest.mark.parametrize("name", BAD_CONTAINER_NAMES)
+@respx.mock
+async def test_docker_tools_refuse_a_bad_container_name_before_any_request(
+    registry, ctx, tool, name
+):
+    anything = respx.route().mock(return_value=httpx.Response(200, json={}))
+    out = await call(registry, ctx, tool, container=name)
+
+    assert "container" in out["error"]
+    assert not anything.called
+
+
+@pytest.mark.parametrize("tool", ["docker_top", "docker_logs"])
+@respx.mock
+async def test_a_bad_container_name_is_refused_without_logging_a_crash(
+    registry, ctx, tool, caplog
+):
+    # Refused input is not a tool crash: dispatch logs a WARNING with a
+    # traceback for those, which would bury a real crash among model typos.
+    anything = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with caplog.at_level("DEBUG"):
+        out = await call(registry, ctx, tool, container="x/json#")
+
+    assert "invalid container name" in out["error"]
+    assert not anything.called
+    assert not [r for r in caplog.records if r.levelname in ("WARNING", "ERROR") or r.exc_info]
+
+
+@pytest.mark.parametrize("name", ["iot-fetcher", "abc123def456", "a_b.c-d", "A1"])
+@respx.mock
+async def test_docker_tools_accept_ordinary_names_and_ids(registry, ctx, name):
+    top = respx.get(f"http://docker-proxy:2375/containers/{name}/top").mock(
+        return_value=httpx.Response(200, json={"Titles": [], "Processes": []})
+    )
+    logs = respx.get(f"http://docker-proxy:2375/containers/{name}/logs").mock(
+        return_value=httpx.Response(200, text="line\n")
+    )
+    assert "error" not in await call(registry, ctx, "docker_top", container=name)
+    assert "error" not in await call(registry, ctx, "docker_logs", container=name)
+    assert top.called and logs.called
+
+
 # --- docker_logs --------------------------------------------------------
 
 DOCKER_LOG = (
@@ -1004,7 +1068,7 @@ async def test_drive_search_default_top_k(registry, research_ctx):
     out = await call(registry, research_ctx, "drive_search", query="anything")
 
     assert out["files"] == []
-    assert json.loads(route.calls.last.request.content)["top_k"] == 5
+    assert json.loads(route.calls.last.request.content)["top_k"] == 3
 
 
 @respx.mock
@@ -1023,8 +1087,8 @@ async def test_drive_search_compacts(registry, research_ctx):
             200,
             json=[
                 hit("Lampor", "a  \n\n b", 0.91234),
-                hit("Lampor", "word " * 400, 0.8),
-                *[hit(f"f{i}", "word " * 400, 0.5) for i in range(10)],
+                hit("Lampor", "word " * 1000, 0.8),
+                *[hit(f"f{i}", "word " * 1000, 0.5) for i in range(10)],
             ],
         )
     )
@@ -1034,9 +1098,34 @@ async def test_drive_search_compacts(registry, research_ctx):
     lampor = out["files"][0]
     assert lampor["similarity"] == 0.91
     assert lampor["chunks"][0] == '<external source="google-drive">a b</external>'
-    assert len(lampor["chunks"][1]) < 800
+    assert len(lampor["chunks"][1]) < 3500
     assert out["truncated"] is True
-    assert len(json.dumps(out)) < 8000
+    assert len(json.dumps(out)) < 14000
+
+
+@respx.mock
+async def test_drive_search_keeps_full_size_chunk(registry, research_ctx):
+    text = ("word " * 640).strip()  # ~3,200 chars, one gdrive-rag chunk
+    respx.post("http://gdrive:8090/query").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "file_name": "Long.pdf",
+                    "folder_path": "/",
+                    "text": text,
+                    "web_view_link": "l",
+                    "similarity": 0.9,
+                }
+            ],
+        )
+    )
+    out = await call(registry, research_ctx, "drive_search", query="x")
+
+    assert out["files"][0]["chunks"] == [
+        f'<external source="google-drive">{text}</external>'
+    ]
+    assert out["truncated"] is False
 
 
 @respx.mock

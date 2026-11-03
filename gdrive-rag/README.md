@@ -88,12 +88,18 @@ All configuration is via environment variables; see
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RAG_EMBED_MODEL` | `gemini-embedding-001` | Embedding model |
+| `RAG_EMBED_PROVIDER` | `gemini` | `gemini` or `ollama`. Switching provider or model changes the vectors: wipe the data volume and let it re-backfill |
+| `RAG_EMBED_MODEL` | `gemini-embedding-001` | Embedding model (for `ollama`, e.g. `qwen3-embedding:0.6b`) |
+| `RAG_OLLAMA_URL` | `http://ollama:11434` | Ollama server, when the provider is `ollama` |
+| `RAG_EMBED_QUERY_PREFIX` | Qwen3 retrieval instruction | Prepended to search queries only (ollama); set empty for models without query instructions |
 | `RAG_EXTRACT_MODEL` | `gemini-3.5-flash-lite` | Flash OCR / extraction model |
 | `RAG_SYNC_INTERVAL` | `10m` | How often to run `changes.list` |
+| `RAG_HEAL_INTERVAL` | `24h` | How often to re-list whitelisted folders and re-enqueue files missing from the index (e.g. dropped after a 429). `0` disables |
 | `RAG_CHUNK_TOKENS` | `800` | Target chunk size |
 | `RAG_CHUNK_OVERLAP` | `100` | Tokens of overlap between chunks |
-| `RAG_EMBED_BATCH_SIZE` | `25` | Chunks per embedding request |
+| `RAG_EMBED_BATCH_SIZE` | `25` | Chunks per embedding request (Gemini) |
+| `RAG_OLLAMA_BATCH_SIZE` | `8` | Chunks per embedding request (Ollama) |
+| `RAG_OLLAMA_TIMEOUT` | `15m` | Timeout for one Ollama embedding request |
 | `RAG_LISTEN_ADDR` | `:8090` | HTTP listen address |
 | `RAG_DATA_DIR` | `/data` | Where state, queue, and chromem live |
 | `RAG_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |

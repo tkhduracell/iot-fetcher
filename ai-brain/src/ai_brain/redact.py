@@ -63,14 +63,42 @@ _AUTH_HEADER = re.compile(r"(Authorization\s*:\s*)([^\r\n]+)", re.IGNORECASE)
 # a query string fragment or a logged kwarg, in either separator style.
 # Stops at whitespace, '&', or a quote so it does not eat the rest of a URL
 # or a following JSON field.
-_KEYISH_WORD = r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|token|key)"
+#
+# A name is secret-shaped on its last word: ``client_secret``, ``AWS_SESSION_TOKEN``,
+# ``X-Auth-Token``, and the camelCase ``clientSecret`` too. ``\\b`` alone cannot see
+# those, since ``_`` is a word character. A ``key`` needs a telling word in front of
+# it: ``sort_key``, ``cache_key`` and ``primary_key`` are ordinary, and it is
+# ``api_key``, ``secret_key`` and the like that are not. The prefix is bounded (eight
+# parts of 32 characters, since ``GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET`` is a real
+# name) because a separator is a word boundary, so on a long run of ``a-a-a-`` each
+# boundary would otherwise rescan the rest of the run.
+_NAME_PREFIX = r"(?:[A-Za-z0-9]{1,32}[_-]){0,8}"
+# ``pwd`` followed by a path is the shell's working directory, not a password.
+_SECRET_WORD = r"(?:token|secret|password|passwd|pwd(?!\s*[=:]\s*/)|passphrase|credentials?)"
+_SECRET_KEY = r"(?:api|access|secret|private|auth|signing|encryption|ssh)[_-]?key"
+# For a field in structured data, where the name is all there is to go on and a
+# false positive costs a masked setting: ``search`` this, and a match means secret
+# however short the value is. Free text gets ``_KV_SECRET`` and its 8-character floor.
+# The two header names are here only: in free text they are ordinary words.
+SECRET_NAME = re.compile(rf"{_SECRET_WORD}|{_SECRET_KEY}|authorization|cookie", re.IGNORECASE)
+_KEYISH_WORD = (
+    r"(?:"
+    rf"{_NAME_PREFIX}{_SECRET_WORD}"
+    rf"|{_NAME_PREFIX}{_SECRET_KEY}"
+    r"|(?-i:[a-z][a-zA-Z0-9]{0,32}(?:Secret|Token|Password|Passwd|Credentials?|ApiKey|AccessKey|PrivateKey|AuthKey))"
+    r"|key"
+    r")"
+)
 # The optional \"?/'? before the separator handles JSON's `"key": "value"` --
 # the word is immediately followed by its own closing quote, not the colon.
 # The value needs at least 8 chars: short enough to catch real secrets
 # (nothing credible is shorter), long enough that "retry key=3" or
 # "key=on" -- an ordinary flag or setting, not a secret -- is left alone.
+# %3D and %3A are the separators in a URL-encoded query inside another URL, such
+# as an OAuth redirect's ``client_secret%3D...``. Its value then runs on through
+# any %26 to the next real delimiter, which masks more than the one parameter.
 _KV_SECRET = re.compile(
-    rf"\b({_KEYISH_WORD})[\"']?\s*[=:]\s*[\"']?([^\s&\"'<>]{{8,}})",
+    rf"\b({_KEYISH_WORD})[\"']?\s*(?:[=:]|%3[da])\s*[\"']?([^\s&\"'<>]{{8,}})",
     re.IGNORECASE,
 )
 
@@ -87,7 +115,22 @@ _KEYISH_PHRASE = re.compile(
 
 # Emails. Household/account addresses are exactly the kind of detail that
 # must not end up quoted in a public repo's memory fact.
-_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+# The local part is held to its 64-character RFC limit. Unbounded, every word
+# boundary in a long run of these characters started a scan to the end of the
+# run, which is quadratic: a 512 KB dotted token took minutes, on the one event
+# loop every agent shares.
+_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
+
+def masked_under_name(name: str, value: str) -> bool:
+    """Whether ``name=value`` reads as a secret because of ``name`` itself.
+
+    The match has to start inside the name, so a secret-shaped pair further along
+    the value does not count: that part is ``redact``'s to mask, not a verdict on
+    the whole.
+    """
+    match = _KV_SECRET.search(f"{name}={value}")
+    return match is not None and match.start() < len(name)
 
 
 def redact(text: str) -> str:

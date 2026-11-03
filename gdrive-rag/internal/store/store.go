@@ -150,6 +150,25 @@ func (s *Store) ExistingHashes(ctx context.Context, fileID string) (map[int]stri
 	return out, nil
 }
 
+// FileModifiedTime returns the Drive modifiedTime recorded on fileID's first
+// chunk, and false when the file has no chunks in the store.
+func (s *Store) FileModifiedTime(ctx context.Context, fileID string) (time.Time, bool, error) {
+	if fileID == "" {
+		return time.Time{}, false, errors.New("store: fileID is empty")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	doc, err := s.collection.GetByID(ctx, chunkID(fileID, 0))
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, fmt.Errorf("store: get chunk 0: %w", err)
+	}
+	t, _ := time.Parse(time.RFC3339Nano, doc.Metadata[metaModifiedTime])
+	return t, true, nil
+}
+
 // ReplaceFile atomically (best-effort) replaces all chunks for fileID with
 // the provided chunks. Existing chunks for the file are deleted first, then
 // the new chunks are inserted. chromem-go has no transactions, so a crash

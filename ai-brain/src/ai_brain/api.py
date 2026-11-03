@@ -143,6 +143,7 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
     if trace is None:
         return None
     return {
+        "cycle_id": trace.cycle_id,
         "started_at": trace.started_at,
         "finished_at": trace.finished_at,
         "in_progress": trace.in_progress,

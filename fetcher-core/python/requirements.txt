@@ -19,9 +19,9 @@ certifi==2026.7.22
     #   requests
 cffi==2.1.1
     # via cryptography
-charset-normalizer==3.5.1
+charset-normalizer==3.5.2
     # via requests
-cryptography==50.0.1
+cryptography==50.0.2
     # via
     #   google-auth
     #   plugp100
@@ -50,7 +50,7 @@ google-crc32c==1.8.0
     #   google-resumable-media
 google-resumable-media==2.10.2
     # via google-cloud-storage
-googleapis-common-protos==1.75.4
+googleapis-common-protos==1.75.5
     # via google-api-core
 h11==0.16.0
     # via httpcore
@@ -74,7 +74,7 @@ idna==3.20
     #   httpx
     #   requests
     #   yarl
-influxdb3-python==0.20.0
+influxdb3-python==0.21.0
     # via iot-fetcher (pyproject.toml)
 jsons==1.6.3
     # via plugp100
@@ -90,7 +90,7 @@ passlib==1.7.4
     # via plugp100
 plugp100==6.0.1
     # via iot-fetcher (pyproject.toml)
-propcache==0.5.2
+propcache==0.5.4
     # via
     #   aiohttp
     #   yarl

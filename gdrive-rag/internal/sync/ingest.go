@@ -86,12 +86,7 @@ func exportMimeFor(mime string) (exportMime string, native, indexable bool) {
 // error is a per-file failure and is also recorded.
 func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 	if l.maxFileSizeMB > 0 && item.Size > 0 && item.Size > int64(l.maxFileSizeMB)*1024*1024 {
-		l.state.AppendSkipped(state.SkippedFile{
-			FileID:   item.FileID,
-			FileName: item.FileName,
-			Reason:   fmt.Sprintf("too-large (%d bytes, cap %dMB)", item.Size, l.maxFileSizeMB),
-			At:       l.now(),
-		})
+		l.skip(item, fmt.Sprintf("too-large (%d bytes, cap %dMB)", item.Size, l.maxFileSizeMB))
 		return nil
 	}
 
@@ -100,12 +95,7 @@ func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 		// belongs in Skipped so /status counts it once rather than the queue
 		// churning on it every sync.
 		l.logger.Info("sync: not indexable", "fileID", item.FileID, "mime", item.MimeType)
-		l.state.AppendSkipped(state.SkippedFile{
-			FileID:   item.FileID,
-			FileName: item.FileName,
-			Reason:   fmt.Sprintf("not-indexable (%s)", item.MimeType),
-			At:       l.now(),
-		})
+		l.skip(item, fmt.Sprintf("not-indexable (%s)", item.MimeType))
 		return nil
 	}
 
@@ -129,12 +119,7 @@ func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 		if err := l.store.DeleteFile(ctx, item.FileID); err != nil {
 			l.logger.Warn("sync: deleting stale file after empty extract", "fileID", item.FileID, "err", err)
 		}
-		l.state.AppendSkipped(state.SkippedFile{
-			FileID:   item.FileID,
-			FileName: item.FileName,
-			Reason:   "empty-text",
-			At:       l.now(),
-		})
+		l.skip(item, "empty-text")
 		return nil
 	}
 
@@ -150,6 +135,7 @@ func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 	if !needsEmbed(hashes, existing) {
 		l.logger.Debug("sync: skipping embed (hashes unchanged)",
 			"fileID", item.FileID, "chunks", len(chunks))
+		l.state.MarkIndexed(item.FileID)
 		return nil
 	}
 
@@ -188,7 +174,20 @@ func (l *Looper) ingest(ctx context.Context, item queue.Item) error {
 	if err := l.store.ReplaceFile(ctx, item.FileID, storeChunks); err != nil {
 		return fmt.Errorf("store replace: %w", err)
 	}
+	l.state.MarkIndexed(item.FileID)
 	return nil
+}
+
+// skip records item as not indexable at its current modifiedTime, so heal
+// leaves it alone until the file is edited.
+func (l *Looper) skip(item queue.Item, reason string) {
+	l.state.AppendSkipped(state.SkippedFile{
+		FileID:   item.FileID,
+		FileName: item.FileName,
+		Reason:   reason,
+		At:       l.now(),
+	})
+	l.state.MarkUnindexable(item.FileID, item.ModifiedTime)
 }
 
 // fetchBody picks the right Drive accessor for item.MimeType and returns the

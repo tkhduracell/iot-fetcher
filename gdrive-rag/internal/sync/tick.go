@@ -9,7 +9,14 @@ import (
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/drive"
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/extract"
 	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/queue"
-	"github.com/tkhduracell/iot-fetcher/gdrive-rag/internal/state"
+)
+
+const (
+	// tickRetries is how many consecutive failures get an immediate retry on
+	// the next tick; later attempts wait for the heal pass.
+	tickRetries = 3
+	// maxIngestAttempts is when a failing file is given up on until edited.
+	maxIngestAttempts = 8
 )
 
 // tick runs one full pass: initial backfill if required, reconcile changes,
@@ -29,12 +36,18 @@ func (l *Looper) tick(ctx context.Context) error {
 		}
 	}
 
-	// 2. Reconcile Drive changes since the last persisted pageToken.
+	// 2. Self-heal: re-enqueue files the index lost. Best-effort; a failed
+	// pass is retried next tick and never blocks change reconciliation.
+	if err := l.heal(ctx); err != nil {
+		l.logger.Warn("sync: heal failed", "err", err)
+	}
+
+	// 3. Reconcile Drive changes since the last persisted pageToken.
 	if err := l.reconcileChanges(ctx); err != nil {
 		return err
 	}
 
-	// 3. Drain the queue. Ingest errors are per-file; only budget exhaustion
+	// 4. Drain the queue. Ingest errors are per-file; only budget exhaustion
 	// aborts the whole drain.
 	if err := l.drainQueue(ctx); err != nil {
 		return err
@@ -99,7 +112,19 @@ func (l *Looper) reconcileChanges(ctx context.Context) error {
 // drainQueue pops items one at a time and passes them through ingest. It
 // returns early with ErrDailyBudgetExhausted when a budget gate trips,
 // requeuing the in-flight item so no work is lost.
-func (l *Looper) drainQueue(ctx context.Context) error {
+func (l *Looper) drainQueue(ctx context.Context) (err error) {
+	// Files that failed transiently are retried on the next tick, not in this
+	// drain — requeueing immediately would spin on a persistent 429.
+	var retry []queue.Item
+	defer func() {
+		if len(retry) == 0 {
+			return
+		}
+		if reErr := l.queue.EnqueueMany(retry); reErr != nil && err == nil {
+			err = fmt.Errorf("requeue failed items: %w", reErr)
+		}
+	}()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -118,24 +143,23 @@ func (l *Looper) drainQueue(ctx context.Context) error {
 			// Proceed to the next item.
 		case errors.Is(err, budget.ErrDailyBudgetExhausted):
 			// Requeue so we pick this file back up after reset.
-			if reErr := l.queue.Enqueue(item); reErr != nil {
-				l.logger.Warn("sync: requeue after budget exhaustion failed",
-					"fileID", item.FileID, "err", reErr)
-			}
+			retry = append(retry, item)
 			return err
 		case errors.Is(err, extract.ErrUnsupported):
-			l.state.AppendSkipped(state.SkippedFile{
-				FileID:   item.FileID,
-				FileName: item.FileName,
-				Reason:   "unsupported-mime",
-				At:       l.now(),
-			})
+			l.skip(item, "unsupported-mime")
 		default:
-			// Transient failure (network, API 5xx, etc.). Log and drop — a
-			// subsequent Drive change event, or an operator-triggered reindex,
-			// will re-enqueue the file. Don't pollute state.Skipped with
-			// transient noise; that list is for permanently-unindexable files.
-			l.logger.Warn("sync: ingest failed", "fileID", item.FileID, "err", err)
+			// Transient failure (network, API 5xx, 429, etc.). Retry on the
+			// next few ticks, then leave it to the daily heal pass; after
+			// maxIngestAttempts it's recorded as unindexable so a file that
+			// can never be processed doesn't burn OCR budget every day.
+			n := l.state.RecordFailure(item.FileID)
+			l.logger.Warn("sync: ingest failed", "fileID", item.FileID, "attempt", n, "err", err)
+			switch {
+			case n >= maxIngestAttempts:
+				l.skip(item, fmt.Sprintf("failed %d attempts: %v", n, err))
+			case n < tickRetries:
+				retry = append(retry, item)
+			}
 		}
 	}
 }

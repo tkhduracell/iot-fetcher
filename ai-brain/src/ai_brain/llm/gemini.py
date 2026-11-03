@@ -45,6 +45,9 @@ from ai_brain.llm import (
     ToolCall,
     ToolSpec,
     Usage,
+    as_replayed_result,
+    as_transcript,
+    is_foreign_turn,
 )
 
 log = logging.getLogger(__name__)
@@ -266,7 +269,7 @@ def build_request(
                 system.append(message.content)
         elif message.role == "tool":
             if replaying:
-                _append_user_text(contents, f"Result of {message.name}: {message.content}")
+                _append_user_text(contents, as_replayed_result(message))
                 continue
             part = {
                 "functionResponse": {
@@ -280,10 +283,10 @@ def build_request(
             else:
                 contents.append({"role": "user", "parts": [part]})
         elif message.role == "assistant":
-            replaying = _is_foreign_turn(message, model)
+            replaying = is_foreign_turn(message, model)
             if replaying:
                 log.debug("replaying %s turn as text for %s", message.model, model)
-                contents.append({"role": "model", "parts": [{"text": _as_transcript(message)}]})
+                contents.append({"role": "model", "parts": [{"text": as_transcript(message)}]})
                 continue
             parts: list[dict[str, Any]] = []
             if message.content:
@@ -373,39 +376,6 @@ def _attach_orphan_signature(parts: list[dict[str, Any]], signature: str) -> Non
             part["thoughtSignature"] = signature
             return
     parts.append({"text": "", "thoughtSignature": signature})
-
-
-def _is_foreign_turn(message: Message, model: str) -> bool:
-    """True when this tool-calling turn came from a different model.
-
-    The chain changes model mid-cycle whenever one runs out: the LAN host goes
-    away, a key is parked on 429s. The conversation so far then belongs to
-    ollama, which has no notion of a thought signature, and Gemini 3.x rejects
-    the whole request for it -- "Function call is missing a thought_signature
-    in functionCall parts" -- as a 400 that ``bad_request`` quite rightly
-    refuses to retry. The cycle dies at whatever round the switch happened on,
-    with every round before it wasted.
-
-    Signatures are the model's own, so the same applies between two Gemini
-    models. A turn with no model recorded is left alone: that is a turn nobody
-    attributed, and the old behaviour is the safe one for it.
-    """
-    return bool(message.tool_calls) and bool(message.model) and message.model != model
-
-
-def _as_transcript(message: Message) -> str:
-    """One unsigned model turn as plain text Gemini will accept.
-
-    The alternative to replaying it is dropping it, and the tool calls are the
-    entire content of a cycle: an agent handed its own history minus what it
-    did would repeat every call it had already made.
-    """
-    lines = [message.content] if message.content else []
-    lines += [
-        f"I called {call.name}({json.dumps(call.args, ensure_ascii=False, sort_keys=True)})"
-        for call in message.tool_calls
-    ]
-    return "\n".join(lines)
 
 
 def _append_user_text(contents: list[dict[str, Any]], text: str) -> None:

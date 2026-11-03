@@ -55,6 +55,9 @@ type ReindexRequest struct {
 // so the wire format is stable independent of the internal struct.
 type StatusResponse struct {
 	LastSync           string `json:"last_sync"`
+	LastHeal           string `json:"last_heal"`
+	HealReenqueued     int    `json:"heal_reenqueued"`
+	UnindexableCount   int    `json:"unindexable_count"`
 	DocumentCount      int    `json:"document_count"`
 	ChunkCount         int    `json:"chunk_count"`
 	QueueDepth         int    `json:"queue_depth"`
@@ -96,7 +99,7 @@ type Service struct {
 // NewService constructs a Service backed by the concrete types used in
 // production. Use zero-value construction (&Service{...}) when swapping fakes
 // in tests.
-func NewService(looper *syncpkg.Looper, embedder *embed.Client, st *store.Store, logger *slog.Logger) *Service {
+func NewService(looper *syncpkg.Looper, embedder embed.Embedder, st *store.Store, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -181,8 +184,15 @@ func (s *Service) Status(ctx context.Context) StatusResponse {
 	if !st.LastSync.IsZero() {
 		lastSync = st.LastSync.UTC().Format(time.RFC3339)
 	}
+	var lastHeal string
+	if !st.LastHeal.IsZero() {
+		lastHeal = st.LastHeal.UTC().Format(time.RFC3339)
+	}
 	return StatusResponse{
 		LastSync:           lastSync,
+		LastHeal:           lastHeal,
+		HealReenqueued:     st.HealReenqueued,
+		UnindexableCount:   st.UnindexableCount,
 		DocumentCount:      st.DocumentCount,
 		ChunkCount:         st.ChunkCount,
 		QueueDepth:         st.QueueDepth,

@@ -106,13 +106,26 @@ func run() error {
 	}
 
 	// Embedder.
-	embClient, err := embed.NewClient(ctx, embed.Config{
-		APIKey:       cfg.GeminiAPIKey,
-		Model:        cfg.EmbedModel,
-		BatchSize:    cfg.EmbedBatchSize,
-		TPMLimiter:   embedTPM,
-		RecordTokens: func(n int64) { st.AddEmbedTokens(n) },
-	})
+	var embClient embed.Embedder
+	switch cfg.EmbedProvider {
+	case "ollama":
+		embClient, err = embed.NewOllamaClient(embed.OllamaConfig{
+			URL:          cfg.OllamaURL,
+			Model:        cfg.EmbedModel,
+			BatchSize:    cfg.OllamaBatchSize,
+			Timeout:      cfg.OllamaTimeout,
+			QueryPrefix:  cfg.EmbedQueryPrefix,
+			RecordTokens: func(n int64) { st.AddEmbedTokens(n) },
+		})
+	default:
+		embClient, err = embed.NewClient(ctx, embed.Config{
+			APIKey:       cfg.GeminiAPIKey,
+			Model:        cfg.EmbedModel,
+			BatchSize:    cfg.EmbedBatchSize,
+			TPMLimiter:   embedTPM,
+			RecordTokens: func(n int64) { st.AddEmbedTokens(n) },
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("embed client: %w", err)
 	}
@@ -149,6 +162,7 @@ func run() error {
 		Embedder:           embClient,
 		WhitelistedFolders: cfg.WhitelistedFolders,
 		Interval:           cfg.SyncInterval,
+		HealInterval:       cfg.HealInterval,
 		ChunkTokens:        cfg.ChunkTokens,
 		ChunkOverlap:       cfg.ChunkOverlap,
 		MaxFileSizeMB:      cfg.MaxFileSizeMB,

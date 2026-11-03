@@ -8,7 +8,7 @@ import { lightingPanels } from './panels/lighting.ts';
 import { navimowPanels } from './panels/navimow.ts';
 import { volvoPanels } from './panels/volvo.ts';
 import { systemPanels } from './panels/system.ts';
-import { wudPanels } from './panels/wud.ts';
+import { watchdogPanels } from './panels/watchdog.ts';
 
 export function buildDashboard() {
   const builder = new DashboardBuilder('Irisgatan')
@@ -96,9 +96,9 @@ export function buildDashboard() {
     builder.withPanel(panel);
   }
 
-  // Docker / WUD row (container update monitoring via What's Up Docker)
-  builder.withRow(new RowBuilder('Docker / WUD').gridPos({ h: 1, w: 24, x: 0, y: 168 }));
-  for (const panel of wudPanels()) {
+  // Docker row (container health restarts + auto-updates via watchdog)
+  builder.withRow(new RowBuilder('Docker / Watchdog').gridPos({ h: 1, w: 24, x: 0, y: 168 }));
+  for (const panel of watchdogPanels()) {
     builder.withPanel(panel);
   }
 

@@ -80,7 +80,7 @@ _DIGIT_RE = re.compile(r"^[0-9]+$")
 # a known prompt sentence to count as a restatement of it rather than a
 # coincidence. Stopwords are excluded from both sides before this is computed
 # (see _content_words) -- otherwise a short real item like "Water the plants
-# in the living room" shares "the"/"in" with half of CYCLE_INSTRUCTIONS and
+# in the living room" shares "the"/"in" with half of instructions_for("brain") and
 # nothing else, which is not what "restates your own instructions" means.
 _ANGLE_OVERLAP_THRESHOLD = 0.6
 
@@ -152,10 +152,10 @@ def _prompt_sentences() -> tuple[str, ...]:
     ``ai_brain.loop`` back at ``propose.py``'s own module scope would run
     while that package init is still mid-import.
     """
-    from ai_brain.loop import BRAIN_ANGLES, CYCLE_INSTRUCTIONS, EXPERT_ANGLES
+    from ai_brain.loop import BRAIN_ANGLES, EXPERT_ANGLES, instructions_for
 
     sentences = list(BRAIN_ANGLES) + list(EXPERT_ANGLES)
-    sentences.extend(s.strip() for s in CYCLE_INSTRUCTIONS.split(".") if s.strip())
+    sentences.extend(s.strip() for s in instructions_for("brain").split(".") if s.strip())
     return tuple(sentences)
 
 
@@ -180,7 +180,7 @@ def _echoes_a_prompt(text: str) -> str | None:
 # are short identifiers, not sentences a model would restate its own prompt
 # into, and checking them against MIN_ITEM_WORDS would reject every ordinary
 # entity id for being "too short".
-_PROSE_FIELDS = frozenset({"item", "text"})
+_PROSE_FIELDS = frozenset({"item", "text", "why"})
 
 
 def junk_proposal_reason(kind: str, payload: dict, topic: str) -> str | None:
@@ -343,8 +343,12 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                     "optional \"data\": {\"brightness_pct\": 40}}) for lights, switches, scenes, "
                     "scripts, covers, fans, climate and media players -- look the entity up with "
                     "ha_context first, and expect anything outside that allowlist to be refused -- "
-                    "and docker_restart (payload {\"container\": \"iot-fetcher\"}) for a container "
-                    "that is crash-looping or stuck, found with docker_ps first."
+                    "docker_restart (payload {\"container\": \"iot-fetcher\"}) for a container "
+                    "that is crash-looping or stuck, found with docker_ps first -- "
+                    "and idea (payload {\"title\": ..., \"why\": ...}) to pitch an "
+                    "addition to yourself: a tool, data source, expert or use case. 'why' names "
+                    "the evidence (what you could not do, what Filip asked for). Approving runs "
+                    "nothing; it tells you he wants it built."
                 ),
                 parameters={
                     "type": "object",
