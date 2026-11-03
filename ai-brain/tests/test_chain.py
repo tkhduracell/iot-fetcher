@@ -384,7 +384,7 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
 
     env = parse_env_file(ENV_EXAMPLE)
     assert env["LLM_CHAIN"] == (
-        "gemini:gemini-3.8-flash,lan:qwen3.8:27b-mlx,gemini:gemini-3.5-flash-lite,"
+        "lan:qwen3.8:27b-mxfp8,gemini:gemini-3.8-flash,lan:qwen3.8:27b-mlx,gemini:gemini-3.5-flash-lite,"
         "lan:qwen3-coder:30b"
     )
 
@@ -392,8 +392,9 @@ def test_env_example_chain_builds_a_real_chain(tmp_path, monkeypatch):
     ledger, _ = make_ledger(tmp_path, settings.llm_chain)
     chain = ProviderChain.from_settings(settings, ledger)
 
-    # The free tier first, local hardware behind it, in the file's order.
+    # The preferred LAN build first, then the free tier and the rest, in the file's order.
     assert [p.key for p in chain.providers] == [
+        "lan:qwen3.8:27b-mxfp8",
         "gemini:gemini-3.8-flash",
         "lan:qwen3.8:27b-mlx",
         "gemini:gemini-3.5-flash-lite",
