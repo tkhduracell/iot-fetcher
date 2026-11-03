@@ -28,6 +28,7 @@ CYCLE_BUCKETS: dict[str, str] = {
     "max_rounds": "repeat",
     "error": "note",
     "timeout": "note",
+    "abandoned": "note",
     "no_budget": "nothing",
     "paused": "nothing",
     "cancelled": "nothing",

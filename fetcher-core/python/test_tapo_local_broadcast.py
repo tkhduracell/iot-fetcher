@@ -4,7 +4,6 @@ Quick test to find the right broadcast address for TAPO discovery
 """
 
 import asyncio
-import sys
 from plugp100.discovery.tapo_discovery import TapoDiscovery
 
 async def test_broadcast(broadcast_addr):

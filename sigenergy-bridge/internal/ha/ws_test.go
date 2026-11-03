@@ -90,7 +90,7 @@ func TestDial_AuthOK_ForwardsMatchingEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	l := Dial(ctx, url, "tok", "sensor.wallbox_status", quietLog())
+	l := Dial(ctx, url, "tok", []string{"sensor.wallbox_status"}, quietLog())
 
 	// Should see connected=true
 	select {
@@ -113,6 +113,39 @@ func TestDial_AuthOK_ForwardsMatchingEvent(t *testing.T) {
 	}
 }
 
+func TestDial_EmitsSnapshotOnConnect(t *testing.T) {
+	url, stop := newTestServer(t, func(c *websocket.Conn, t *testing.T) {
+		_ = c.WriteJSON(map[string]any{"type": "auth_required"})
+		var m map[string]any
+		_ = c.ReadJSON(&m)
+		_ = c.WriteJSON(map[string]any{"type": "auth_ok"})
+		_ = c.ReadJSON(&m) // subscribe
+		_ = c.ReadJSON(&m) // get_states
+		if m["type"] != "get_states" {
+			t.Errorf("expected get_states, got %v", m)
+			return
+		}
+		_ = c.WriteJSON(map[string]any{"id": m["id"], "type": "result", "success": true, "result": []map[string]any{
+			{"entity_id": "sensor.other", "state": "x"},
+			{"entity_id": "sensor.car", "state": "charging"},
+		}})
+		_, _, _ = c.ReadMessage()
+	})
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	l := Dial(ctx, url, "tok", []string{"sensor.car"}, quietLog())
+	select {
+	case ev := <-l.Events():
+		if ev.EntityID != "sensor.car" || ev.NewState != "charging" || ev.OldState != "" {
+			t.Errorf("unexpected event: %+v", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for snapshot event")
+	}
+}
+
 func TestDial_AuthInvalid_Stops(t *testing.T) {
 	// connectCount is written by the server-handler goroutine and read by the
 	// test goroutine, so it must be accessed atomically to stay race-free.
@@ -131,7 +164,7 @@ func TestDial_AuthInvalid_Stops(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	l := Dial(ctx, url, "bad", "sensor.wallbox_status", quietLog())
+	l := Dial(ctx, url, "bad", []string{"sensor.wallbox_status"}, quietLog())
 
 	// Give the loop a moment to try and then give up.
 	time.Sleep(200 * time.Millisecond)

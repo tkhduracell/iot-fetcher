@@ -92,6 +92,9 @@ FEED_KEEPALIVE_S = 20
 #                  ``paused`` returns before the chain, ``no_budget`` is
 #                  ``ChainExhausted``, ``cancelled`` is shutdown).
 #
+# ``abandoned`` goes under ``note`` too: an unfinished cycle given up on, which
+# cost budget and left a journal line but no work.
+#
 # Any status not listed here also lands in ``nothing`` rather than being
 # dropped, so the four buckets always sum to ``total``: a status added to
 # ``loop.py`` later must not quietly make the numbers stop reconciling.
@@ -143,6 +146,8 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
     if trace is None:
         return None
     return {
+        "cycle_id": trace.cycle_id,
+        "resumed_after_s": trace.resumed_after_s,
         "started_at": trace.started_at,
         "finished_at": trace.finished_at,
         "in_progress": trace.in_progress,
