@@ -973,6 +973,44 @@ def test_an_experts_instructions_say_its_route_is_a_note_to_the_brain():
         assert brain_only not in text
 
 
+@pytest.mark.parametrize("role", ROLES)
+def test_a_seed_persona_names_only_tools_its_loop_has(role):
+    reg = _full_registry()
+    text = (SEED_DIR / "personas" / f"{role}.md").read_text(encoding="utf-8")
+
+    assert _tools_named_in(text, reg) <= {s.name for s in reg.specs_for(role)}
+
+
+def test_the_brain_is_not_told_it_can_search_the_web_or_drive():
+    """drive_search and web_* are the researcher's alone (see the loops= lists)."""
+    reg = _full_registry()
+    brain = {s.name for s in reg.specs_for("brain")}
+    researcher = {s.name for s in reg.specs_for("researcher")}
+    assert {"drive_search", "web_search", "web_fetch"} <= researcher
+    assert not {"drive_search", "web_search", "web_fetch"} & brain
+
+    text = instructions_for("brain")
+    assert "gdrive" not in text.lower() and "drive_search" not in text and "web_" not in text
+    assert "cannot search the web or the household documents in Drive" in text
+    assert 'to="researcher"' in text
+    # ...and what it is told it can query it really has.
+    assert {"vm_query", "vm_metrics", "ha_context", "ha_error_log", "docker_ps"} <= brain
+
+
+def test_the_researchers_seed_names_what_only_it_can_use():
+    reg = _full_registry()
+    persona = (SEED_DIR / "personas" / "researcher.md").read_text(encoding="utf-8").lower()
+    offered = {s.name for s in reg.specs_for("researcher")}
+
+    assert "web search" in persona and "drive" in persona
+    assert {"web_search", "drive_search"} <= offered
+    # It has no metrics or Home Assistant, and neither its persona nor the
+    # expert instructions it shares with the others say otherwise.
+    assert not offered & {"vm_query", "ha_context"}
+    assert "victoriametrics" not in persona and "home assistant" not in persona
+    assert _tools_named_in(instructions_for("expert"), reg) <= offered
+
+
 # -- untrusted text stays out of the system prompt -----------------------
 
 INJECTION = (

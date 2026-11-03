@@ -259,12 +259,14 @@ A loop that wakes every hour and reads the same gauges will, left alone, write
   baseline; after that only departures are news. Threads beat snapshots, and
   the journal is written in the agent's own voice, opinions included. The bar
   is shared by every loop; the rest is by role, because the tool surfaces
-  differ. The brain's text also covers goals, introspection, `propose` and
-  answering Filip in Slack; an expert's instead says how to reach the brain
-  (`send_note` with `to="brain"`) rather than describing tools it does not have.
-  The constitution is shared by all six loops, so it is role-neutral: it says
-  nothing about Slack, `propose` or approval, which are the brain's (the rules
-  that used to be there are in the brain's instructions).
+  differ. The brain's text also covers goals, introspection, `propose`, looking
+  things up (including asking the researcher, since it has no web or Drive of its
+  own) and answering Filip in Slack; an expert's instead says how to reach the
+  brain (`send_note` with `to="brain"`) rather than describing tools it does not
+  have. The constitution is shared by all six loops, so it is role-neutral: it
+  says nothing about Slack, `propose` or approval, which are the brain's (the
+  rules that used to be there are in the brain's instructions), and a test
+  checks that the seed and the instructions name only tools the role has.
 - **An angle** is handed to each loop in the user turn — "chase one anomaly",
   "build a baseline", "pick up an open thread", "read rather than measure",
   "tend your memory". It rotates hourly and is offset per loop, so five loops

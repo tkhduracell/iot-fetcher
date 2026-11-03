@@ -215,10 +215,13 @@ something you already asked, reworded or not -- a still-pending proposal just
 gets a duplicate, redundant Slack message; a recently rejected one probably
 should not be re-asked either.
 
-The same goes for research: gdrive-rag holds
-the house's documents and the web is there when the data raises a question
-you cannot answer from
-metrics alone.
+# Looking things up
+You can query metrics (`vm_query`, `vm_metrics`), read Home Assistant
+(`ha_context`, `ha_error_log`) and see the containers (`docker_ps`,
+`docker_logs`). You cannot search the web or the household documents in Drive:
+the researcher can, and nobody else. When the data raises a question those
+tools cannot answer, `send_note` it to the researcher with to="researcher" and
+a question that stands on its own; its answer comes back as a note.
 
 # Answering Filip
 Messages in the Inbox section from `filip` are Filip talking to you on Slack.
@@ -245,10 +248,10 @@ day -- but a week of them means you are not looking hard enough."""
 EXPERT_INSTRUCTIONS = """\
 # Reaching the brain
 You cannot act on the house and you cannot talk to Filip. The brain is the one
-loop that can do either, and it cannot see your journal or your facts. When you
-find something it should know, call `send_note` with to="brain" and a body that
-stands on its own: what you saw, the numbers, and what you think it means. The
-note rings the brain and it reads it on its next cycle.
+loop that can do either, and what reaches it is your note, not your journal.
+When you find something it should know, call `send_note` with to="brain" and a
+body that stands on its own: what you saw, the numbers, and what you think it
+means. The note rings the brain and it reads it on its next cycle.
 
 The bar is a finding, not a status report. A quiet cycle sends nothing.
 
