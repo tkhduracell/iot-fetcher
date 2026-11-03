@@ -226,6 +226,17 @@ state, so it is much easier to start narrow than to unpick a bad first day.
 
 5. **Drop `DRY_RUN`** once you are happy with what it is proposing.
 
+**Restarts do not wake the loops.** Each loop saves the wake it chose
+(`last_cycle_at` + `next_wake_s` in its `_state.json`) and, after a restart,
+waits out what is left of it before its first cycle, so a deploy does not spend
+the brain's handful of daily requests on a cycle that was not due. It starts at
+once when there is no saved state, the wake has already passed, the last cycle
+was cut off by the shutdown, or notes are waiting in its inbox -- the brain's
+expert notes still sit out `BRAIN_MIN_WAKE_GAP_MIN`, Filip's and approvals'
+start it immediately. The wait never exceeds the wake that was saved (a clock
+that stepped back cannot make it longer), and the wake bell ends it early like
+any other sleep.
+
 To pause at any point: `touch volumes/ai-brain-memory/PAUSE`. It takes effect
 at the top of the next round — so mid-cycle, not only at the next cycle — no
 restart needed, and it does not lose queued work.

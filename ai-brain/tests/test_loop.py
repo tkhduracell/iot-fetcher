@@ -1457,6 +1457,150 @@ async def test_wake_event_interrupts_the_sleep(make_loop):
     assert not loop.wake.is_set()
 
 
+# -- a restart does not wake the loop early -------------------------------
+
+
+async def _spin(n: int = 200) -> None:
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+async def _restart_after(make_loop, wall, *, elapsed_s: float, wake_minutes: int = 60, status_script=None):
+    """Run one cycle, move the clock, and return a freshly built loop over the
+    same memory -- what a redeploy does."""
+    first, _ = make_loop(
+        status_script
+        or [reply("done", call("end_cycle", "c", next_wake_minutes=wake_minutes, summary="s"))]
+    )
+    await first.run_cycle()
+    wall.state["t"] += elapsed_s
+    return make_loop([reply("done", call("end_cycle", "d", next_wake_minutes=wake_minutes, summary="s"))])
+
+
+def _record_sleeps(loop, monkeypatch) -> list[float]:
+    slept: list[float] = []
+    real = loop._sleep
+
+    async def _sleep(seconds: float) -> None:
+        slept.append(seconds)
+        await real(seconds)
+
+    monkeypatch.setattr(loop, "_sleep", _sleep)
+    return slept
+
+
+async def test_a_restart_waits_out_the_rest_of_the_saved_wake(make_loop, wall, monkeypatch):
+    loop, provider = await _restart_after(make_loop, wall, elapsed_s=20 * 60)
+    slept = _record_sleeps(loop, monkeypatch)
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    # 60 minute wake, 20 already gone.
+    assert slept == [pytest.approx(40 * 60)]
+    assert provider.calls == []
+
+
+async def test_a_restart_past_the_saved_wake_runs_at_once(make_loop, wall, monkeypatch):
+    loop, provider = await _restart_after(make_loop, wall, elapsed_s=61 * 60)
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    assert len(provider.calls) == 1
+
+
+async def test_a_loop_with_no_saved_state_runs_at_once(make_loop):
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=60, summary="s"))]
+    )
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    assert len(provider.calls) == 1
+
+
+async def test_a_restart_with_unread_notes_runs_at_once(make_loop, wall, brain_dir):
+    loop, provider = await _restart_after(make_loop, wall, elapsed_s=5 * 60)
+    loop.min_wake_gap_s = 30 * 60
+    # Approvals (like Filip) are urgent: the gap does not apply. A note from
+    # Filip would also work but makes the model owe a Slack reply.
+    brain_dir.drop_note("approvals", "proposal p1 approved: done")
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    assert len(provider.calls) == 1
+
+
+async def test_a_restart_with_a_gated_note_waits_for_the_wake_gap_not_the_wake(
+    make_loop, wall, brain_dir, monkeypatch
+):
+    """An expert's note waits out min_wake_gap_s after the last cycle on a
+    ring; a restart must not turn it into an instant cycle."""
+    loop, provider = await _restart_after(make_loop, wall, elapsed_s=5 * 60)
+    loop.min_wake_gap_s = 30 * 60
+    brain_dir.drop_note("energy", "something odd")
+    slept = _record_sleeps(loop, monkeypatch)
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    assert slept == [pytest.approx(25 * 60)]
+    assert provider.calls == []
+
+
+async def test_the_saved_wake_is_clamped_against_clock_skew(make_loop, wall, monkeypatch):
+    """A clock that jumped back leaves last_cycle_at in the future; the wait
+    must never exceed the wake the loop itself asked for."""
+    loop, provider = await _restart_after(make_loop, wall, elapsed_s=-6 * 3600)
+    slept = _record_sleeps(loop, monkeypatch)
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    assert slept == [pytest.approx(60 * 60)]
+    assert provider.calls == []
+
+
+async def test_a_cycle_cut_off_by_shutdown_is_rerun_at_once(make_loop, wall, brain_dir):
+    """A cancelled cycle did none of its work, so there is no wake to honour."""
+    first, _ = make_loop([])
+    first.last_cycle = CycleResult("cancelled", "", 0, HEARTBEAT, 8)
+    first.last_cycle_at = wall()
+    first._save_state("cancelled mid-cycle")
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=60, summary="s"))]
+    )
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    task.cancel()
+
+    assert len(provider.calls) == 1
+
+
+async def test_the_wake_bell_interrupts_the_startup_wait(make_loop, wall):
+    loop, provider = await _restart_after(make_loop, wall, elapsed_s=20 * 60)
+
+    task = asyncio.create_task(loop.run_forever())
+    await _spin()
+    assert provider.calls == []
+
+    loop.wake.set()
+    await _spin()
+    task.cancel()
+
+    assert len(provider.calls) == 1
+
+
 async def test_run_forever_survives_a_crashing_cycle(make_loop, monkeypatch):
     loop, _ = make_loop([])
     calls = {"n": 0}

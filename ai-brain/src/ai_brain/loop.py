@@ -897,7 +897,42 @@ class AgentLoop:
 
     # -- forever -------------------------------------------------------
 
+    def _startup_delay_s(self) -> float:
+        """How long a freshly started loop should wait before its first cycle.
+
+        The rest of the wake the previous process had already chosen
+        (``last_cycle_at + next_wake_s``, both persisted), so a redeploy does
+        not spend every loop's quota on a cycle that was not due -- the
+        brain's whole day on gemini-3.8-flash is 11 requests. Nothing saved
+        means nothing to honour: run now.
+
+        Clamped to [0, next_wake_s]. The upper bound is what stops a clock
+        that stepped backwards (``last_cycle_at`` in the future) from sleeping
+        longer than the loop ever asked to.
+
+        Unread notes cut the wait short, but only as far as a ring would: Filip
+        and approvals start a cycle at once, anything else waits out
+        ``min_wake_gap_s`` (see ``_wake_hold_s``) so a restart is not a way
+        round that gate. A cycle cut off by shutdown did none of its work and
+        left no wake worth waiting for.
+        """
+        last = self.last_cycle
+        if last is None or not self.last_cycle_at or last.status == "cancelled":
+            return 0.0
+        wake_s = float(max(0, last.next_wake_s))
+        left = min(max(0.0, self.last_cycle_at + wake_s - self.clock()), wake_s)
+        if left > 0 and self.memory is not None and self.memory.unread_notes():
+            left = min(left, self._wake_hold_s())
+        return left
+
     async def run_forever(self) -> None:
+        # Computed from the saved state on every entry, not guarded by a
+        # first-run flag: after a supervisor restart the state is whatever the
+        # last finished cycle wrote, and the same arithmetic is still right.
+        delay = self._startup_delay_s()
+        if delay > 0:
+            log.info("[%s] resuming saved wake: first cycle in %ds", self.name, int(delay))
+            await self._sleep(delay)
         while True:
             try:
                 result = await self.run_cycle()
