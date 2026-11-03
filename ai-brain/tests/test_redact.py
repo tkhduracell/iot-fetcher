@@ -220,6 +220,7 @@ def test_idempotent():
         "private_key=abcdef123456",
         "secret_key=abcdef123456",
         "pwd=abcdef123456",
+        "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=abcdef123456",
         "app_passphrase=abcdef123456",
         "aws_credentials=abcdef123456",
         "clientSecret=abcdef123456",
@@ -237,6 +238,11 @@ def test_secret_named_values_are_masked(line):
     out = redact(line)
     assert "abcdef123456" not in out
     assert MASK in out
+
+
+def test_the_shells_working_directory_is_not_a_password():
+    line = "PWD=/home/filip/projects"
+    assert redact(line) == line
 
 
 def test_url_encoded_separators_only_count_after_a_secret_name():

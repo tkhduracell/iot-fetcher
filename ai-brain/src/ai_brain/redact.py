@@ -68,16 +68,19 @@ _AUTH_HEADER = re.compile(r"(Authorization\s*:\s*)([^\r\n]+)", re.IGNORECASE)
 # ``X-Auth-Token``, and the camelCase ``clientSecret`` too. ``\\b`` alone cannot see
 # those, since ``_`` is a word character. A ``key`` needs a telling word in front of
 # it: ``sort_key``, ``cache_key`` and ``primary_key`` are ordinary, and it is
-# ``api_key``, ``secret_key`` and the like that are not. The prefix is bounded (four
-# parts of 32 characters) because a separator is a word boundary, so on a long run of
-# ``a-a-a-`` each boundary would otherwise rescan the rest of the run.
-_NAME_PREFIX = r"(?:[A-Za-z0-9]{1,32}[_-]){0,4}"
-_SECRET_WORD = r"(?:token|secret|password|passwd|pwd|passphrase|credentials?)"
+# ``api_key``, ``secret_key`` and the like that are not. The prefix is bounded (eight
+# parts of 32 characters, since ``GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET`` is a real
+# name) because a separator is a word boundary, so on a long run of ``a-a-a-`` each
+# boundary would otherwise rescan the rest of the run.
+_NAME_PREFIX = r"(?:[A-Za-z0-9]{1,32}[_-]){0,8}"
+# ``pwd`` followed by a path is the shell's working directory, not a password.
+_SECRET_WORD = r"(?:token|secret|password|passwd|pwd(?!\s*[=:]\s*/)|passphrase|credentials?)"
 _SECRET_KEY = r"(?:api|access|secret|private|auth|signing|encryption|ssh)[_-]?key"
 # For a field in structured data, where the name is all there is to go on and a
 # false positive costs a masked setting: ``search`` this, and a match means secret
 # however short the value is. Free text gets ``_KV_SECRET`` and its 8-character floor.
-SECRET_NAME = re.compile(rf"{_SECRET_WORD}|{_SECRET_KEY}", re.IGNORECASE)
+# The two header names are here only: in free text they are ordinary words.
+SECRET_NAME = re.compile(rf"{_SECRET_WORD}|{_SECRET_KEY}|authorization|cookie", re.IGNORECASE)
 _KEYISH_WORD = (
     r"(?:"
     rf"{_NAME_PREFIX}{_SECRET_WORD}"
@@ -117,6 +120,17 @@ _KEYISH_PHRASE = re.compile(
 # run, which is quadratic: a 512 KB dotted token took minutes, on the one event
 # loop every agent shares.
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
+
+def masked_under_name(name: str, value: str) -> bool:
+    """Whether ``name=value`` reads as a secret because of ``name`` itself.
+
+    The match has to start inside the name, so a secret-shaped pair further along
+    the value does not count: that part is ``redact``'s to mask, not a verdict on
+    the whole.
+    """
+    match = _KV_SECRET.search(f"{name}={value}")
+    return match is not None and match.start() < len(name)
 
 
 def redact(text: str) -> str:

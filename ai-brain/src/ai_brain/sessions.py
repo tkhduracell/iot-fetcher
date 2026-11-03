@@ -51,7 +51,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ai_brain.redact import MASK, SECRET_NAME, redact
+from ai_brain.redact import MASK, SECRET_NAME, masked_under_name, redact
 
 log = logging.getLogger(__name__)
 
@@ -154,14 +154,18 @@ def _clean(value: Any, field: str, secret: bool, opaque: bool) -> Any:
         # A field called ``key`` is not in SECRET_NAME, since ``key=on`` is a
         # setting, but ``redact`` would mask a longer value under that name.
         masked = _redacted_and_bounded(value)
-        probe = f"{field}={masked[:_FIELD_PROBE_CHARS]}"
-        if field and redact(probe) != probe:
+        if field and masked_under_name(field, masked[:_FIELD_PROBE_CHARS]):
             return MASK
         return masked
     if isinstance(value, dict):
+        # Opaque reaches a block's own strings and no further: what is nested
+        # in one, such as a tool_use's ``input``, is the model's and not signed.
         return {
             redact(str(key)): _clean(
-                item, str(key), secret or bool(SECRET_NAME.search(str(key))), opaque
+                item,
+                str(key),
+                secret or bool(SECRET_NAME.search(str(key))),
+                opaque and isinstance(item, str),
             )
             for key, item in value.items()
         }
@@ -279,8 +283,8 @@ class SessionStore:
             return _NullSessionLog(Path(os.devnull), cycle_id, self.clock)
         return SessionLog(self.directory / f"{cycle_id}{LOG_SUFFIX}", cycle_id, self.clock)
 
-    def housekeep(self, keep: str = "") -> None:
-        """Compress finished logs and prune old ones, keeping cycle ``keep`` live.
+    def housekeep(self) -> None:
+        """Compress finished logs and prune old ones. Only between an agent's cycles.
 
         Scans the directory rather than acting on one path, so a log a crash
         left uncompressed is picked up by the next cycle to end.
@@ -288,8 +292,7 @@ class SessionStore:
         if self.directory is None or not self.directory.exists():
             return
         for path in sorted(self.directory.glob(f"*{LOG_SUFFIX}")):
-            if path.name != f"{keep}{LOG_SUFFIX}":
-                compress(path)
+            compress(path)
         self.prune()
 
     def prune(self) -> int:
@@ -318,7 +321,7 @@ class SessionStore:
 
 
 class _NullSessionLog(SessionLog):
-    """What a disabled store hands out: writes nothing, and redacts nothing either."""
+    """What a disabled store hands out: writes nothing."""
 
     def append(self, event: str, **fields: Any) -> int | None:
         return None

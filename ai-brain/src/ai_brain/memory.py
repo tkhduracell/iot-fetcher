@@ -34,7 +34,7 @@ from ai_brain.redact import redact
 
 log = logging.getLogger(__name__)
 
-SAFE_NAME =re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
@@ -572,6 +572,8 @@ class MemoryDir:
             closed_at=None,
             answer="",
         )
+        # Reopening wipes the old answer, which is on no other record.
+        self._record_mutation("open_gap", gap_id, path)
         self._write_gap(gap)
         return gap
 

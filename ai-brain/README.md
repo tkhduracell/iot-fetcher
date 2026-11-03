@@ -731,8 +731,9 @@ one. In between, each cycle appends what it did to
   the SD card for every tool call, so a power cut can lose the last few seconds.
 - **Everything is redacted first**, except the provider-signed blobs
   (`thought_signature`, a thinking block's `signature`) which are ciphertext. A tool
-  argument is masked by its name too, along with anything nested under it. A tool
-  result is capped at 512k chars and a cycle at 64 MB.
+  argument is masked by its name too, along with every string nested under it.
+  Redaction goes by shape and name, so a value under 8 characters in free text
+  stays. A tool result is capped at 512k chars and a cycle at 64 MB.
 - **A finished log is gzipped and pruned:** by age (`SESSION_RETENTION_DAYS`) and
   then, oldest first, by size (`SESSION_MAX_MB`). A log a crash left behind is
   picked up by the next cycle to end.

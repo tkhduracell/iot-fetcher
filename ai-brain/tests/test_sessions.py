@@ -717,14 +717,11 @@ def test_housekeep_compresses_what_a_crash_left_behind(tmp_path):
     store = SessionStore(tmp_path, lambda: now, retention_days=30, max_mb=0)
     left = tmp_path / f"20270101-000000-aaaa{LOG_SUFFIX}"
     left.write_text('{"seq": 1, "type": "opening"}\n')
-    live = tmp_path / f"20270102-000000-bbbb{LOG_SUFFIX}"
-    live.write_text('{"seq": 1, "type": "opening"}\n')
 
-    store.housekeep(keep="20270102-000000-bbbb")
+    store.housekeep()
 
     assert not left.exists()
     assert (tmp_path / f"20270101-000000-aaaa{GZ_SUFFIX}").exists()
-    assert live.exists()
 
 
 async def test_housekeeping_runs_off_the_event_loop(brain_dir, tmp_path, wall, monkeypatch):
@@ -733,9 +730,9 @@ async def test_housekeeping_runs_off_the_event_loop(brain_dir, tmp_path, wall, m
     seen: list[bool] = []
     real = SessionStore.housekeep
 
-    def _spy(self, keep=""):
+    def _spy(self):
         seen.append(threading.current_thread() is threading.main_thread())
-        real(self, keep)
+        real(self)
 
     monkeypatch.setattr(SessionStore, "housekeep", _spy)
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
@@ -752,7 +749,7 @@ async def test_books_close_before_housekeeping_yields(brain_dir, tmp_path, wall,
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
     seen: list[dict] = []
 
-    def _spy(_self, keep=""):
+    def _spy(_self):
         seen.append(dict(loop.cycle_counts))
 
     monkeypatch.setattr(SessionStore, "housekeep", _spy)
@@ -765,7 +762,7 @@ async def test_books_close_before_housekeeping_yields(brain_dir, tmp_path, wall,
 def test_housekeep_failure_is_contained(brain_dir, tmp_path, wall, monkeypatch):
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
 
-    def _boom(_self, keep=""):
+    def _boom(_self):
         raise RuntimeError("housekeeping broke")
 
     monkeypatch.setattr(SessionStore, "housekeep", _boom)
@@ -773,6 +770,70 @@ def test_housekeep_failure_is_contained(brain_dir, tmp_path, wall, monkeypatch):
     result = asyncio.run(loop.run_cycle())
 
     assert result.status == "ok"
+
+
+def test_opaque_stops_at_the_blocks_own_fields():
+    block = {
+        "type": "tool_use",
+        "signature": "signed",
+        "input": {"data": "token=abcdefghijkl", "signature": "me@example.com"},
+    }
+
+    cleaned = clean([block], opaque=True)[0]
+
+    assert cleaned["signature"] == "signed"
+    assert "abcdefghijkl" not in cleaned["input"]["data"]
+    assert "example.com" not in cleaned["input"]["signature"]
+
+
+@pytest.mark.parametrize("name", ["Authorization", "Cookie"])
+def test_header_fields_are_secret_by_name(name):
+    assert clean({"headers": {name: "Basic dXNlcjpwYXNz"}}) == {"headers": {name: MASK}}
+
+
+def test_a_field_is_masked_under_a_name_redact_only_masks_in_free_text():
+    """``key`` with a long value, on its own or after a separator: not in
+    SECRET_NAME, since a short ``key=on`` is a setting."""
+    assert clean({"key": "abcdefghijkl"}) == {"key": MASK}
+    assert clean({"x-key": "abcdefghijkl"}) == {"x-key": MASK}
+    assert clean({"sort_key": "abcdefghijkl"}) == {"sort_key": "abcdefghijkl"}
+
+
+def test_mask_straddling_the_probe_does_not_erase_the_whole_field():
+    command = "x" * 40 + " Authorization: Bearer abcdefghijklmnop\nrest of the command"
+
+    cleaned = clean({"command": command})["command"]
+
+    assert "rest of the command" in cleaned
+    assert "abcdefghijklmnop" not in cleaned
+
+
+def test_reopening_a_gap_records_the_answer_it_wipes(brain_dir):
+    gap = brain_dir.open_gap("why is the sky blue")
+    brain_dir.close_gap(gap.id, "rayleigh")
+    seen: list[tuple[str, str]] = []
+    token = MEMORY_SINK.set(lambda op, _name, old: seen.append((op, old)))
+    try:
+        brain_dir.open_gap("why is the sky blue")
+    finally:
+        MEMORY_SINK.reset(token)
+
+    assert [op for op, _ in seen] == ["open_gap"]
+    assert "rayleigh" in seen[0][1]
+
+
+async def test_memory_sink_is_reset_when_finish_raises(brain_dir, tmp_path, wall, monkeypatch):
+    loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("books broke")
+
+    monkeypatch.setattr(loop, "_finish", _boom)
+
+    with pytest.raises(RuntimeError):
+        await loop.run_cycle()
+
+    assert MEMORY_SINK.get() is None
 
 
 async def test_expert_sessions_live_in_its_own_directory(expert_dir, tmp_path, wall):

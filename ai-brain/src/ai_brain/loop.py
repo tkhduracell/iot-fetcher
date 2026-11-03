@@ -1092,10 +1092,14 @@ class AgentLoop:
             status, summary = "error", f"{type(exc).__name__}: {exc}"
             log.exception("[%s] cycle failed", self.name)
         finally:
-            result = await self._finish(
-                status, model, rounds, summary, next_wake_s, notes, effective_cap
-            )
-            MEMORY_SINK.reset(memory_sink)
+            try:
+                result = await self._finish(
+                    status, model, rounds, summary, next_wake_s, notes, effective_cap
+                )
+            finally:
+                # Even if _finish raises: run_forever carries on in this task,
+                # and a stale sink would reopen a log that is closed and gzipped.
+                MEMORY_SINK.reset(memory_sink)
 
         return result
 
