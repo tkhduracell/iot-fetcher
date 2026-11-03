@@ -717,11 +717,14 @@ def test_housekeep_compresses_what_a_crash_left_behind(tmp_path):
     store = SessionStore(tmp_path, lambda: now, retention_days=30, max_mb=0)
     left = tmp_path / f"20270101-000000-aaaa{LOG_SUFFIX}"
     left.write_text('{"seq": 1, "type": "opening"}\n')
+    live = tmp_path / f"20270102-000000-bbbb{LOG_SUFFIX}"
+    live.write_text('{"seq": 1, "type": "opening"}\n')
 
-    store.housekeep()
+    store.housekeep(keep="20270102-000000-bbbb")
 
     assert not left.exists()
     assert (tmp_path / f"20270101-000000-aaaa{GZ_SUFFIX}").exists()
+    assert live.exists()
 
 
 async def test_housekeeping_runs_off_the_event_loop(brain_dir, tmp_path, wall, monkeypatch):
@@ -730,9 +733,9 @@ async def test_housekeeping_runs_off_the_event_loop(brain_dir, tmp_path, wall, m
     seen: list[bool] = []
     real = SessionStore.housekeep
 
-    def _spy(self):
+    def _spy(self, keep=""):
         seen.append(threading.current_thread() is threading.main_thread())
-        real(self)
+        real(self, keep)
 
     monkeypatch.setattr(SessionStore, "housekeep", _spy)
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
@@ -749,7 +752,7 @@ async def test_books_close_before_housekeeping_yields(brain_dir, tmp_path, wall,
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
     seen: list[dict] = []
 
-    def _spy(_self):
+    def _spy(_self, keep=""):
         seen.append(dict(loop.cycle_counts))
 
     monkeypatch.setattr(SessionStore, "housekeep", _spy)
@@ -762,7 +765,7 @@ async def test_books_close_before_housekeeping_yields(brain_dir, tmp_path, wall,
 def test_housekeep_failure_is_contained(brain_dir, tmp_path, wall, monkeypatch):
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
 
-    def _boom(_self):
+    def _boom(_self, keep=""):
         raise RuntimeError("housekeeping broke")
 
     monkeypatch.setattr(SessionStore, "housekeep", _boom)
