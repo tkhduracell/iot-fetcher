@@ -1462,6 +1462,174 @@ async def test_a_token_budget_does_not_clamp_a_cycle_that_can_fall_through(make_
     assert result.cap == 32
 
 
+# -- a per-minute rate limit is waited out, not the end of the cycle -------
+
+
+@pytest.fixture
+def naps(wall):
+    """A sleep for the loop that moves the fake clock and writes down each nap."""
+
+    class Naps:
+        def __init__(self):
+            self.taken: list[float] = []
+            self.before = None  # called with the nap length before the clock moves
+
+        async def __call__(self, seconds: float) -> None:
+            if self.before is not None:
+                self.before(seconds)
+            self.taken.append(seconds)
+            wall.state["t"] += seconds
+
+        @property
+        def total(self) -> float:
+            return sum(self.taken)
+
+    return Naps()
+
+
+def _rpm_script(n_tools, key=METERED, prompt_tokens=10):
+    script = [
+        reply(f"r{i}", call("list_facts", f"c{i}"), key=key, prompt_tokens=prompt_tokens)
+        for i in range(n_tools)
+    ]
+    script.append(
+        reply(
+            "done",
+            call("end_cycle", "e", next_wake_minutes=30, summary="wrapped"),
+            key=key,
+            prompt_tokens=prompt_tokens,
+        )
+    )
+    return script
+
+
+async def test_an_rpm_window_is_waited_out_and_the_cycle_keeps_its_transcript(
+    make_quota_loop, naps
+):
+    """The brain's only key has RPM=8 by default: nine back-to-back rounds meet
+    the window. Before this, that was ChainExhausted -> no_budget, a whole
+    cycle's reasoning thrown away over a minute."""
+    loop, (provider,), _ = make_quota_loop(
+        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert result.rounds == 6
+    assert len(provider.calls) == 6
+    # One wait, from after the 3rd request until the oldest left the window.
+    assert 60 <= naps.total <= 65
+    assert max(naps.taken) <= 2.0  # slept in slices, so PAUSE is noticed
+    # The model saw one unbroken conversation across the wait.
+    assert [m.role for m in provider.calls[-1][0]].count("assistant") == 6
+
+
+async def test_a_tpm_window_is_waited_out_too(make_quota_loop, naps):
+    loop, _, _ = make_quota_loop(
+        [
+            (
+                METERED,
+                Limits(rpm=100, tpm=20_000, rpd=1000),
+                _rpm_script(3, prompt_tokens=9000),
+            )
+        ],
+        sleep=naps,
+    )
+
+    result = await loop.run_cycle()
+
+    # Two 9005-token rounds leave no room for the 4000-token estimate in the
+    # trailing minute; the third round waits for the first to age out.
+    assert result.status == "ok"
+    assert result.rounds == 4
+    assert naps.total > 0
+
+
+async def test_a_spent_day_still_ends_the_cycle_at_once(make_quota_loop, naps):
+    script = _rpm_script(3)
+    loop, _, ledger = make_quota_loop(
+        [(METERED, Limits(rpm=100, tpm=10_000_000, rpd=2), script)], sleep=naps
+    )
+    ledger.record(METERED, 1, 1)
+    ledger.record(METERED, 1, 1)
+
+    result = await loop.run_cycle()
+
+    assert result.status == "no_budget"
+    assert naps.taken == []
+
+
+async def test_a_window_does_not_hold_a_cycle_past_its_wait_budget(
+    make_quota_loop, naps, monkeypatch
+):
+    monkeypatch.setattr("ai_brain.loop.WINDOW_WAIT_BUDGET_S", 30.0)
+    loop, _, _ = make_quota_loop(
+        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "no_budget"
+    assert naps.taken == []  # the 60s window never fit in 30s, so it never waited
+
+
+async def test_a_wait_longer_than_any_window_is_not_taken(make_quota_loop, naps, monkeypatch):
+    monkeypatch.setattr("ai_brain.loop.WINDOW_WAIT_MAX_S", 10.0)
+    loop, _, _ = make_quota_loop(
+        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "no_budget"
+    assert naps.taken == []
+
+
+async def test_pause_appearing_during_a_rate_limit_wait_stops_the_cycle(
+    make_quota_loop, naps, tmp_path
+):
+    loop, (provider,), _ = make_quota_loop(
+        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
+    )
+    naps.before = lambda _s: (tmp_path / "PAUSE").write_text("")
+
+    result = await loop.run_cycle()
+
+    assert result.status == "paused"
+    assert result.rounds == 3
+    assert len(provider.calls) == 3
+    assert "paused mid-cycle" in _last_journal_line(loop.memory)
+    assert len(naps.taken) == 1  # noticed on the very next slice, not after 60s
+
+
+async def test_cancellation_during_a_rate_limit_wait_propagates(make_quota_loop):
+    async def cancelled(_seconds):
+        raise asyncio.CancelledError
+
+    loop, _, _ = make_quota_loop(
+        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=cancelled
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await loop.run_cycle()
+
+    assert "cancelled" in _last_journal_line(loop.memory)
+
+
+async def test_the_wait_is_outside_the_chain_timeout(make_quota_loop, naps):
+    """chain_timeout_s bounds a provider call; a wait that long must not trip it."""
+    loop, _, _ = make_quota_loop(
+        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
+    )
+    loop.chain_timeout_s = 5.0  # far shorter than the 60s wait
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert naps.total >= 60
+
+
 # -- per-cycle prompt-token budget ---------------------------------------
 
 

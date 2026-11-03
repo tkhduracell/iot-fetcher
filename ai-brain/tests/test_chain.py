@@ -720,3 +720,76 @@ def test_quota_runway_does_not_clamp_an_unmetered_key(tmp_path):
 def test_quota_runway_knows_nothing_about_an_unlisted_key(tmp_path):
     chain, _ = runway_chain(tmp_path, [("a", Limits(rpm=100, tpm=100, rpd=10))])
     assert chain.quota_runway("nope", "brain", round_tokens=1000) is None
+
+
+# --- ChainExhausted.windowed: a per-minute refusal is worth waiting out -------
+
+
+async def test_an_rpm_refusal_is_a_window_and_says_when_it_reopens(tmp_path):
+    ledger, state = make_ledger(tmp_path, ["a"], rpm=2)
+    chain = ProviderChain([FakeProvider("a", [reply(), reply()])], ledger)
+    await chain.complete(MSGS, [], 512, "brain")
+    await chain.complete(MSGS, [], 512, "brain")
+
+    with pytest.raises(ChainExhausted) as exc:
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert exc.value.windowed
+    assert exc.value.retry_at - state["t"] == pytest.approx(60)
+
+
+async def test_a_tpm_refusal_is_a_window_too(tmp_path):
+    ledger, _ = make_ledger(tmp_path, ["a"], tpm=20_000)
+    ledger.record("a", 18_000, 0)
+    chain = ProviderChain([FakeProvider("a", [reply()])], ledger)
+
+    with pytest.raises(ChainExhausted) as exc:
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert exc.value.windowed
+
+
+async def test_a_spent_day_is_not_a_window(tmp_path):
+    ledger, _ = make_ledger(tmp_path, ["a"], rpd=1)
+    ledger.record("a", 5, 5)
+    chain = ProviderChain([FakeProvider("a", [])], ledger)
+
+    with pytest.raises(ChainExhausted) as exc:
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert not exc.value.windowed
+
+
+async def test_a_window_beside_a_spent_day_still_reopens_in_a_minute(tmp_path):
+    ledger = Ledger(
+        {"a": Limits(rpm=1, tpm=100_000, rpd=100), "b": Limits(rpm=10, tpm=100_000, rpd=1)},
+        tmp_path / "w.json",
+        clock=lambda: T0,
+    )
+    ledger.record("a", 5, 5)
+    ledger.record("b", 5, 5)
+    chain = ProviderChain([FakeProvider("a", []), FakeProvider("b", [])], ledger)
+
+    with pytest.raises(ChainExhausted) as exc:
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert exc.value.windowed
+    assert exc.value.retry_at - T0 == pytest.approx(60)  # not b's midnight
+
+
+async def test_a_call_that_failed_is_not_a_window(tmp_path):
+    ledger = Ledger(
+        {"a": Limits(rpm=10, tpm=100_000, rpd=100), "b": Limits(rpm=1, tpm=100_000, rpd=100)},
+        tmp_path / "f.json",
+        clock=lambda: T0,
+    )
+    ledger.record("b", 5, 5)  # b is inside its rpm window
+    a = FakeProvider(
+        "a", [ProviderError("down", kind="server"), ProviderError("down", kind="server")]
+    )
+    chain = ProviderChain([a, FakeProvider("b", [])], ledger)
+
+    with pytest.raises(ChainExhausted) as exc:
+        await chain.complete(MSGS, [], 512, "brain")
+
+    assert not exc.value.windowed

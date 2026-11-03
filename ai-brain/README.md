@@ -608,6 +608,18 @@ every model key. Nothing calls a provider without asking it first.
 - **Budgets** are per key: `RPM` requests/minute, `TPM` tokens/minute (both on
   a rolling 60-second window) and `RPD` requests/day, plus a synthetic daily
   token cap so experts can be starved before the brain is.
+- **A per-minute window is waited out, not fatal.** `RPM` and `TPM` apply to
+  `gemini-3.8-flash` like any metered key (8 requests a minute by default), and
+  a brain with that one key can play nine fast rounds inside a minute. When the
+  only thing refusing a round is such a window -- no call failed, and the chain
+  has nothing else to fall to -- `ChainExhausted` is marked `windowed` and the
+  loop sleeps until the oldest request leaves the window (plus half a second)
+  and asks again, rather than ending the cycle `no_budget` and discarding the
+  transcript. The wait is outside the per-call timeout, sliced into 2-second
+  naps so a `PAUSE` file or a shutdown is noticed at once, at most 75 s each
+  and 10 minutes per cycle; past that, or for anything that is not a window (a
+  spent day, a parked key, a failing provider), the cycle ends as before.
+  Because the wait is only a minute, `rounds_left` still ignores `rpm`/`tpm`.
 - **Experts starve first.** An expert may only spend while both remaining
   daily fractions are above 40%. The last 40% of each day belongs to the brain.
 - **A 429 is authoritative.** The server's `Retry-After` wins over local

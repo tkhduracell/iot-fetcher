@@ -69,6 +69,10 @@ TIMEOUT_CHARGE_TOKENS = 4000
 # log at debug. See ``ProviderChain._log_skip``.
 _BY_DESIGN_SKIPS = frozenset({"priority", "reserved", "rpm", "tpm"})
 
+# The refusals that clear by themselves within a minute: a rolling window, not
+# a spent day. See ``ChainExhausted.windowed``.
+WINDOW_REASONS = frozenset({"rpm", "tpm"})
+
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
 # cycle, and so the two lists cannot drift apart.
@@ -233,9 +237,16 @@ class ProviderError(Exception):
 class ChainExhausted(Exception):
     """No provider in the chain could serve the request."""
 
-    def __init__(self, retry_at: float | None = None):
+    def __init__(self, retry_at: float | None = None, windowed: bool = False):
         super().__init__(f"all providers exhausted; retry_at={retry_at}")
         self.retry_at = retry_at
+        # True when nothing was wrong beyond a per-minute window: at least one
+        # provider was refused only for ``rpm``/``tpm``, no call went out and
+        # failed, and ``retry_at`` is when the first of them reopens. A caller
+        # in the middle of something worth keeping can wait that out; every
+        # other exhaustion (a day's quota, a parked key, a failing provider) is
+        # not something to wait for inside a cycle.
+        self.windowed = windowed
 
 
 class Provider(ABC):
@@ -504,6 +515,11 @@ class ProviderChain:
             if retry_at is not None and (earliest is None or retry_at < earliest):
                 earliest = retry_at
 
+        # See ChainExhausted.windowed: a per-minute refusal somewhere, and no
+        # provider that was actually called and failed.
+        window_refused = False
+        called_and_failed = False
+
         for provider in self.providers:
             key = provider.key
             if not provider.available():
@@ -513,13 +529,16 @@ class ProviderChain:
             if not decision.allowed:
                 self._log_skip(key, decision.reason)
                 remember(decision.retry_at)
+                window_refused = window_refused or decision.reason in WINDOW_REASONS
                 continue
             # Spendable again: forget what it was last refused for, so the
             # next refusal is heard even if it is the same reason as before.
             self._skipped.pop(key, None)
 
             reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
-            if reply is not None:
+            if reply is None:
+                called_and_failed = True
+            else:
                 usage = reply.usage
                 log.info(
                     "%s%s answered (in=%d out=%d tokens%s)",
@@ -535,7 +554,8 @@ class ProviderChain:
 
         if earliest is None:
             earliest = self.ledger.next_available_at(priority)
-        raise ChainExhausted(retry_at=earliest)
+        windowed = window_refused and not called_and_failed and earliest is not None
+        raise ChainExhausted(retry_at=earliest, windowed=windowed)
 
     async def _try(
         self,
