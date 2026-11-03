@@ -268,6 +268,8 @@ def build(
             call_timeout_s=settings.call_timeout_s,
             events=events,
             min_wake_gap_s=settings.brain_min_wake_gap_s if is_brain else 0,
+            session_retention_days=settings.session_retention_days,
+            session_max_mb=settings.session_max_mb,
         )
 
     return System(

@@ -7,6 +7,8 @@ the structural pattern each real one follows.
 
 from __future__ import annotations
 
+import pytest
+
 from ai_brain.redact import MASK, redact
 
 
@@ -201,3 +203,74 @@ def test_idempotent():
     text = "key=AIzaFAKEb1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q and more"
     once = redact(text)
     assert redact(once) == once
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "client_secret=abcdef123456",
+        "CLIENT_SECRET=abcdef123456",
+        "auth_token=abcdef123456",
+        "bot_token: abcdef123456",
+        "AWS_SECRET_ACCESS_KEY=abcdef123456",
+        "AWS_SESSION_TOKEN=abcdef123456",
+        "db_password=abcdef123456",
+        "x-api-key: abcdef123456",
+        "X-Auth-Token: abcdef123456",
+        "private_key=abcdef123456",
+        "secret_key=abcdef123456",
+        "pwd=abcdef123456",
+        "app_passphrase=abcdef123456",
+        "aws_credentials=abcdef123456",
+        "clientSecret=abcdef123456",
+        "authToken: abcdef123456",
+        "apiKey=abcdef123456",
+        '{"client_secret": "abcdef123456"}',
+        "{'refresh_token': 'abcdef123456'}",
+        "POST /oauth?grant_type=x&client_secret=abcdef123456&scope=y",
+    ],
+)
+def test_secret_named_values_are_masked(line):
+    out = redact(line)
+    assert "abcdef123456" not in out
+    assert MASK in out
+
+
+def test_a_secret_in_a_sentence_after_a_prefixed_name():
+    assert "abcdef1234567890abcd" not in redact("the client_secret is abcdef1234567890abcd today")
+
+
+def test_masking_a_prefixed_name_keeps_the_rest_of_a_url():
+    out = redact("GET /x?client_secret=abcdef123456&scope=read")
+    assert "scope=read" in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "sort_key=timestamp_desc",
+        "cache_key=sensor:pool:temp",
+        "primary_key=device_identifier",
+        "partition_key=2026-11-03",
+        "max_tokens=12345678",
+        "prompt_tokens: 12345678",
+        "tokenizer=qwen-tokenizer",
+        "monkey=bananaphone",
+        "secret_santa=everyone",
+        "key=on",
+        "the token was refreshed at startup",
+        "keyboard: us-international",
+    ],
+)
+def test_ordinary_names_are_left_alone(line):
+    assert redact(line) == line
+
+
+@pytest.mark.parametrize("run", ["a-", "a_", "token-", "a.", "secret_", "Ab"])
+def test_long_runs_stay_cheap(run):
+    """Every event in a session log goes through this, on the shared event loop."""
+    import time
+
+    started = time.monotonic()
+    redact(run * 100_000)
+    assert time.monotonic() - started < 5

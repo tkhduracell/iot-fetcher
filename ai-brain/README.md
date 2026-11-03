@@ -95,6 +95,7 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
 │   ├── inbox/                 unread notes from experts and approvals
 │   │   └── done/              processed notes, purged after 30 days
 │   ├── reviews/<expert>.jsonl the brain's verdicts on each expert (max 50 lines each)
+│   ├── sessions/<cycle-id>.jsonl[.gz]  everything one cycle did (see "Session log" below)
 │   └── outbox/
 │       ├── <proposal-id>.json pending/terminal proposals
 │       └── slack/<ts>.json    Slack posts that failed to send, retried later
@@ -102,6 +103,7 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
 │   ├── persona.md
 │   ├── journal/YYYY-MM-DD.md
 │   ├── facts/<name>.md
+│   ├── sessions/<cycle-id>.jsonl[.gz]
 │   └── inbox/ (+ done/)
 └── _repo/                     the code_* tools' snapshot of the public repo
     ├── current -> <sha>/      symlink, swapped atomically after each refresh
@@ -161,6 +163,8 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
 | `CYCLE_MAX_PROMPT_TOKENS` | `400000` | Per-cycle prompt-token budget across every round combined. `0` disables it. Crossing it mid-cycle is handled the same way a per-model cap drop is -- see [Effort and per-model rounds](#effort-and-per-model-rounds). |
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
+| `SESSION_RETENTION_DAYS` | `30` | Days a cycle's [session log](#session-log) is kept. `0` turns session logging off. |
+| `SESSION_MAX_MB` | `200` | Size cap on one agent's session logs; the oldest go first. `0` means age is the only limit. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
 | `REPO_SLUG` | `tkhduracell/iot-fetcher` | The public GitHub repo the `code_*` tools read (see [Reading the repo](#reading-the-repo)). |
 | `REPO_REF` | `main` | Branch or ref the snapshot tracks. |
@@ -690,7 +694,7 @@ brain carries on without it.
 | `GET /api/slack/sessions` | The topic-to-thread map and how many posts are queued. `configured: false` when Slack is off — a 200, not an error. |
 
 The trace is in memory only and is replaced at the start of every cycle: the
-journal is the history, this is the live view. Each round's `tool_results`
+[session log](#session-log) is the history, this is the live view. Each round's `tool_results`
 entries carry a `stats` object alongside `result_preview` -- `{"chars": N}`
 always, plus `ok` (false when the parsed result has an `"error"` key),
 `lines` (a string `body`'s line count), `series` and `hits` (list lengths),
@@ -700,6 +704,43 @@ the tool's full, untruncated result, so it stays accurate even once
 
 ```sh
 curl -s http://localhost:8091/api/agents/brain/trace
+```
+
+## Session log
+
+The journal says one line per cycle and the trace forgets everything at the next
+one. In between, each cycle appends what it did to
+`<agent>/sessions/<cycle-id>.jsonl`, one JSON object per line, while it runs:
+
+| Event | Holds |
+| --- | --- |
+| `opening` | The opening messages, the inbox files they rendered, the angle. |
+| `reply` | One model turn, with what is needed to rebuild it: text, thinking, tool calls, signatures, provider blocks, the model and chain key, token counts. |
+| `tool_call` | A tool is about to run. Its arguments are in the `reply` above it. |
+| `tool_result` | What the tool returned, before the loop's `MAX_TOOL_RESULT_CHARS` cut. |
+| `memory` | A write to a fact, goals, identity or a gap, with the body it replaced. |
+| `message` | A turn the loop itself added, such as the wrap-up nudge. |
+| `cycle_end` | Status, rounds, cap, summary, token totals, and how many events failed to land. |
+
+- **It never breaks a cycle.** A failed write is logged once and forgotten. Each
+  event has a `seq`, so a missing one shows as a gap, and the first failure also
+  renames the file to `.jsonl.holes`, since a hole at the end would otherwise look
+  like a log that simply stopped.
+- **SIGKILL loses at most the line being written:** each event is one unbuffered
+  `write`. There is no `fsync` per event, which would cost a journal commit on
+  the SD card for every tool call, so a power cut can lose the last few seconds.
+- **Everything is redacted first**, except the provider-signed blobs
+  (`thought_signature`, a thinking block's `signature`) which are ciphertext. A tool
+  argument is masked by its name too, along with anything nested under it. A tool
+  result is capped at 512k chars and a cycle at 64 MB.
+- **A finished log is gzipped and pruned:** by age (`SESSION_RETENTION_DAYS`) and
+  then, oldest first, by size (`SESSION_MAX_MB`). A log a crash left behind is
+  picked up by the next cycle to end.
+- **Files are `0600` and not served over HTTP.** The API has no authentication,
+  so its trace keeps carrying previews; the trace's `cycle_id` names the file.
+
+```sh
+sudo zcat volumes/ai-brain-memory/brain/sessions/20261103-101500-a1b2.jsonl.gz | jq -c '[.seq, .type, .name]'
 ```
 
 ## Memory MCP

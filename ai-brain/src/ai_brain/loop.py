@@ -43,8 +43,16 @@ from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
-from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain
-from ai_brain.memory import OWNER_SENDER, MemoryDir, Note
+from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain, Reply
+from ai_brain.memory import MEMORY_SINK, OWNER_SENDER, MemoryDir, Note
+from ai_brain.sessions import (
+    INLINE_HOUSEKEEP_BYTES,
+    SCHEMA_VERSION,
+    SESSIONS_DIRNAME,
+    SessionLog,
+    SessionStore,
+    clean,
+)
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.slack_io import CHAT_TOPIC
 from ai_brain.tools.slack_tools import ANY_TOPIC, owed_replies
@@ -406,6 +414,8 @@ class CycleTrace:
     # See CycleResult.cap -- kept in step so a reader watching the live trace
     # sees the same number the journal line reports once the cycle ends.
     cap: int = 16
+    # This cycle's file under sessions/, which holds what this trace previews.
+    cycle_id: str = ""
 
     @property
     def in_progress(self) -> bool:
@@ -510,6 +520,46 @@ class _DeltaPublisher:
         self.events.publish({"type": "round_delta", "loop": self.loop_name, **out})
 
 
+def _log_reply(session: SessionLog, round_: int, reply: Reply, duration_s: float) -> None:
+    """Everything needed to rebuild this turn as a ``Message``.
+
+    ``redacted`` says the logged text is no longer what the model wrote, so any
+    signature on the turn no longer matches it.
+    """
+    calls = [
+        {"id": c.id, "name": c.name, "args": clean(c.args), "thought_signature": c.thought_signature}
+        for c in reply.tool_calls
+    ]
+    text = clean(reply.text)
+    thinking = clean(reply.thinking)
+    blocks = clean(reply.provider_blocks, opaque=True)
+    redacted = (
+        text != reply.text
+        or thinking != reply.thinking
+        or any(c["args"] != raw.args for c, raw in zip(calls, reply.tool_calls, strict=True))
+        or blocks != list(reply.provider_blocks)
+    )
+    session.append(
+        "reply",
+        round=round_,
+        model=reply.model,
+        chain_key=reply.key,
+        text=text,
+        thinking=thinking,
+        tool_calls=calls,
+        thought_signature=reply.thought_signature,
+        provider_blocks=blocks,
+        redacted=redacted,
+        duration_s=round(duration_s, 1),
+        prompt_tokens=reply.usage.prompt_tokens,
+        completion_tokens=reply.usage.completion_tokens,
+        cached_tokens=reply.usage.cached_tokens,
+        cache_write_tokens=reply.usage.cache_write_tokens,
+        budget_tokens=reply.usage.budget_tokens,
+        cost_usd=reply.usage.cost_usd,
+    )
+
+
 def _round_event(loop_name: str, round_: RoundTrace) -> dict:
     """A ``round_complete`` event, in the same shape ``_trace_json`` serves.
 
@@ -554,6 +604,8 @@ class AgentLoop:
         events: EventBus | None = None,
         min_wake_gap_s: int = 0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        session_retention_days: int = 30,
+        session_max_mb: int = 200,
     ) -> None:
         self.name = name
         self.memory = memory
@@ -599,6 +651,13 @@ class AgentLoop:
         # counts per provider key, which cannot say which loop is expensive.
         self.token_counts: dict[str, int] = {"prompt": 0, "completion": 0}
         self.trace: CycleTrace | None = None
+        self.sessions = SessionStore(
+            self.memory.root / SESSIONS_DIRNAME if self.memory is not None else None,
+            clock,
+            session_retention_days,
+            session_max_mb,
+        )
+        self._session: SessionLog | None = None
         # memory is None only in tests that do not exercise a real cycle
         # (they stub out everything up to the chain call); a real loop always
         # has one, since run_cycle reads and writes it constantly.
@@ -752,6 +811,12 @@ class AgentLoop:
                 "paused", "", 0, "paused by PAUSE file", next_wake_s, notes, effective_cap
             )
 
+        self._session = session = self.sessions.open()
+        trace.cycle_id = session.cycle_id
+        # Set here rather than around the whole method: the paused path above
+        # has no session, and everything from this line on ends in the finally
+        # below, which is what resets it.
+        memory_sink = MEMORY_SINK.set(session.record_mutation)
         try:
             # Read the inbox once. Reading it again inside external_parts would
             # render whatever arrived in between -- and mark_done only archives
@@ -760,6 +825,15 @@ class AgentLoop:
             notes = self.memory.unread_notes()
             self.ctx.extras["owed_replies"] = owed_replies(notes)
             messages = self._opening_messages(notes)
+            session.append(
+                "opening",
+                v=SCHEMA_VERSION,
+                cycle=session.cycle_id,
+                agent=self.name,
+                angle=_angle_for(self.name, self.priority, self.clock(), self.heartbeat_s),
+                notes=[note.path.name for note in notes],
+                messages=[{"role": m.role, "content": clean(m.content)} for m in messages],
+            )
 
             while rounds < effective_cap:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
@@ -913,6 +987,7 @@ class AgentLoop:
                         ],
                     )
                 )
+                _log_reply(session, rounds, reply, call_duration)
                 if self.events is not None and not trace.rounds[-1].tool_calls:
                     # A round with no tool calls is already complete the
                     # instant it is appended -- there is no later point to
@@ -932,7 +1007,18 @@ class AgentLoop:
                 if not reply.tool_calls:
                     break
                 for call in reply.tool_calls:
+                    # Before the call, deliberately: a tool the process dies
+                    # inside must still be on record as having been started.
+                    session.append("tool_call", round=rounds, id=call.id, name=call.name)
                     result = await self.registry.dispatch(self.ctx, call)
+                    session.append(
+                        "tool_result",
+                        round=rounds,
+                        id=call.id,
+                        name=call.name,
+                        chars=len(result),
+                        result=clean(result),
+                    )
                     # Stats are computed from the tool's own full result,
                     # before either truncation -- the loop's MAX_TOOL_RESULT_CHARS
                     # backstop below or the trace's own preview cut -- since a
@@ -962,7 +1048,9 @@ class AgentLoop:
                     # rounds played so far -- not always
                     # WRAP_UP_ROUNDS_BEFORE_CAP, since the rescue above can
                     # leave more than that in force.
-                    messages.append(Message("user", _wrap_up_nudge(effective_cap - rounds)))
+                    nudge = _wrap_up_nudge(effective_cap - rounds)
+                    messages.append(Message("user", nudge))
+                    session.append("message", kind="nudge", round=rounds, content=nudge)
                     nudge_sent = True
 
             ended = self.ctx.extras.get("end_cycle")
@@ -1012,6 +1100,7 @@ class AgentLoop:
             result = await self._finish(
                 status, model, rounds, summary, next_wake_s, notes, effective_cap
             )
+            MEMORY_SINK.reset(memory_sink)
 
         return result
 
@@ -1278,6 +1367,32 @@ class AgentLoop:
             self.memory.prune_journal()
         except Exception:
             log.exception("[%s] could not write back memory", self.name)
+
+        session = self._session
+        if session is not None:
+            self._session = None
+            # After the inbox is archived: a record that says the cycle ended
+            # must not exist while its notes can still be read a second time.
+            session.append(
+                "cycle_end",
+                status=status,
+                model=model,
+                rounds=rounds,
+                cap=cap,
+                summary=clean(summary),
+                next_wake_s=int(next_wake_s),
+                prompt_tokens=self.trace.prompt_tokens if self.trace is not None else 0,
+                completion_tokens=self.trace.completion_tokens if self.trace is not None else 0,
+                lost_events=session.lost,
+            )
+            session.close()
+            try:
+                if session.size <= INLINE_HOUSEKEEP_BYTES:
+                    self.sessions.housekeep()
+                else:
+                    await asyncio.to_thread(self.sessions.housekeep)
+            except Exception:  # housekeeping is never worth a cycle
+                log.warning("[%s] session housekeeping failed", self.name, exc_info=True)
 
         self.ctx.extras.pop("end_cycle", None)
         self.ctx.extras.pop("owed_refused", None)
