@@ -369,7 +369,8 @@ CONSUMED_STATUSES: frozenset[str] = frozenset({"ok", "max_rounds", "error", "tim
 
 COMPACTION_INSTRUCTIONS = """\
 Your memory is large: merge related facts, delete outdated ones by overwriting,
-and prune."""
+and prune. A fact you overwrite or delete can be restored, so do not keep one
+just in case."""
 
 
 @dataclass
@@ -936,6 +937,7 @@ class AgentLoop:
             else self.sessions.open()
         )
         trace.cycle_id = session.cycle_id
+        self.ctx.extras["session"] = session
         # Set here rather than around the whole method: the paused path above
         # has no session, and everything from this line on ends in the finally
         # below, which is what resets it.
@@ -1784,6 +1786,7 @@ class AgentLoop:
             # Before the next cycle reads needs_compaction(): pruning here is
             # what keeps the journal rule clearable rather than a one-way latch.
             self.memory.prune_journal()
+            self.memory.prune_deleted_fact_history()
         except Exception:
             log.exception("[%s] could not write back memory", self.name)
 
@@ -1806,6 +1809,7 @@ class AgentLoop:
             )
             session.close()
 
+        self.ctx.extras.pop("session", None)
         self.ctx.extras.pop("end_cycle", None)
         self.ctx.extras.pop("owed_refused", None)
         owed = self.ctx.extras.pop("owed_replies", None) or set()

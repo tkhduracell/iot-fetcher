@@ -114,7 +114,8 @@ Journals keep the last 30 files — older ones are deleted after every cycle —
 and facts are capped at 40 before the loop is told to compact. Both limits are
 clearable rather than one-way: the agent has `delete_fact` for the fact side,
 and the journal prunes itself, so the "your memory is large" hint stops firing
-once it has done the work. Every write goes through a temp file plus `os.replace`, so a
+once it has done the work. A fact an agent overwrites or deletes keeps a revision,
+see [Memory MCP](#memory-mcp). Every write goes through a temp file plus `os.replace`, so a
 reader never sees a half-written file and a crash never leaves a torn ledger.
 
 ## Configuration
@@ -747,6 +748,11 @@ one. In between, each cycle appends what it did to
 sudo zcat volumes/ai-brain-memory/brain/sessions/20261103-101500-a1b2.jsonl.gz | jq -c '[.seq, .type, .name]'
 ```
 
+An agent reads its own log with `search_history`: a word or phrase, newest first,
+in short snippets. It sees only its own loop's history. It is bounded in hits,
+snippet length and how much it decompresses per call, and its snippets come back
+fenced as external text, since a logged result can be a web page.
+
 ## Resuming a cycle
 
 A cycle that stops without finishing is picked back up from its log by the next
@@ -816,8 +822,15 @@ redacted) and land on each agent's next cycle.
 
 Without `MCP_TOKEN` it is read-only and open, like the HTTP API. With it, every
 request needs `Authorization: Bearer <token>` and the write tools appear. Every
-outside overwrite or delete of a fact, persona, goals or constitution keeps the
-previous body -- the `history` tool reads them back.
+overwrite or delete of a fact keeps the previous body, whether an outside edit or
+the agent's own cycle did it, as does every outside edit of a persona, goals or
+the constitution. `MAX_REVISIONS` (20) bounds each fact, and a deleted fact's
+revisions go 90 days after its last one.
+
+`history` reads them back, with `by` saying who replaced each. `history` with
+`kind=deleted` names facts that no longer exist, and `restore_fact` (write tools
+only) puts a fact back to any revision. It keeps the body it replaces, so a restore
+can be undone too.
 
 ```sh
 claude mcp add --transport http ai-brain http://192.168.68.87:8092/mcp \

@@ -8,10 +8,12 @@ alone -- an expert that asks for it gets a policy refusal from the registry.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from ai_brain.llm import ToolSpec
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
+from ai_brain.sessions import MAX_SEARCH_LIMIT, SESSIONS_DIRNAME, search_sessions
+from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 
 BRAIN_ONLY = frozenset({"brain"})
 
@@ -44,6 +46,16 @@ _SIMILAR_THRESHOLD = 0.5
 _MIN_FACT_BODY_CHARS = 20
 
 _WS_RE = re.compile(r"\s+")
+
+# Shorter than this matches nearly everything and tells the model nothing.
+_MIN_SEARCH_CHARS = 3
+_DEFAULT_SEARCH_DAYS = 14
+_DEFAULT_SEARCH_LIMIT = 10
+
+# Where a fenced result says it came from. A cycle's log holds whatever its tools
+# returned, web pages and logs included, so an old result is no more trusted now
+# than when it arrived -- and on top of that, it is stale.
+_HISTORY_SOURCE = "session-history"
 
 
 def _normalise(text: str) -> str:
@@ -201,6 +213,36 @@ async def _close_gap(ctx: ToolContext, args: dict) -> str:
     return ok({"closed": gap_id})
 
 
+def _int_arg(args: dict, key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(int(args.get(key, default)), hi))
+    except (TypeError, ValueError):
+        return default
+
+
+async def _search_history(ctx: ToolContext, args: dict) -> str:
+    """Searches this loop's own sessions directory, and takes no agent name."""
+    query = str(args["query"]).strip()
+    if len(query) < _MIN_SEARCH_CHARS:
+        return err(f"query must be at least {_MIN_SEARCH_CHARS} characters")
+    session = ctx.extras.get("session")
+    now = ctx.memory.clock().timestamp()
+    # On a thread: this can decompress a lot of files, and every other loop
+    # shares this event loop.
+    found = await asyncio.to_thread(
+        search_sessions,
+        ctx.memory.root / SESSIONS_DIRNAME,
+        query,
+        now=now,
+        days=_int_arg(args, "days", _DEFAULT_SEARCH_DAYS, 1, 365),
+        limit=_int_arg(args, "limit", _DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
+        exclude=session.cycle_id if session is not None else "",
+    )
+    for hit in found["hits"]:
+        hit["snippet"] = wrap_external(_HISTORY_SOURCE, hit["snippet"])
+    return ok(found)
+
+
 async def _rewrite_goals(ctx: ToolContext, args: dict) -> str:
     ctx.memory.rewrite_goals(str(args["body"]))
     return ok({"rewritten": "goals"})
@@ -284,6 +326,38 @@ def register_memory_tools(registry: ToolRegistry) -> None:
                 parameters=_NO_ARGS,
             ),
             _list_facts,
+            None,
+        ),
+        (
+            ToolSpec(
+                name="search_history",
+                description=(
+                    "Search your own past cycles: what you wrote, what your tools returned "
+                    "and the fact bodies you replaced. Finds a word or phrase, ignoring case, "
+                    "newest first, and returns short snippets naming the cycle they came from. "
+                    "Use it when your journal says you looked at something and you need what "
+                    "you actually saw. It reaches only your own loop's history, and old "
+                    "readings are old: check them against the present before relying on them."
+                ),
+                parameters=_schema(
+                    {
+                        "query": {"type": "string"},
+                        "days": {
+                            "type": "integer",
+                            "description": f"How far back. Default {_DEFAULT_SEARCH_DAYS}.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": (
+                                f"Most hits to return, up to {MAX_SEARCH_LIMIT}. "
+                                f"Default {_DEFAULT_SEARCH_LIMIT}."
+                            ),
+                        },
+                    },
+                    ["query"],
+                ),
+            ),
+            _search_history,
             None,
         ),
         (

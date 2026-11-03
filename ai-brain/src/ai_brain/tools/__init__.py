@@ -88,6 +88,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "list_proposals",
         "read_expert",
         "read_fact",
+        "search_history",
         "system_status",
         "usage_status",
         "vm_metrics",

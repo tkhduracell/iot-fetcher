@@ -753,6 +753,107 @@ def recover(
     return out
 
 
+# search_history's bounds. Scanning decompresses every file it reads, on a Pi,
+# for one tool call: past this the search stops and says so.
+MAX_SEARCH_DECOMPRESSED_CHARS = 64_000_000
+SEARCH_SNIPPET_CHARS = 300
+MAX_SEARCH_LIMIT = 20
+
+# Their results are this log's own text coming back, and their arguments the words
+# searched for. Searching either would make every search find the last one.
+_NOT_SEARCHED_TOOLS = frozenset({"search_history", "read_cycle_events"})
+
+
+def _searchable(event: dict) -> tuple[str, str]:
+    """An event's text a search should look at, and the tool it came from.
+
+    Not the ``opening``: it is the constitution and the persona every time, and
+    would match on every cycle regardless of what the cycle did.
+    """
+    kind = event.get("type")
+    if kind == "reply":
+        calls = json.dumps(
+            [
+                c.get("args")
+                for c in event.get("tool_calls") or []
+                if c.get("name") not in _NOT_SEARCHED_TOOLS
+            ],
+            ensure_ascii=False,
+        )
+        return "\n".join((str(event.get("text") or ""), str(event.get("thinking") or ""), calls)), ""
+    if kind == "tool_result" and event.get("name") not in _NOT_SEARCHED_TOOLS:
+        return str(event.get("result") or ""), str(event.get("name") or "")
+    if kind == "memory":
+        return str(event.get("old") or ""), ""
+    if kind == "cycle_end":
+        return str(event.get("summary") or ""), ""
+    return "", ""
+
+
+def _snippet(text: str, at: int, length: int) -> str:
+    half = SEARCH_SNIPPET_CHARS // 2
+    start = max(0, at - half)
+    end = min(len(text), at + length + half)
+    prefix = "…" if start else ""
+    suffix = "…" if end < len(text) else ""
+    return f"{prefix}{text[start:end]}{suffix}"
+
+
+def search_sessions(
+    directory: Path,
+    query: str,
+    *,
+    now: float,
+    days: int,
+    limit: int,
+    exclude: str = "",
+) -> dict:
+    """Plain case-insensitive substring search over one agent's past cycles.
+
+    Newest first, one hit per event. Plain substring on purpose: a model's
+    regex over tens of megabytes on a Pi is a way to stall a cycle for nothing
+    a word would not find. Takes one directory and no agent name, which is what
+    keeps a loop to its own history.
+    """
+    needle = query.lower()
+    cutoff = datetime.fromtimestamp(now, UTC) - timedelta(days=days)
+    hits: list[dict] = []
+    scanned = 0
+    chars = 0
+    truncated = False
+    for path in reversed(session_files(directory)):
+        day = _cycle_day(path.name)
+        if day is None or day < cutoff:
+            break
+        cycle = cycle_id_of(path)
+        if cycle == exclude:
+            continue
+        if chars > MAX_SEARCH_DECOMPRESSED_CHARS:
+            truncated = True
+            break
+        scanned += 1
+        for event in read_events(path):
+            text, tool = _searchable(event)
+            chars += len(text)
+            at = text.lower().find(needle)
+            if at < 0:
+                continue
+            hit = {
+                "cycle": cycle,
+                "at": event.get("at"),
+                "type": event.get("type"),
+                "snippet": _snippet(text, at, len(query)),
+            }
+            if event.get("round") is not None:
+                hit["round"] = event["round"]
+            if tool:
+                hit["tool"] = tool
+            hits.append(hit)
+            if len(hits) >= limit:
+                return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
+    return {"hits": hits, "cycles_scanned": scanned, "truncated": truncated}
+
+
 def session_files(directory: Path) -> list[Path]:
     """Every session in ``directory``, oldest first."""
     if not directory.exists():

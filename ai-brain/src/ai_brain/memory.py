@@ -17,6 +17,7 @@ half-written file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -39,6 +40,10 @@ SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
 MAX_REVISIONS = 20
+# How long the revisions of a fact that no longer exists are kept. A live fact
+# is bounded by MAX_REVISIONS alone; without this, every name an agent ever used
+# and dropped would hold on to its history for the life of the volume.
+DELETED_FACT_HISTORY_DAYS = 90
 MAX_CONTEXT_GAPS = 10
 # The inbox's share of the prompt. A brain that sat out an outage came
 # back to 118 notes (~46k tokens) and paid for them on every round of the
@@ -178,10 +183,22 @@ class Fact:
 
 @dataclass(frozen=True)
 class Revision:
-    """A previous identity/goals body, kept at the moment it was replaced."""
+    """A previous body of a fact or a document, kept at the moment it was replaced."""
 
     at: float
     body: str
+    # A fact's title at the time, since a deleted fact has no other record of
+    # one. Empty for documents, and for a revision older than this field.
+    title: str = ""
+    # Who replaced it: "agent" for a loop's own cycle, "outside" for the MCP.
+    by: str = ""
+    # A fact's own name. Its directory only holds a shortened one if it is long.
+    name: str = ""
+
+    @property
+    def stamp(self) -> int:
+        """The id ``restore_fact`` takes: the revision's filename."""
+        return round(self.at * 1000)
 
 
 @dataclass(frozen=True)
@@ -332,15 +349,71 @@ class MemoryDir:
         self._keep_revision("identity", self.persona_path, body)
         _atomic_write(self.persona_path, body)
 
-    def keep_fact_revision(self, name: str) -> None:
-        """Park a fact's current body before an outside edit replaces or
-        deletes it. The agents' own fact writes stay unversioned (they rewrite
-        constantly); an MCP refactor is the edit worth being able to undo."""
-        path = self.facts_dir / f"{safe_name(name)}.md"
-        self._keep_revision(f"fact-{name}"[:64], path, "")
+    def _keep_fact_revision(self, name: str, path: Path, body: str) -> None:
+        """Park a fact's current body, whoever is about to replace or delete it.
+
+        Agents are told to merge and prune, and used to be the one writer whose
+        edits could not be undone: a model that overwrites a good fact with a
+        worse one, or tidies away the wrong one, destroyed it. Each overwrite
+        is one small file, an identical rewrite none, and MAX_REVISIONS bounds
+        a fact however often it is rewritten.
+        """
+        entry = self._read_fact_meta().get(name)
+        title = entry.get("title") if isinstance(entry, dict) else None
+        self._keep_revision(
+            _fact_kind(name),
+            path,
+            body,
+            title=title if isinstance(title, str) else "",
+            by="agent" if MEMORY_SINK.get() is not None else "outside",
+            name=name,
+        )
 
     def fact_history(self, name: str, limit: int = 10) -> list[Revision]:
-        return self._history(f"fact-{safe_name(name)}"[:64], limit)
+        return self._history(_fact_kind(safe_name(name)), limit)
+
+    def restore_fact(self, name: str, stamp: int = 0) -> Revision | None:
+        """Put a fact back to an earlier revision; the newest if ``stamp`` is 0.
+
+        Goes through ``write_fact``, so the body being replaced becomes a
+        revision too and a restore can itself be undone. None when there is no
+        such revision.
+        """
+        revisions = self.fact_history(name, MAX_REVISIONS)
+        wanted = next((r for r in revisions if not stamp or r.stamp == stamp), None)
+        if wanted is None:
+            return None
+        current = self.read_fact(name)
+        title = wanted.title or (current.title if current else "") or _fallback_title(wanted.body)
+        self.write_fact(name, title, wanted.body)
+        return wanted
+
+    def deleted_facts(self) -> list[tuple[str, Revision]]:
+        """Facts that have revisions but no file: what ``restore_fact`` can bring
+        back that ``list_facts`` will not name. Newest deletion first."""
+        if not self.history_dir.exists():
+            return []
+        live = set(self.list_facts())
+        found: list[tuple[str, Revision]] = []
+        for directory in self.history_dir.glob(f"{_FACT_KIND_PREFIX}*"):
+            newest = self._history(directory.name, 1)
+            if not newest:
+                continue
+            name = newest[0].name or directory.name[len(_FACT_KIND_PREFIX) :]
+            if name not in live:
+                found.append((name, newest[0]))
+        found.sort(key=lambda item: item[1].at, reverse=True)
+        return found
+
+    def prune_deleted_fact_history(self, older_than_days: int = DELETED_FACT_HISTORY_DAYS) -> int:
+        """Forget deleted facts whose last revision is past the limit."""
+        cutoff = (self.clock() - timedelta(days=older_than_days)).timestamp()
+        removed = 0
+        for name, newest in self.deleted_facts():
+            if newest.at < cutoff:
+                shutil.rmtree(self.history_dir / _fact_kind(name), ignore_errors=True)
+                removed += 1
+        return removed
 
     def identity_history(self, limit: int = 10) -> list[Revision]:
         return self._history("identity", limit)
@@ -348,7 +421,9 @@ class MemoryDir:
     def goals_history(self, limit: int = 10) -> list[Revision]:
         return self._history("goals", limit)
 
-    def _keep_revision(self, kind: str, path: Path, body: str) -> None:
+    def _keep_revision(
+        self, kind: str, path: Path, body: str, *, title: str = "", by: str = "", name: str = ""
+    ) -> None:
         """Park the body that is about to be overwritten.
 
         Two guards, both about noise: an identical rewrite is not drift and
@@ -371,12 +446,18 @@ class MemoryDir:
         # revision just written would be the next one pruned.
         stamp = max([int(now.timestamp() * 1000)] + [s + 1 for s in _stamps(directory)])
         _atomic_write(directory / f"{stamp}.md", previous)
+        if title or by or name:
+            # Beside the revision rather than in it, so the body stays exactly
+            # what was on disk. ``_stamps`` globs *.md, so this is never one.
+            sidecar = {"title": title, "by": by, "name": name}
+            _atomic_write(directory / f"{stamp}.json", json.dumps(sidecar))
         self._prune_history(directory)
 
     @staticmethod
     def _prune_history(directory: Path) -> None:
         for stamp in sorted(_stamps(directory), reverse=True)[MAX_REVISIONS:]:
             (directory / f"{stamp}.md").unlink()
+            (directory / f"{stamp}.json").unlink(missing_ok=True)
 
     def _history(self, kind: str, limit: int) -> list[Revision]:
         directory = self.history_dir / safe_name(kind)
@@ -387,7 +468,11 @@ class MemoryDir:
         # drift must never blow up over one.
         stamps = sorted(_stamps(directory), reverse=True)[: max(limit, 0)]
         return [
-            Revision(at=s / 1000, body=(directory / f"{s}.md").read_text(encoding="utf-8"))
+            Revision(
+                at=s / 1000,
+                body=(directory / f"{s}.md").read_text(encoding="utf-8"),
+                **_revision_meta(directory / f"{s}.json"),
+            )
             for s in stamps
         ]
 
@@ -436,8 +521,10 @@ class MemoryDir:
         # redaction pass rather than relying solely on the tool-output fence.
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         path = self.facts_dir / f"{safe_name(name)}.md"
+        clean_body = redact(body)
         self._record_mutation("write_fact", name, path)
-        _atomic_write(path, redact(body))
+        self._keep_fact_revision(name, path, clean_body)
+        _atomic_write(path, clean_body)
         self._bump_fact_meta(name, _fit_title(redact(title)))
 
     def read_fact(self, name: str) -> Fact | None:
@@ -461,6 +548,7 @@ class MemoryDir:
         if not path.exists():
             return False
         self._record_mutation("delete_fact", name, path)
+        self._keep_fact_revision(name, path, "")
         path.unlink()
         meta = self._read_fact_meta()
         if meta.pop(name, None) is not None:
@@ -958,6 +1046,32 @@ def _label(sender: str) -> str:
     not carry text of its own outside the fence, or come out as ``filip``.
     """
     return safe_source(sender)
+
+
+_FACT_KIND_PREFIX = "fact-"
+
+
+def _fact_kind(name: str) -> str:
+    """The history directory for a fact. A kind is a ``safe_name``, so at most 64
+    characters. A name too long for that gets a hash in place of its tail: cutting
+    it alone would let two long names share one history, and now that history can
+    be restored from, one fact's old body could be written into another."""
+    kind = f"{_FACT_KIND_PREFIX}{name}"
+    if len(kind) <= 64:
+        return kind
+    digest = hashlib.sha256(name.encode()).hexdigest()[:10]
+    return f"{kind[:53]}-{digest}"
+
+
+def _revision_meta(path: Path) -> dict[str, str]:
+    """A revision's sidecar, as ``Revision`` fields; nothing if absent or broken."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {key: raw[key] for key in ("title", "by", "name") if isinstance(raw.get(key), str)}
 
 
 def _stamps(directory: Path) -> list[int]:
