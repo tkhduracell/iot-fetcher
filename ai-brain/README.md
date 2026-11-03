@@ -105,6 +105,70 @@ and the journal prunes itself, so the "your memory is large" hint stops firing
 once it has done the work. Every write goes through a temp file plus `os.replace`, so a
 reader never sees a half-written file and a crash never leaves a torn ledger.
 
+## Backing up /memory
+
+`/memory` is the one thing in this stack that cannot be rebuilt, and it lives on one
+SD card. `scripts/backup-memory.sh` takes a snapshot to Google Cloud Storage: a
+`.tar.gz` of the whole volume, checked before it leaves the box, with a timestamped
+name that never replaces an earlier one.
+
+It leaves out `_repo/` (re-fetched on boot) and per-cycle session logs (a 30-day rolling
+log that would be most of every nightly copy; `BACKUP_SESSIONS=1` keeps them). It refuses
+to run on a directory with no `constitution.md`, because an unmounted volume looks
+exactly like an empty one. A snapshot is taken while the loops run, so it is not a
+single instant: each file is whole, since every write is a temp file plus a rename,
+but a note could be in `inbox/` in one copy and `done/` a moment later.
+
+The upload runs inside the `iot-fetcher` container, the same way as the VictoriaMetrics
+backup, so this box needs no `gcloud` and no second copy of a key. Success writes
+`ai_brain_memory_backup_last_success_timestamp`, next to `vm_backup_last_success_timestamp`.
+
+**To set it up, on the rpi5:**
+
+1. A private GCS location. The bucket in `GOOGLE_BACKUP_URI` works, under its own prefix.
+   The service account in `fetcher-core/python/.env` needs `roles/storage.objectCreator`
+   on that bucket. It needs nothing that can read or delete, and this script asks for
+   nothing more.
+2. In `ai-brain/.env`, the same strftime template `GOOGLE_BACKUP_URI` uses:
+
+   ```sh
+   AI_BRAIN_BACKUP_URI=gcs://<bucket>/ai-brain-memory/%Y/%m/
+   ```
+
+3. A lifecycle rule to expire old snapshots, since nothing here deletes any. `--lifecycle-file`
+   replaces the bucket's whole policy, so if the bucket is shared, read the current one
+   with `gcloud storage buckets describe gs://<bucket> --format='default(lifecycle)'` and
+   add to it:
+
+   ```json
+   {"rule": [{"action": {"type": "Delete"},
+              "condition": {"age": 90, "matchesPrefix": ["ai-brain-memory/"]}}]}
+   ```
+
+4. Try it, then schedule it with `sudo crontab -e`. The bind mount is owned by uid 1000,
+   so it runs as root:
+
+   ```sh
+   sudo ./ai-brain/scripts/backup-memory.sh --dry-run
+   sudo ./ai-brain/scripts/backup-memory.sh
+   ```
+
+   ```cron
+   23 3 * * * /home/filip/iot-fetcher/ai-brain/scripts/backup-memory.sh >> /var/log/ai-brain-backup.log 2>&1
+   ```
+
+**To restore,** stop the container first so nothing writes over it:
+
+```sh
+gsutil cp gs://<bucket>/ai-brain-memory/2026/11/ai-brain-memory-20261103T022300Z.tar.gz .
+sudo docker compose -f docker-compose.yml -f docker-compose.local.yml stop ai-brain
+sudo tar -C volumes/ai-brain-memory --numeric-owner -xzpf ai-brain-memory-20261103T022300Z.tar.gz
+sudo docker compose -f docker-compose.yml -f docker-compose.local.yml up -d ai-brain
+```
+
+It restores over what is there, without removing files that are not in the snapshot, so
+extract into an empty directory if the volume is suspect.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. Every variable below is read by
