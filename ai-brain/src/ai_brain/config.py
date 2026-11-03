@@ -277,6 +277,8 @@ class Settings:
     repo_ref: str
     repo_refresh_h: int
     rejection_memory_days: int
+    session_retention_days: int
+    session_max_mb: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -482,4 +484,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # long enough that "Filip said no last week" still holds, short enough
         # that a genuinely stale objection eventually stops gatekeeping.
         rejection_memory_days=get_int("REJECTION_MEMORY_DAYS", 30),
+        # The per-cycle session logs (see sessions.py). 0 days turns logging
+        # off altogether; 0 MB means age is the only limit. Per agent.
+        session_retention_days=max(0, get_int("SESSION_RETENTION_DAYS", 30)),
+        session_max_mb=max(0, get_int("SESSION_MAX_MB", 200)),
     )

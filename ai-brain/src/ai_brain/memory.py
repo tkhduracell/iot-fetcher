@@ -9,6 +9,7 @@ Layout under ``root``::
     inbox/<ts>-<sender>-<n>.md
     inbox/done/
     outbox/             (brain only, with outbox/slack/)
+    sessions/<cycle-id>.jsonl[.gz]  (see ai_brain.sessions)
 
 All writes go through a temp file plus ``os.replace`` so a reader never sees a
 half-written file.
@@ -17,10 +18,12 @@ half-written file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +31,8 @@ from pathlib import Path
 from ai_brain.errors import BadInput
 from ai_brain.fence import fence, safe_source
 from ai_brain.redact import redact
+
+log = logging.getLogger(__name__)
 
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
@@ -48,6 +53,15 @@ MAX_TITLE_TOKENS = 20
 # The fact sidecar lives beside the facts but is not one: ``list_facts`` globs
 # ``*.md``, so a ``.json`` name can never be mistaken for a fact.
 FACT_META_NAME = "_meta.json"
+
+# Where a cycle's memory mutations go: ``sink(op, name, old_body)``. A
+# ContextVar rather than an attribute on MemoryDir, because the MCP server and a
+# running cycle write through the same MemoryDir at the same time: this is set
+# inside the loop's own task, so a human's outside edit landing mid-cycle is not
+# recorded as something the agent did. Same mechanism as ``llm.STREAM_SINK``.
+MEMORY_SINK: ContextVar[Callable[[str, str, str], None] | None] = ContextVar(
+    "MEMORY_SINK", default=None
+)
 
 
 def _fit_title(title: str) -> str:
@@ -301,11 +315,13 @@ class MemoryDir:
 
     def rewrite_identity(self, body: str) -> None:
         self._require_brain("rewrite_identity")
+        self._record_mutation("rewrite_identity", "identity", self.persona_path)
         self._keep_revision("identity", self.persona_path, body)
         _atomic_write(self.persona_path, body)
 
     def rewrite_goals(self, body: str) -> None:
         self._require_brain("rewrite_goals")
+        self._record_mutation("rewrite_goals", "goals", self.goals_path)
         self._keep_revision("goals", self.goals_path, body)
         _atomic_write(self.goals_path, body)
 
@@ -419,7 +435,9 @@ class MemoryDir:
         # being public) could end up in git history -- so it gets its own
         # redaction pass rather than relying solely on the tool-output fence.
         self.facts_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write(self.facts_dir / f"{safe_name(name)}.md", redact(body))
+        path = self.facts_dir / f"{safe_name(name)}.md"
+        self._record_mutation("write_fact", name, path)
+        _atomic_write(path, redact(body))
         self._bump_fact_meta(name, _fit_title(redact(title)))
 
     def read_fact(self, name: str) -> Fact | None:
@@ -442,6 +460,7 @@ class MemoryDir:
         path = self.facts_dir / f"{safe_name(name)}.md"
         if not path.exists():
             return False
+        self._record_mutation("delete_fact", name, path)
         path.unlink()
         meta = self._read_fact_meta()
         if meta.pop(name, None) is not None:
@@ -553,6 +572,8 @@ class MemoryDir:
             closed_at=None,
             answer="",
         )
+        # Reopening wipes the old answer, which is on no other record.
+        self._record_mutation("open_gap", gap_id, path)
         self._write_gap(gap)
         return gap
 
@@ -562,6 +583,7 @@ class MemoryDir:
         gap = self._read_gap(path)
         if gap is None:
             return False
+        self._record_mutation("close_gap", gap_id, path)
         self._write_gap(
             Gap(
                 id=gap.id,
@@ -829,6 +851,24 @@ class MemoryDir:
         return len(self.list_facts()) > MAX_FACTS or journal_files > MAX_JOURNAL_FILES
 
     # -- internals -----------------------------------------------------
+
+    @staticmethod
+    def _record_mutation(op: str, name: str, path: Path) -> None:
+        """Tell the running cycle's log what is about to be replaced.
+
+        Reads the old body only when a cycle is listening, so an MCP edit or a
+        test pays nothing for it. An old body that cannot be read must not stop
+        the write that was going to replace it.
+        """
+        sink = MEMORY_SINK.get()
+        if sink is None:
+            return
+        try:
+            old = MemoryDir._read(path)
+        except (OSError, ValueError):
+            log.warning("could not log the old body of %s %s", op, name, exc_info=True)
+            old = ""
+        sink(op, name, old)
 
     def _require_brain(self, op: str) -> None:
         if not self.is_brain:
