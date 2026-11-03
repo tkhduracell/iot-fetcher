@@ -248,6 +248,21 @@ async def test_propose_rejects_the_reserved_chat_topic(approvals):
     assert approvals.pending() == []
 
 
+@pytest.mark.parametrize("name", ["home-assistant/json#", "../x", "a b", "", "x?y"])
+async def test_propose_refuses_a_bad_container_name_before_slack(approvals, slack, name):
+    with pytest.raises(ValueError, match="container"):
+        await approvals.propose("docker_restart", {"container": name}, "why", "#home")
+    assert slack.posts == []
+    assert approvals.all() == []
+
+
+async def test_propose_accepts_a_real_container_name(approvals):
+    proposal = await approvals.propose(
+        "docker_restart", {"container": "iot-fetcher"}, "crash-looping", "#home"
+    )
+    assert proposal.status == "pending"
+
+
 async def test_propose_never_executes(approvals, executors):
     await approvals.propose("sonos_say", {"text": "hi"}, "why", "#home")
     assert executors.calls == []
@@ -623,6 +638,20 @@ async def test_propose_tool_reports_a_bad_kind_as_an_error(registry, make_ctx):
         topic="#home",
     )
     assert "unknown kind" in out["error"]
+
+
+async def test_propose_tool_refuses_a_bad_container_name(registry, make_ctx, approvals, slack):
+    out = await call(
+        registry,
+        make_ctx(),
+        kind="docker_restart",
+        payload={"container": "home-assistant/json#"},
+        reason="stuck",
+        topic="home-assistant",
+    )
+    assert "container" in out["error"]
+    assert slack.posts == []
+    assert approvals.pending() == []
 
 
 async def test_propose_tool_reports_the_reserved_chat_topic_as_an_error(registry, make_ctx):

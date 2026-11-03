@@ -877,6 +877,52 @@ async def test_docker_top_reports_a_backend_error(registry, ctx):
     assert "404" in out["error"]
 
 
+# A model-supplied container name lands in the URL path. Anything outside
+# Docker's own name rule can reshape the request instead of naming a container:
+# '#' turns /containers/x/logs into an inspect (Config.Env and all), '?' and
+# '/' do the same by other means.
+BAD_CONTAINER_NAMES = [
+    "home-assistant/json#",
+    "home-assistant/json?",
+    "x/../json",
+    "../json",
+    "..",
+    ".hidden",
+    "-lead",
+    "a b",
+    "a%2Fb",
+    "name\n",
+    "",
+]
+
+
+@pytest.mark.parametrize("tool", ["docker_top", "docker_logs"])
+@pytest.mark.parametrize("name", BAD_CONTAINER_NAMES)
+@respx.mock
+async def test_docker_tools_refuse_a_bad_container_name_before_any_request(
+    registry, ctx, tool, name
+):
+    anything = respx.route().mock(return_value=httpx.Response(200, json={}))
+    out = await call(registry, ctx, tool, container=name)
+
+    assert "container" in out["error"]
+    assert not anything.called
+
+
+@pytest.mark.parametrize("name", ["iot-fetcher", "abc123def456", "a_b.c-d", "A1"])
+@respx.mock
+async def test_docker_tools_accept_ordinary_names_and_ids(registry, ctx, name):
+    top = respx.get(f"http://docker-proxy:2375/containers/{name}/top").mock(
+        return_value=httpx.Response(200, json={"Titles": [], "Processes": []})
+    )
+    logs = respx.get(f"http://docker-proxy:2375/containers/{name}/logs").mock(
+        return_value=httpx.Response(200, text="line\n")
+    )
+    assert "error" not in await call(registry, ctx, "docker_top", container=name)
+    assert "error" not in await call(registry, ctx, "docker_logs", container=name)
+    assert top.called and logs.called
+
+
 # --- docker_logs --------------------------------------------------------
 
 DOCKER_LOG = (

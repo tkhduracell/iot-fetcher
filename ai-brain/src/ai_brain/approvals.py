@@ -44,7 +44,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ai_brain.executors import Executors, QuietHours
+from ai_brain.executors import Executors, QuietHours, validate_container_name
 from ai_brain.memory import MemoryDir
 from ai_brain.slack_io import CHAT_TOPIC
 
@@ -186,6 +186,11 @@ class Approvals:
         for key in required:
             if key not in keys:
                 raise ValueError(f"{kind} payload is missing {key!r}")
+        if kind == "docker_restart":
+            # Refused here rather than at execution: a name that cannot be a
+            # container would otherwise cost Filip a Slack approval, only to
+            # fail after he said yes.
+            validate_container_name(payload["container"])
 
         now = self.clock()
         proposal = Proposal(
