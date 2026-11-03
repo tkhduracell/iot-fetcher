@@ -12,7 +12,12 @@ import asyncio
 import re
 
 from ai_brain.llm import ToolSpec
-from ai_brain.sessions import MAX_SEARCH_LIMIT, SESSIONS_DIRNAME, search_sessions
+from ai_brain.sessions import (
+    MAX_SEARCH_LIMIT,
+    MAX_SEARCH_QUERY_CHARS,
+    SESSIONS_DIRNAME,
+    search_sessions,
+)
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
 
 BRAIN_ONLY = frozenset({"brain"})
@@ -218,6 +223,8 @@ async def _search_history(ctx: ToolContext, args: dict) -> str:
     query = str(args["query"]).strip()
     if len(query) < _MIN_SEARCH_CHARS:
         return err(f"query must be at least {_MIN_SEARCH_CHARS} characters")
+    if len(query) > MAX_SEARCH_QUERY_CHARS:
+        return err(f"query must be at most {MAX_SEARCH_QUERY_CHARS} characters")
     session = ctx.extras.get("session")
     now = ctx.memory.clock().timestamp()
     # On a thread: this can decompress a lot of files, and every other loop

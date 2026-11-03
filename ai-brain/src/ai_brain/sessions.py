@@ -58,6 +58,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ai_brain.fence import safe_source
 from ai_brain.llm import Message, ToolCall
 from ai_brain.redact import MASK, SECRET_NAME, masked_under_name, redact
 
@@ -761,10 +762,27 @@ def recover(
 MAX_SEARCH_DECOMPRESSED_CHARS = 64_000_000
 SEARCH_SNIPPET_CHARS = 300
 MAX_SEARCH_LIMIT = 20
+# A snippet is as long as what it matched, so this is part of bounding one too.
+MAX_SEARCH_QUERY_CHARS = 200
+# A tool name is the model's to invent, and a hit carries it outside the fence.
+_MAX_HIT_TOOL_CHARS = 64
 
-# Their results are this log's own text coming back, and their arguments the words
+# Its results are this log's own text coming back, and its arguments the words
 # searched for. Searching either would make every search find the last one.
-_NOT_SEARCHED_TOOLS = frozenset({"search_history", "read_cycle_events"})
+_NOT_SEARCHED_TOOLS = frozenset({"search_history"})
+
+# ``json.dumps`` writes non-ASCII as an escape, which is what ``tools.ok`` does to
+# every result: a logged one holds the six characters of an escape where the tool
+# said "ä", and a search for the word would never find it.
+_JSON_UNICODE_ESCAPE = re.compile(r"(?<!\\)\\u([0-9a-fA-F]{4})")
+
+
+def _unescaped(text: str) -> str:
+    """Logged JSON with its non-ASCII readable. A regex rather than a parse, since
+    a result cut to the event limit is no longer JSON."""
+    if "\\u" not in text:
+        return text
+    return _JSON_UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text)
 
 
 def _searchable(event: dict) -> str:
@@ -785,9 +803,9 @@ def _searchable(event: dict) -> str:
         )
         return "\n".join((str(event.get("text") or ""), str(event.get("thinking") or ""), calls))
     if kind == "tool_result" and event.get("name") not in _NOT_SEARCHED_TOOLS:
-        return str(event.get("result") or "")
+        return _unescaped(str(event.get("result") or ""))
     if kind == "memory":
-        return str(event.get("old") or "")
+        return _unescaped(str(event.get("old") or ""))
     if kind == "cycle_end":
         return str(event.get("summary") or "")
     return ""
@@ -823,32 +841,43 @@ def search_sessions(
     hits: list[dict] = []
     scanned = 0
     chars = 0
+    seen: set[str] = set()
     for path in reversed(session_files(directory)):
         day = _cycle_day(path.name)
         if day is None or day < cutoff:
             break
-        cycle = cycle_id_of(path)
-        if cycle == exclude:
+        # Not a compress's leftover temp file, and not a cycle twice: a power cut
+        # during ``compress`` leaves both copies, and the .gz sorts first here.
+        if not path.name.endswith((LOG_SUFFIX, HOLES_SUFFIX, GZ_SUFFIX)):
             continue
+        cycle = cycle_id_of(path)
+        if cycle == exclude or cycle in seen:
+            continue
+        seen.add(cycle)
         scanned += 1
         for size, event in _iter_events(path):
             chars += size
             if chars > MAX_SEARCH_DECOMPRESSED_CHARS:
                 return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
             text = _searchable(event)
-            at = text.lower().find(needle)
+            lowered = text.lower()
+            at = lowered.find(needle)
             if at < 0:
                 continue
+            # Lowercasing can change a string's length ("İ"), and ``at`` is an
+            # offset into the lowered text.
             hit = {
                 "cycle": cycle,
                 "at": event.get("at"),
                 "type": event.get("type"),
-                "snippet": _snippet(text, at, len(query)),
+                "snippet": _snippet(
+                    text if len(lowered) == len(text) else lowered, at, len(needle)
+                ),
             }
             if event.get("round") is not None:
                 hit["round"] = event["round"]
             if event.get("type") == "tool_result":
-                hit["tool"] = event.get("name")
+                hit["tool"] = safe_source(str(event.get("name")))[:_MAX_HIT_TOOL_CHARS]
             hits.append(hit)
             if len(hits) >= limit:
                 return {"hits": hits, "cycles_scanned": scanned, "truncated": True}

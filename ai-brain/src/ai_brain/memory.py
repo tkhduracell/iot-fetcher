@@ -367,13 +367,28 @@ class MemoryDir:
                     "by": "agent" if MEMORY_SINK.get() is not None else "outside",
                 },
             )
-        except (OSError, ValueError):
-            # An old body that cannot be read or kept must not stop the write
-            # that was going to replace it.
+        except ValueError:
+            # Not utf-8, so not a body anyone could restore, and it must not stop
+            # the write replacing it. A disk that cannot keep a revision does stop
+            # it: the promise is that the old body survives.
             log.warning("could not keep a revision of fact %s", name, exc_info=True)
 
     def fact_history(self, name: str, limit: int = 10) -> list[Revision]:
-        return self._history(_fact_kind(safe_name(name)), limit)
+        kind = _fact_kind(safe_name(name))
+        revisions = self._history(kind, limit)
+        legacy = _legacy_fact_kind(kind)
+        if legacy != kind:
+            # Kept under the cut-down name by the version before this one.
+            revisions = sorted(
+                revisions + self._history(legacy, limit), key=lambda r: r.stamp, reverse=True
+            )[: max(limit, 0)]
+        return revisions
+
+    def _live_fact_kinds(self) -> set[str]:
+        """History directories that belong to a fact that still exists, including
+        the cut-down name an older version kept a long fact's revisions under."""
+        kinds = {_fact_kind(name) for name in self.list_facts()}
+        return kinds | {_legacy_fact_kind(kind) for kind in kinds}
 
     def restore_fact(self, name: str, stamp: int = 0) -> Revision | None:
         """Put a fact back to an earlier revision; the newest if ``stamp`` is 0.
@@ -396,15 +411,19 @@ class MemoryDir:
         back that ``list_facts`` will not name. Newest deletion first."""
         if not self.history_dir.exists():
             return []
-        live = set(self.list_facts())
+        live = self._live_fact_kinds()
         found: list[tuple[str, Revision]] = []
         for directory in self.history_dir.glob(f"{_FACT_KIND_PREFIX}*"):
-            name = directory.name[len(_FACT_KIND_PREFIX) :]
-            if name in live:
+            if directory.name in live:
                 continue
-            newest = self._history(directory.name, 1)
+            try:
+                newest = self._history(directory.name, 1)
+            except (OSError, ValueError):
+                # One unreadable revision must not hide every other deleted fact.
+                log.warning("could not read the history in %s", directory, exc_info=True)
+                continue
             if newest:
-                found.append((name, newest[0]))
+                found.append((directory.name[len(_FACT_KIND_PREFIX) :], newest[0]))
         found.sort(key=lambda item: item[1].at, reverse=True)
         return found
 
@@ -415,7 +434,7 @@ class MemoryDir:
         opens no revision.
         """
         cutoff = (self.clock() - timedelta(days=older_than_days)).timestamp() * 1000
-        live = {_fact_kind(name) for name in self.list_facts()}
+        live = self._live_fact_kinds()
         removed = 0
         for directory in self.history_dir.glob(f"{_FACT_KIND_PREFIX}*"):
             stamps = _stamps(directory)
@@ -1057,6 +1076,7 @@ def _label(sender: str) -> str:
 
 
 _FACT_KIND_PREFIX = "fact-"
+_LEGACY_KIND_CHARS = 64
 # A ``safe_name``, with room for the prefix on the longest fact name.
 _SAFE_KIND = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,68}$")
 
@@ -1065,6 +1085,12 @@ def _fact_kind(name: str) -> str:
     """The history directory for a fact: its whole name, so two long names cannot
     share one history and have one fact's old body restored into the other."""
     return f"{_FACT_KIND_PREFIX}{name}"
+
+
+def _legacy_fact_kind(kind: str) -> str:
+    """Where a version before ``_fact_kind`` kept this fact's revisions: the
+    directory name cut to 64 characters. Such directories are still on old volumes."""
+    return kind[:_LEGACY_KIND_CHARS]
 
 
 def _safe_kind(kind: str) -> str:

@@ -369,8 +369,8 @@ CONSUMED_STATUSES: frozenset[str] = frozenset({"ok", "max_rounds", "error", "tim
 
 COMPACTION_INSTRUCTIONS = """\
 Your memory is large: merge related facts, delete outdated ones by overwriting,
-and prune. A fact you overwrite or delete can be restored, so do not keep one
-just in case."""
+and prune. A fact you overwrite or delete keeps a revision Filip can restore, and
+search_history finds its old body, so do not keep one just in case."""
 
 
 @dataclass
