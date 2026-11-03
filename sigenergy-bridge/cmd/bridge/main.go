@@ -26,7 +26,7 @@ func main() {
 
 	log.Info("starting sigenergy-bridge",
 		"sigenergy_host", cfg.SigenergyHost,
-		"wallbox_entity", cfg.WallboxEntity,
+		"watched_entities", cfg.WatchedEntities(),
 		"dry_run", cfg.DryRun,
 	)
 
@@ -47,7 +47,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	listener := ha.Dial(ctx, cfg.HAURL, cfg.HAToken, cfg.WallboxEntity, log)
+	listener := ha.Dial(ctx, cfg.HAURL, cfg.HAToken, cfg.WatchedEntities(), log)
 	writer := metrics.NewHTTP(cfg.InfluxHost, cfg.InfluxToken, cfg.InfluxDatabase)
 
 	err = controller.Run(ctx, controller.Deps{

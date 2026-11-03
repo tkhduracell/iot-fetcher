@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from ai_brain.memory import MemoryDir, safe_name
+from ai_brain.memory import OWNER_SENDER, MemoryDir, safe_name
 
 if TYPE_CHECKING:
     from ai_brain.supervisor import System
@@ -253,7 +253,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
     @mcp.tool()
     def send_note(agent: str, body: str) -> str:
         """Drop a note in an agent's inbox; it reads it on its next cycle and wakes now."""
-        memory(agent).drop_note("filip", body)
+        memory(agent).drop_note(OWNER_SENDER, body)
         system.wake(agent)
         return f"note sent to {agent}"
 

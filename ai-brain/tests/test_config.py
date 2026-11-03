@@ -35,7 +35,7 @@ def test_defaults_from_empty_env():
     assert s.call_timeout_s == 60
     assert (s.max_rounds, s.max_tokens, s.thinking_budget) == (16, 8000, -1)
     assert s.max_prompt_tokens == 400_000
-    assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
+    assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32), ("anthropic:*opus*", 32)]
     assert s.repo_slug == "tkhduracell/iot-fetcher"
     assert s.repo_ref == "main"
     assert s.repo_refresh_h == 6
@@ -107,7 +107,7 @@ def test_max_rounds_by_model_default_is_unchanged_when_the_setting_is_empty():
     copies the new line into its .env."""
     for env in ({}, {"CYCLE_MAX_ROUNDS_BY_MODEL": ""}, {"CYCLE_MAX_ROUNDS_BY_MODEL": "   "}):
         s = load_settings(env)
-        assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
+        assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32), ("anthropic:*opus*", 32)]
 
 
 def test_max_rounds_by_model_parses_pattern_equals_n():
@@ -150,7 +150,7 @@ def test_max_rounds_by_model_unset_key_uses_the_default():
     case (unset) from the "none"/"off" opt-out just below, which requires the
     same default-vs-absent handling in _max_rounds_by_model to tell apart."""
     s = load_settings({})
-    assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32)]
+    assert s.max_rounds_by_model == [("gemini:*3.8*", 32), ("lan:qwen3.8*", 32), ("anthropic:*opus*", 32)]
 
 
 def test_max_rounds_by_model_none_is_the_explicit_opt_out():
@@ -197,6 +197,7 @@ def test_env_overrides_and_list_parsing():
             "EXPERTS": "energy,health",
             "BRAIN_HEARTBEAT_MIN": "5",
             "EXPERT_HEARTBEAT_MIN": "15",
+            "BRAIN_MIN_WAKE_GAP_MIN": "10",
             "DRY_RUN": "1",
             "RPM": "3",
             "GEMINI_API_KEY": "k",
@@ -208,6 +209,7 @@ def test_env_overrides_and_list_parsing():
     assert s.experts == ["energy", "health"]
     assert s.brain_heartbeat_s == 300
     assert s.expert_heartbeat_s == 900
+    assert s.brain_min_wake_gap_s == 600
     assert s.dry_run is True
     assert s.rpm == 3
     assert s.gemini_api_key == "k"
@@ -289,7 +291,7 @@ def test_chain_applies_num_ctx_per_model_with_kind_fallback(tmp_path):
 
 
 def test_think_by_model_default_and_parsing():
-    assert load_settings({}).think_by_model == [("lan:qwen3.8*", "xhigh")]
+    assert load_settings({}).think_by_model == [("lan:qwen3.8*", "xhigh"), ("anthropic:*opus*", "medium")]
     s = load_settings({"THINK_BY_MODEL": "lan:qwen3-coder*=false, ollama:*=Low"})
     assert s.think_by_model == [("lan:qwen3-coder*", "false"), ("ollama:*", "low")]
     assert load_settings({"THINK_BY_MODEL": "off"}).think_by_model == []
@@ -339,9 +341,15 @@ def test_max_prompt_tokens_by_model_default_and_overrides():
     assert load_settings({}).max_prompt_tokens_by_model == [
         ("lan:*", 2_000_000),
         ("ollama:*", 2_000_000),
+        ("anthropic:*opus*", 200_000),
     ]
     s = load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "lan:qwen3.8*=0"})
     assert s.max_prompt_tokens_by_model == [("lan:qwen3.8*", 0)]
     assert load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "off"}).max_prompt_tokens_by_model == []
     with pytest.raises(ValueError, match="CYCLE_MAX_PROMPT_TOKENS_BY_MODEL"):
         load_settings({"CYCLE_MAX_PROMPT_TOKENS_BY_MODEL": "lan:*=99999999999"})
+
+
+def test_brain_min_wake_gap_defaults_to_30_minutes():
+    assert load_settings({}).brain_min_wake_gap_s == 30 * 60
+    assert load_settings({"BRAIN_MIN_WAKE_GAP_MIN": "0"}).brain_min_wake_gap_s == 0

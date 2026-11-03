@@ -310,6 +310,21 @@ async def test_docker_restart_is_silent_in_dry_run(http, caplog):
     assert "[dry-run] docker_restart" in caplog.text
 
 
+@pytest.mark.parametrize("name", ["iot-fetcher/json#", "../x", "a b", "", None, 123])
+@respx.mock
+async def test_docker_restart_refuses_a_bad_name_without_a_request(settings, http, name):
+    with pytest.raises(ValueError, match="container"):
+        await make_executors(settings, http).docker_restart(name)
+    assert not respx.calls
+
+
+@respx.mock
+async def test_docker_restart_refuses_a_bad_name_even_in_dry_run(http):
+    settings = load_settings({**ENV, "DRY_RUN": "1"})
+    with pytest.raises(ValueError, match="container"):
+        await make_executors(settings, http).docker_restart("x/json#")
+
+
 @respx.mock
 async def test_run_dispatches_docker_restart(settings, http):
     route = respx.post("http://docker-proxy:2375/containers/ollama/restart").mock(
@@ -321,3 +336,11 @@ async def test_run_dispatches_docker_restart(settings, http):
 
     assert route.called
     assert result == "restarted ollama"
+
+
+
+async def test_run_idea_executes_nothing_and_records_the_title(settings, http):
+    result = await make_executors(settings, http).run(
+        "idea", {"title": "Weekly energy digest", "why": "Filip asked for October totals twice"}
+    )
+    assert result == "Filip wants this: Weekly energy digest"
