@@ -262,6 +262,21 @@ A loop that wakes every hour and reads the same gauges will, left alone, write
   everyone to the first angle. It is explicitly a suggestion: a loop that is
   mid-investigation is told to ignore it.
 
+**What goes where in the prompt.** The system messages hold only text this
+system wrote: constitution, persona, goals, instructions, fact names, open gaps
+and the rejection summary. The journal and the inbox are in the user turn
+instead, each inside an `<external>` fence (the same one tool results use, in
+`ai_brain/fence.py`, which defuses any `<external`/`</external` in the text so
+it cannot close the fence). A note's sender and time are on the line above its
+fence, taken from the note's header, so a body claiming to be from Filip is
+still labelled as whoever really sent it. The cycle instructions say fenced
+text is data, with one exception: a note from `filip` is Filip, and what he
+tells the brain is still ground truth. The reason is the path from the
+researcher: a web page it reads can end up in a note to the brain, which holds
+`propose` and `slack_post`, and in a system message that text would carry the
+same weight as the constitution. (A `topic:` first line stays the first line
+inside the fence, so thread routing and the owed-reply check are unaffected.)
+
 The bar for Slack is unchanged and deliberate: a finding, not a status report.
 A quiet day stays quiet.
 
