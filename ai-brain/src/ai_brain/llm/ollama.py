@@ -350,7 +350,7 @@ def build_request(
             out_messages.append({"role": "tool", "content": message.content})
         elif message.role == "assistant":
             entry: dict[str, Any] = {"role": "assistant", "content": message.content}
-            if thinking_on and message.thinking:
+            if thinking_on and message.thinking and _is_own_turn(message, model):
                 entry["thinking"] = message.thinking
             if message.tool_calls:
                 entry["tool_calls"] = [
@@ -358,6 +358,15 @@ def build_request(
                     for call in message.tool_calls
                 ]
             out_messages.append(entry)
+        elif (
+            message.role == "system"
+            and out_messages
+            and out_messages[-1]["role"] == "system"
+        ):
+            # The loop sends its system prompt as two messages (a stable half
+            # for anthropic:'s prefix cache, then the rest). Chat templates
+            # expect one system turn up front, so they are joined again here.
+            out_messages[-1]["content"] += "\n\n" + message.content
         else:
             out_messages.append({"role": message.role, "content": message.content})
 
@@ -398,3 +407,15 @@ def _error_message(response: httpx.Response) -> str:
     if isinstance(body, dict) and "error" in body:
         return str(body["error"])
     return response.text[:_LOG_BODY_CHARS]
+
+
+def _is_own_turn(message: Message, model: str) -> bool:
+    """True when this assistant turn is this model's own to echo reasoning for.
+
+    preserve_thinking feeds a model its *own* earlier reasoning. A turn
+    another model wrote (gemini's or Claude's thinking summary, after a
+    fallback mid-cycle) would be handed to qwen as reasoning it never did.
+    The lan: provider tags its turns ``model @ host``; a turn with no model
+    recorded keeps the old behaviour.
+    """
+    return not message.model or message.model == model or message.model.startswith(f"{model} @ ")

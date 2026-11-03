@@ -25,10 +25,12 @@ DRIVE_LOOPS = frozenset({"researcher"})
 
 SOURCE = "google-drive"
 
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = 3
 MAX_TOP_K = 8
-MAX_CHUNK_CHARS = 700
-MAX_RESULT_CHARS = 6_000
+# gdrive-rag chunks are ~800 tokens * 4 = ~3,200 chars; clip above that so a hit
+# is read whole (a lower cap hides ~90% of each chunk from the researcher).
+MAX_CHUNK_CHARS = 3_300
+MAX_RESULT_CHARS = 12_000
 
 
 def _clip(text: str) -> str:
@@ -97,8 +99,8 @@ def register_drive_tools(registry: ToolRegistry) -> None:
                     "Semantic search over the user's Google Drive documents. Returns the "
                     "best-matching chunks grouped by file (name, folder, link). Ask in natural "
                     "language -- this matches on meaning, not on exact words. top_k 1-8, "
-                    "default 5; chunks are excerpts, so search again with a sharper query "
-                    "rather than raising top_k."
+                    "default 3; each chunk is a ~3,000 character slice of a document, so a "
+                    "long file needs a sharper query to land on the right slice, not a bigger top_k."
                 ),
                 parameters={
                     "type": "object",

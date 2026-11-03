@@ -93,6 +93,9 @@ func newCfg() *config.Config {
 		PollInterval:          time.Hour,
 		HAFailsafeTimeout:     300 * time.Millisecond,
 		MaxClampDuration:      4 * time.Hour,
+		CarChargingEntity:     "sensor.car_charging_status",
+		CarChargingStates:     []string{"charging"},
+		CarLocationEntity:     "device_tracker.car",
 	}
 }
 
@@ -140,8 +143,78 @@ func TestRun_ChargingStartedThenStopped(t *testing.T) {
 		t.Errorf("calls: got %v want %v", fm.calls, want)
 	}
 	reasons := fmx.controlReasons()
-	if len(reasons) != 2 || reasons[0] != "wallbox_charging" || reasons[1] != "wallbox_idle" {
+	if len(reasons) != 2 || reasons[0] != "wallbox_charging" || reasons[1] != "charging_idle" {
 		t.Errorf("control reasons: %v", reasons)
+	}
+}
+
+// Wallbox cloud integration froze at "Disconnected" while the car drew
+// 10 kW at home; the car's own status must clamp on its own.
+func TestRun_CarChargingAtHomeClamps(t *testing.T) {
+	fm, fh, fmx, d := newDeps(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, d) }()
+
+	fh.events <- ha.Event{EntityID: "sensor.wallbox_status", NewState: "Disconnected"}
+	fh.events <- ha.Event{EntityID: "device_tracker.car", NewState: "home"}
+	fh.events <- ha.Event{EntityID: "sensor.car_charging_status", OldState: "idle", NewState: "charging"}
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
+	cancel()
+	<-done
+
+	if r := fmx.controlReasons(); len(r) < 1 || r[0] != "car_charging" {
+		t.Errorf("control reasons: %v", r)
+	}
+}
+
+func TestRun_CarChargingAwayIgnored(t *testing.T) {
+	fm, fh, _, d := newDeps(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, d) }()
+
+	fh.events <- ha.Event{EntityID: "device_tracker.car", NewState: "not_home"}
+	fh.events <- ha.Event{EntityID: "sensor.car_charging_status", NewState: "charging"}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if n := callCount(fm); n != 0 {
+		t.Errorf("expected no modbus writes, got %d", n)
+	}
+}
+
+// The car's status flaps charging↔idle every few minutes mid-session; a
+// short idle must not release the clamp.
+func TestRun_UnclampHoldRidesOutFlap(t *testing.T) {
+	fm, fh, fmx, d := newDeps(t)
+	d.Cfg.UnclampHold = 150 * time.Millisecond
+	d.Cfg.HAFailsafeTimeout = 60 * time.Millisecond // tick every 20ms
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, d) }()
+
+	fh.events <- ha.Event{EntityID: "device_tracker.car", NewState: "home"}
+	fh.events <- ha.Event{EntityID: "sensor.car_charging_status", NewState: "charging"}
+	waitFor(t, func() bool { return callCount(fm) >= 1 })
+	fh.events <- ha.Event{EntityID: "sensor.car_charging_status", NewState: "idle"}
+	time.Sleep(50 * time.Millisecond)
+	fh.events <- ha.Event{EntityID: "sensor.car_charging_status", NewState: "charging"}
+	time.Sleep(200 * time.Millisecond)
+	if n := callCount(fm); n != 1 {
+		t.Fatalf("flap released clamp: %d writes", n)
+	}
+	fh.events <- ha.Event{EntityID: "sensor.car_charging_status", NewState: "done"}
+	waitFor(t, func() bool { return callCount(fm) >= 2 })
+	cancel()
+	<-done
+
+	if r := fmx.controlReasons(); len(r) != 2 || r[1] != "charging_idle" {
+		t.Errorf("control reasons: %v", r)
 	}
 }
 

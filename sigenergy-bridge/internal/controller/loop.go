@@ -1,7 +1,8 @@
 // Package controller wires the HA WebSocket listener, the Sigenergy Modbus
 // client, and the VictoriaMetrics writer into a single state machine:
-// clamp the battery's discharge to 0 while the Wallbox is charging, and
-// restore the configured ceiling when idle.
+// clamp the battery's discharge to 0 while the Wallbox (or the car, when at
+// home) is charging, and restore the configured ceiling once every trigger
+// has read idle for UnclampHold.
 //
 // Clamp strategy: write ESS max discharge limit (40034) only — to 0 for a
 // clamp, to the configured ceiling for an unclamp. We do NOT toggle
@@ -89,6 +90,9 @@ func Run(ctx context.Context, d Deps) error {
 		"max_clamp_duration", d.Cfg.MaxClampDuration,
 		"wallbox_entity", d.Cfg.WallboxEntity,
 		"charging_states", d.Cfg.WallboxChargingStates,
+		"car_entity", d.Cfg.CarChargingEntity,
+		"car_location_entity", d.Cfg.CarLocationEntity,
+		"unclamp_hold", d.Cfg.UnclampHold,
 	)
 	// Freeze the resolved value into the config struct the rest of the
 	// loop reads from, so clamp/unclamp use the same value consistently.
@@ -97,6 +101,10 @@ func Run(ctx context.Context, d Deps) error {
 	cur := stateIdle
 	var disconnectedSince time.Time
 	var clampStartedAt time.Time
+	// idleSince is when every trigger last went not-charging while clamped;
+	// zero while any trigger reads charging.
+	var idleSince time.Time
+	states := map[string]string{}
 
 	pollTicker := time.NewTicker(d.Cfg.PollInterval)
 	defer pollTicker.Stop()
@@ -115,24 +123,32 @@ func Run(ctx context.Context, d Deps) error {
 			d.poll(ctx)
 
 		case ev := <-d.HA.Events():
-			charging := isCharging(ev.NewState, d.Cfg.WallboxChargingStates)
+			states[ev.EntityID] = ev.NewState
+			charging, reason := d.chargingNow(states)
 			d.Log.InfoContext(ctx, "ha event",
 				"entity", ev.EntityID, "old", ev.OldState, "new", ev.NewState, "charging", charging)
-			switch {
-			case charging && cur == stateIdle:
-				if err := d.clamp(ctx, "wallbox_charging"); err != nil {
-					d.Log.ErrorContext(ctx, "clamp failed", "err", err)
-					continue
+			if charging {
+				idleSince = time.Time{}
+				if cur == stateIdle {
+					if err := d.clamp(ctx, reason); err != nil {
+						d.Log.ErrorContext(ctx, "clamp failed", "err", err)
+						continue
+					}
+					cur = stateClamped
+					clampStartedAt = d.Now()
 				}
-				cur = stateClamped
-				clampStartedAt = d.Now()
-			case !charging && cur == stateClamped:
-				if err := d.unclamp(ctx, "wallbox_idle"); err != nil {
+				continue
+			}
+			if cur == stateClamped && idleSince.IsZero() {
+				idleSince = d.Now()
+			}
+			if cur == stateClamped && d.Now().Sub(idleSince) >= d.Cfg.UnclampHold {
+				if err := d.unclamp(ctx, "charging_idle"); err != nil {
 					d.Log.ErrorContext(ctx, "unclamp failed", "err", err)
 					continue
 				}
 				cur = stateIdle
-				clampStartedAt = time.Time{}
+				clampStartedAt, idleSince = time.Time{}, time.Time{}
 			}
 
 		case up := <-d.HA.Connected():
@@ -146,6 +162,15 @@ func Run(ctx context.Context, d Deps) error {
 			if cur != stateClamped {
 				continue
 			}
+			if !idleSince.IsZero() && d.Now().Sub(idleSince) >= d.Cfg.UnclampHold {
+				if err := d.unclamp(ctx, "charging_idle"); err != nil {
+					d.Log.ErrorContext(ctx, "unclamp failed", "err", err)
+					continue
+				}
+				cur = stateIdle
+				clampStartedAt, idleSince = time.Time{}, time.Time{}
+				continue
+			}
 			// Absolute deadline: never hold longer than MaxClampDuration,
 			// even if the Wallbox somehow reports charging forever.
 			if d.Cfg.MaxClampDuration > 0 && !clampStartedAt.IsZero() &&
@@ -157,7 +182,7 @@ func Run(ctx context.Context, d Deps) error {
 					continue
 				}
 				cur = stateIdle
-				clampStartedAt = time.Time{}
+				clampStartedAt, idleSince = time.Time{}, time.Time{}
 				continue
 			}
 			// HA-lost fail-safe: if we can't see Wallbox state for longer
@@ -173,10 +198,23 @@ func Run(ctx context.Context, d Deps) error {
 				}
 				cur = stateIdle
 				disconnectedSince = time.Time{}
-				clampStartedAt = time.Time{}
+				clampStartedAt, idleSince = time.Time{}, time.Time{}
 			}
 		}
 	}
+}
+
+// chargingNow reports whether any trigger reads charging, and which one.
+func (d *Deps) chargingNow(states map[string]string) (bool, string) {
+	if isCharging(states[d.Cfg.WallboxEntity], d.Cfg.WallboxChargingStates) {
+		return true, "wallbox_charging"
+	}
+	if d.Cfg.CarChargingEntity != "" &&
+		isCharging(states[d.Cfg.CarChargingEntity], d.Cfg.CarChargingStates) &&
+		(d.Cfg.CarLocationEntity == "" || states[d.Cfg.CarLocationEntity] == "home") {
+		return true, "car_charging"
+	}
+	return false, ""
 }
 
 func isCharging(state string, chargingStates []string) bool {

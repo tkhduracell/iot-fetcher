@@ -5,7 +5,7 @@ import type * as cog from '@grafana/grafana-foundation-sdk/cog';
 import type * as dashboard from '@grafana/grafana-foundation-sdk/dashboard';
 import { VM_DS, vmMetric, vmExpr } from '../datasource.ts';
 import {
-  greenThreshold, greenRedThresholds, paletteColor,
+  greenThreshold, paletteColor,
   legendBottom, tooltipMulti,
   overrideDisplayAndColor, overrideDisplayName,
   SPAN_NULLS_MS,
