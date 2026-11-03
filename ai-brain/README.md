@@ -19,13 +19,19 @@ One **brain** loop plus up to five **expert** loops:
 | `researcher` | `seed/personas/researcher.md` | `EXPERT_HEARTBEAT_MIN` |
 | `infra` | `seed/personas/infra.md` | `EXPERT_HEARTBEAT_MIN` |
 
-Experts observe and report. They can query VictoriaMetrics, Home Assistant
-(entity states over its own MCP server with `ha_context`, and the tail of its
-log with `ha_error_log`, which is how a broken integration gets diagnosed
-rather than guessed at), gdrive-rag and the web, write facts into their own
-memory, and drop notes in the brain's inbox. `infra` and `brain` can also see
-the containers this system runs in (`docker_ps`, `docker_top`, `docker_logs`)
--- everyone else's tool surface stops at the house. A container name is
+Experts observe and report, and each has only its own slice of the tools
+(`loops=` in `tools/`): VictoriaMetrics (`vm_query`, `vm_metrics`) for `energy`,
+`health` and `house-ops`; Home Assistant for `house-ops` (entity states over its
+own MCP server with `ha_context`, and the tail of its log with `ha_error_log`,
+which is how a broken integration gets diagnosed rather than guessed at);
+gdrive-rag (`drive_search`) and the web (`web_search`, `web_fetch`) for the
+`researcher` alone, which has no metrics or Home Assistant; the Airbnb calendar
+for `researcher`, `energy` and `house-ops`. Every expert writes facts into its
+own memory and drops notes in the brain's inbox. `infra` and `brain` can also
+see the containers this system runs in (`docker_ps`, `docker_top`,
+`docker_logs`) -- `infra`'s whole tool surface -- and the brain has the metrics
+and Home Assistant tools too, but not the web or Drive: it asks the researcher
+by note. A container name is
 checked against Docker's own name rule before any request is built (in the
 tools, in `propose` and again in the executor), since it is model-supplied and
 lands in a URL path. In the read tools a bad name comes back as an ordinary
@@ -256,6 +262,9 @@ A loop that wakes every hour and reads the same gauges will, left alone, write
   differ. The brain's text also covers goals, introspection, `propose` and
   answering Filip in Slack; an expert's instead says how to reach the brain
   (`send_note` with `to="brain"`) rather than describing tools it does not have.
+  The constitution is shared by all six loops, so it is role-neutral: it says
+  nothing about Slack, `propose` or approval, which are the brain's (the rules
+  that used to be there are in the brain's instructions).
 - **An angle** is handed to each loop in the user turn — "chase one anomaly",
   "build a baseline", "pick up an open thread", "read rather than measure",
   "tend your memory". It rotates hourly and is offset per loop, so five loops
