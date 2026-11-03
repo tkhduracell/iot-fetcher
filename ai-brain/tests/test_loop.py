@@ -2038,6 +2038,15 @@ def test_slack_post_says_it_is_the_only_way_filip_hears_from_you(registry):
 # -- run_forever -------------------------------------------------------
 
 
+async def _until_second_cycle(loop) -> None:
+    """In real time rather than a count of yields: a cycle ends on a hop to a
+    thread for its housekeeping, which no amount of yielding here can outrun."""
+    for _ in range(500):
+        await asyncio.sleep(0.01)
+        if loop.cycle_counts.get("ok", 0) >= 2:
+            return
+
+
 async def test_wake_event_interrupts_the_sleep(make_loop):
     script = [
         reply("a", call("end_cycle", "c", next_wake_minutes=600, summary="first")),
@@ -2053,10 +2062,7 @@ async def test_wake_event_interrupts_the_sleep(make_loop):
     assert loop.cycle_counts["ok"] == 1
 
     loop.wake.set()
-    for _ in range(200):
-        await asyncio.sleep(0)
-        if loop.cycle_counts.get("ok", 0) >= 2:
-            break
+    await _until_second_cycle(loop)
 
     task.cancel()
     assert loop.cycle_counts["ok"] == 2
@@ -3385,10 +3391,7 @@ async def test_run_forever_does_not_rerun_on_expert_chatter(make_loop, wall, bra
 
     brain_dir.drop_note("approvals", "proposal p1 approved: done")
     loop.wake.set()
-    for _ in range(200):
-        await asyncio.sleep(0)
-        if loop.cycle_counts.get("ok", 0) >= 2:
-            break
+    await _until_second_cycle(loop)
     task.cancel()
     assert loop.cycle_counts["ok"] == 2
     assert len(provider.calls) == 2
