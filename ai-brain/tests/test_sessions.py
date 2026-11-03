@@ -362,6 +362,76 @@ def test_a_secret_name_covers_what_is_nested_under_it():
     assert clean({"prompt_tokens": 10}) == {"prompt_tokens": 10}
 
 
+@pytest.mark.parametrize(
+    "name", ["pwd", "passphrase", "private_key", "signing_key", "clientSecret", "ssh-key"]
+)
+def test_every_name_redact_calls_a_secret_is_one_here_too(name):
+    """However short the value: this is the one vocabulary, and it used to drift."""
+    assert clean({name: "abc"}) == {name: MASK}
+
+
+def test_an_event_cannot_forget_to_redact(tmp_path, wall):
+    log = SessionLog(tmp_path / "x.jsonl", "x", wall)
+
+    log.append("anything", new_field=f"with {SECRET}", nested={"token": "abc"})
+    log.close()
+
+    event = read_events(log.path)[0]
+    assert event["new_field"] == f"with {MASK}"
+    assert event["nested"] == {"token": MASK}
+
+
+def test_a_string_past_the_cap_is_masked_up_to_the_cut_and_not_read_past_it():
+    text = "z" * (MAX_EVENT_TEXT_CHARS - 10) + " " + SECRET + " " + "z" * 100
+    out = clean(text)
+    assert SECRET[:8] not in out
+    assert "[session log cut:" in out
+
+
+def test_a_secret_the_cut_splits_does_not_survive_in_part():
+    """Masks shrink the text, so even the far edge of what was scanned can land
+    inside the cap, and it may have cut a secret in two."""
+    from ai_brain import sessions
+
+    many = (SECRET + " ") * ((MAX_EVENT_TEXT_CHARS + sessions._CUT_MARGIN) // (len(SECRET) + 1))
+    text = many[:-20] + SECRET * 2
+    assert len(text) > MAX_EVENT_TEXT_CHARS + sessions._CUT_MARGIN
+    assert "AIza" not in clean(text)
+
+
+def test_a_huge_string_costs_no_more_than_one_at_the_cap(monkeypatch):
+    from ai_brain import sessions
+
+    seen: list[int] = []
+    real = sessions.redact
+
+    def _spy(text):
+        seen.append(len(text))
+        return real(text)
+
+    monkeypatch.setattr(sessions, "redact", _spy)
+    out = clean("z" * (MAX_EVENT_TEXT_CHARS * 20))
+
+    assert max(seen) <= MAX_EVENT_TEXT_CHARS + sessions._CUT_MARGIN + len("x=")
+    assert "more chars]" in out
+
+
+async def test_an_unreadable_old_body_does_not_stop_the_write(brain_dir):
+    """Not valid utf-8: the log loses the old body and the fact is still written."""
+    (brain_dir.facts_dir).mkdir(parents=True, exist_ok=True)
+    path = brain_dir.facts_dir / "pool.md"
+    path.write_bytes(b"\xff\xfe not utf-8")
+    seen: list[tuple] = []
+    token = MEMORY_SINK.set(lambda op, name, old: seen.append((op, name, old)))
+    try:
+        brain_dir.write_fact("pool", "Pool", "new body")
+    finally:
+        MEMORY_SINK.reset(token)
+
+    assert seen == [("write_fact", "pool", "")]
+    assert path.read_text() == "new body"
+
+
 def test_dict_keys_are_redacted_too():
     assert list(clean({SECRET: 1})) == [MASK]
 
@@ -498,10 +568,14 @@ def test_unserialisable_field_does_not_raise(tmp_path, wall):
     log = SessionLog(tmp_path / "s.jsonl", "c", wall)
     circular: dict = {}
     circular["self"] = circular
-    assert log.append("bad", thing=circular) is None
+    assert log.append_cleaned("bad", thing=circular) is None
     assert log.append("good") == 2
+    # ``append`` keeps the event and loses only the field.
+    assert log.append("deep", thing=circular) == 3
     log.close()
-    assert [e["type"] for e in read_events(log.path)] == ["good"]
+    events = read_events(log.path)
+    assert [e["type"] for e in events] == ["good", "deep"]
+    assert events[1]["thing"].startswith("[not logged")
 
 
 def test_session_over_its_byte_cap_stops_writing(tmp_path, wall, monkeypatch):
@@ -653,13 +727,9 @@ def test_housekeep_compresses_what_a_crash_left_behind(tmp_path):
     assert live.exists()
 
 
-async def test_big_log_is_compressed_off_the_event_loop(brain_dir, tmp_path, wall, monkeypatch):
+async def test_housekeeping_runs_off_the_event_loop(brain_dir, tmp_path, wall, monkeypatch):
     import threading
 
-    import ai_brain.sessions as module
-
-    monkeypatch.setattr(module, "INLINE_HOUSEKEEP_BYTES", 0)
-    monkeypatch.setattr("ai_brain.loop.INLINE_HOUSEKEEP_BYTES", 0)
     seen: list[bool] = []
     real = SessionStore.housekeep
 
@@ -673,20 +743,23 @@ async def test_big_log_is_compressed_off_the_event_loop(brain_dir, tmp_path, wal
     await loop.run_cycle()
 
     assert seen == [False]
-    assert next(iter(session_files(brain_dir.root / "sessions"))).name.endswith(GZ_SUFFIX)
+    assert session_files(brain_dir.root / "sessions")[0].name.endswith(GZ_SUFFIX)
 
 
-async def test_small_log_does_not_yield_before_the_books_close(brain_dir, tmp_path, wall):
-    """Nothing else gets to run between a cycle ending and cycle_counts knowing,
-    so a reader polling the counts never sees a cycle that is over but uncounted."""
+async def test_books_close_before_housekeeping_yields(brain_dir, tmp_path, wall, monkeypatch):
+    """The hop to the thread lets other tasks run, and a reader polling the counts
+    must never see a cycle that is over but uncounted."""
     loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
-    task = asyncio.create_task(loop.run_cycle())
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if task.done():
-            break
-    assert task.done()
-    assert loop.cycle_counts["ok"] == 1
+    seen: list[dict] = []
+
+    def _spy(_self, keep=""):
+        seen.append(dict(loop.cycle_counts))
+
+    monkeypatch.setattr(SessionStore, "housekeep", _spy)
+
+    await loop.run_cycle()
+
+    assert seen == [{"ok": 1}]
 
 
 def test_housekeep_failure_is_contained(brain_dir, tmp_path, wall, monkeypatch):

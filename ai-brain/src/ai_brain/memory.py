@@ -18,6 +18,7 @@ half-written file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -31,7 +32,9 @@ from ai_brain.errors import BadInput
 from ai_brain.fence import fence, safe_source
 from ai_brain.redact import redact
 
-SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+log = logging.getLogger(__name__)
+
+SAFE_NAME =re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
 MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
@@ -852,11 +855,18 @@ class MemoryDir:
         """Tell the running cycle's log what is about to be replaced.
 
         Reads the old body only when a cycle is listening, so an MCP edit or a
-        test pays nothing for it.
+        test pays nothing for it. An old body that cannot be read must not stop
+        the write that was going to replace it.
         """
         sink = MEMORY_SINK.get()
-        if sink is not None:
-            sink(op, name, path.read_text(encoding="utf-8") if path.exists() else "")
+        if sink is None:
+            return
+        try:
+            old = MemoryDir._read(path)
+        except (OSError, ValueError):
+            log.warning("could not log the old body of %s %s", op, name, exc_info=True)
+            old = ""
+        sink(op, name, old)
 
     def _require_brain(self, op: str) -> None:
         if not self.is_brain:

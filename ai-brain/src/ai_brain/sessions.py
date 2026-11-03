@@ -23,10 +23,11 @@ What shapes this file:
   them instead. The one fsync is on the finished ``.gz``, once per cycle, so a
   rename can never publish a file whose data never landed.
 * **Everything passes through ``redact`` first**, since this is the first place
-  a tool's untrimmed output reaches disk. The exceptions are the opaque blobs a
-  provider signs (``OPAQUE_FIELDS``): they are ciphertext rather than text, and
-  altering one turns the next call into a 400. A turn whose text redaction did
-  change is flagged ``redacted``, because its signature no longer matches it.
+  a tool's untrimmed output reaches disk. ``append`` does it, so a new event or
+  field cannot forget to. The exceptions are the opaque blobs a provider signs
+  (``OPAQUE_FIELDS``): they are ciphertext rather than text, and altering one
+  turns the next call into a 400. A turn whose text redaction did change is
+  flagged ``redacted``, because its signature no longer matches it.
 * **Bounded on three axes**: ``MAX_EVENT_TEXT_CHARS`` per string,
   ``MAX_SESSION_BYTES`` per cycle, and age plus total size per agent
   (``prune``). A tool that forgets to bound itself must not be able to fill the
@@ -42,16 +43,15 @@ import gzip
 import json
 import logging
 import os
-import re
 import secrets
 import shutil
 import zlib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ai_brain.redact import MASK, redact
+from ai_brain.redact import MASK, SECRET_NAME, redact
 
 log = logging.getLogger(__name__)
 
@@ -71,21 +71,18 @@ MAX_EVENT_TEXT_CHARS = 512_000
 # than letting it take the rest of the volume down with it.
 MAX_SESSION_BYTES = 64 * 1024 * 1024
 
-# Below this a finished log is compressed right there on the event loop: a few
-# milliseconds, against a thread hop that lets every other task run first and so
-# moves when a cycle's own bookkeeping lands. Above it, a cycle's log is big enough
-# that gzip on a Pi would hold up the loops sharing this event loop.
-INLINE_HOUSEKEEP_BYTES = 1024 * 1024
+# How far past MAX_EVENT_TEXT_CHARS a long string is still read. More than any
+# secret is long, so whatever the cut splits is dropped rather than kept half
+# masked, and a tool that forgot to bound itself costs no more than one at the cap.
+_CUT_MARGIN = 4096
 
 # Provider-signed blobs, not text. See the module docstring. Only ever skipped in
 # a provider's own blocks: a tool argument called ``data`` is just an argument.
 OPAQUE_FIELDS = frozenset({"thought_signature", "signature", "data"})
 
-# A field named this is a secret whatever its value looks like, however short, and
-# whatever it is nested in. ``redact`` only masks a value of 8 characters or more,
-# because in free text a short one is usually a setting. Not ``key``: an ordinary
-# short ``key=on`` is left to ``redact``, which knows to let it through.
-_SECRET_FIELD = re.compile(r"api[_-]?key|token|secret|passw(or)?d|credential", re.IGNORECASE)
+# How much of a value decides whether ``redact`` masks it under a field's name:
+# only its start can pair up with the name, and the rest gets redacted anyway.
+_FIELD_PROBE_CHARS = 64
 
 _ID_DATE = "%Y%m%d-%H%M%S"
 
@@ -115,11 +112,17 @@ def _cycle_day(name: str) -> datetime | None:
         return None
 
 
-def _bounded(text: str) -> str:
-    if len(text) <= MAX_EVENT_TEXT_CHARS:
-        return text
-    dropped = len(text) - MAX_EVENT_TEXT_CHARS
-    return text[:MAX_EVENT_TEXT_CHARS] + f"…[session log cut: {dropped} more chars]"
+def _redacted_and_bounded(text: str) -> str:
+    """Cuts before redacting, since ``redact`` is linear in what it is given and
+    runs on the event loop every agent shares."""
+    scanned = text[: MAX_EVENT_TEXT_CHARS + _CUT_MARGIN]
+    masked = redact(scanned)
+    if len(scanned) < len(text):
+        masked = masked[:-_CUT_MARGIN]
+    elif len(masked) <= MAX_EVENT_TEXT_CHARS:
+        return masked
+    kept = masked[:MAX_EVENT_TEXT_CHARS]
+    return f"{kept}…[session log cut: {len(text) - len(kept)} more chars]"
 
 
 def clean(value: Any, *, opaque: bool = False) -> Any:
@@ -133,8 +136,8 @@ def clean(value: Any, *, opaque: bool = False) -> Any:
     everything under it. ``opaque`` is for a provider's own blocks, whose signed
     fields must come through untouched.
 
-    It runs at the call site, outside ``append``'s own guard, so it has to keep
-    the same promise. Nesting too deep to walk is the one thing it cannot handle.
+    Nesting too deep to walk is the one thing it cannot handle, and an event
+    should still land without that one field.
     """
     try:
         return _clean(value, "", False, opaque)
@@ -148,14 +151,17 @@ def _clean(value: Any, field: str, secret: bool, opaque: bool) -> Any:
             return value
         if secret:
             return MASK
-        masked = redact(value)
-        if field and redact(f"{field}={masked}") != f"{field}={masked}":
+        # A field called ``key`` is not in SECRET_NAME, since ``key=on`` is a
+        # setting, but ``redact`` would mask a longer value under that name.
+        masked = _redacted_and_bounded(value)
+        probe = f"{field}={masked[:_FIELD_PROBE_CHARS]}"
+        if field and redact(probe) != probe:
             return MASK
-        return _bounded(masked)
+        return masked
     if isinstance(value, dict):
         return {
             redact(str(key)): _clean(
-                item, str(key), secret or bool(_SECRET_FIELD.search(str(key))), opaque
+                item, str(key), secret or bool(SECRET_NAME.search(str(key))), opaque
             )
             for key, item in value.items()
         }
@@ -183,10 +189,14 @@ class SessionLog:
         self._fd: int | None = None
         self._bytes = 0
         self._torn = False
-        self._warned = False
 
     def append(self, event: str, **fields: Any) -> int | None:
-        """Write one event. Returns its ``seq``, or None if it did not land."""
+        """Write one event, redacted. Returns its ``seq``, or None if it did not land."""
+        return self.append_cleaned(event, **{name: clean(v) for name, v in fields.items()})
+
+    def append_cleaned(self, event: str, **fields: Any) -> int | None:
+        """``append`` for a provider's turn, whose caller has run ``clean`` with
+        ``opaque`` on what needs it. Nothing else should be calling this."""
         self.seq += 1
         seq = self.seq
         try:
@@ -214,8 +224,7 @@ class SessionLog:
                 raise OSError(f"short write: {written} of {len(line)} bytes")
         except Exception as exc:  # the log must never take a cycle down with it
             self.lost += 1
-            if not self._warned:
-                self._warned = True
+            if self.lost == 1:
                 log.warning("[session] %s: cannot log %s: %s", self.cycle_id, event, exc)
                 self._mark_incomplete()
             return None
@@ -223,7 +232,7 @@ class SessionLog:
 
     def _mark_incomplete(self) -> None:
         """Say in the filename that this record has holes. See the module docstring."""
-        target = self.path.with_name(self.path.name.removesuffix(LOG_SUFFIX) + HOLES_SUFFIX)
+        target = self.path.with_name(cycle_id_of(self.path) + HOLES_SUFFIX)
         try:
             os.replace(self.path, target)
         except OSError:
@@ -232,13 +241,9 @@ class SessionLog:
             return
         self.path = target
 
-    @property
-    def size(self) -> int:
-        return self._bytes
-
     def record_mutation(self, op: str, name: str, old: str) -> None:
         """A memory write and the body it replaced. See ``memory.MEMORY_SINK``."""
-        self.append("memory", op=op, name=name, old=clean(old))
+        self.append("memory", op=op, name=name, old=old)
 
     def close(self) -> None:
         if self._fd is not None:
@@ -260,8 +265,8 @@ class SessionStore:
         self,
         directory: Path | None,
         clock: Callable[[], float],
-        retention_days: int = 30,
-        max_mb: int = 200,
+        retention_days: int,
+        max_mb: int,
     ) -> None:
         self.directory = directory if retention_days > 0 else None
         self.clock = clock
@@ -298,43 +303,27 @@ class SessionStore:
         if self.directory is None or not self.directory.exists():
             return 0
         cutoff = datetime.fromtimestamp(self.clock(), UTC) - timedelta(days=self.retention_days)
+        cap = self.max_mb * 1024 * 1024
         removed = 0
-        kept: list[tuple[Path, int]] = []
-        for path in sorted(self.directory.iterdir()):
-            day = _cycle_day(path.name)
-            if day is None:
-                continue
+        total = 0
+        for path in reversed(session_files(self.directory)):
             try:
-                if day < cutoff:
+                total += path.stat().st_size
+                if _cycle_day(path.name) < cutoff or (cap and total > cap):
                     path.unlink()
                     removed += 1
-                else:
-                    kept.append((path, path.stat().st_size))
             except OSError:
                 log.warning("[session] could not prune %s", path, exc_info=True)
-        if self.max_mb > 0:
-            over = sum(size for _, size in kept) - self.max_mb * 1024 * 1024
-            for path, size in kept:
-                if over <= 0:
-                    break
-                try:
-                    path.unlink()
-                    over -= size
-                    removed += 1
-                except OSError:
-                    log.warning("[session] could not prune %s", path, exc_info=True)
         return removed
 
 
 class _NullSessionLog(SessionLog):
-    """What a disabled store hands out: counts, writes nothing."""
+    """What a disabled store hands out: writes nothing, and redacts nothing either."""
 
     def append(self, event: str, **fields: Any) -> int | None:
-        self.seq += 1
         return None
 
-    def record_mutation(self, op: str, name: str, old: str) -> None:
-        return
+    append_cleaned = append
 
 
 def compress(path: Path) -> Path | None:
@@ -343,13 +332,14 @@ def compress(path: Path) -> Path | None:
     Through a temp file and with an fsync, so the worst a power cut can do is
     leave both copies and never leave neither.
     """
-    target = path.with_name(path.name[: -len(LOG_SUFFIX)] + GZ_SUFFIX)
+    target = path.with_name(cycle_id_of(path) + GZ_SUFFIX)
     tmp = target.with_name(target.name + ".tmp")
     try:
         with path.open("rb") as src, tmp.open("wb") as raw:
             os.fchmod(raw.fileno(), 0o600)
             # mtime=0: the same log compresses to the same bytes.
-            with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as gz:
+            # Level 6: a third of level 9's CPU on JSONL for about 4% more bytes.
+            with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6, mtime=0) as gz:
                 shutil.copyfileobj(src, gz)
             raw.flush()
             os.fsync(raw.fileno())
@@ -385,7 +375,7 @@ def read_events(path: Path) -> list[dict]:
     return events
 
 
-def session_files(directory: Path) -> Iterable[Path]:
+def session_files(directory: Path) -> list[Path]:
     """Every session in ``directory``, oldest first."""
     if not directory.exists():
         return []

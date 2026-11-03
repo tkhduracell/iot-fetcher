@@ -33,7 +33,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -46,7 +46,6 @@ from ai_brain.ledger import Priority
 from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain, Reply
 from ai_brain.memory import MEMORY_SINK, OWNER_SENDER, MemoryDir, Note
 from ai_brain.sessions import (
-    INLINE_HOUSEKEEP_BYTES,
     SCHEMA_VERSION,
     SESSIONS_DIRNAME,
     SessionLog,
@@ -539,7 +538,7 @@ def _log_reply(session: SessionLog, round_: int, reply: Reply, duration_s: float
         or any(c["args"] != raw.args for c, raw in zip(calls, reply.tool_calls, strict=True))
         or blocks != list(reply.provider_blocks)
     )
-    session.append(
+    session.append_cleaned(
         "reply",
         round=round_,
         model=reply.model,
@@ -551,12 +550,8 @@ def _log_reply(session: SessionLog, round_: int, reply: Reply, duration_s: float
         provider_blocks=blocks,
         redacted=redacted,
         duration_s=round(duration_s, 1),
-        prompt_tokens=reply.usage.prompt_tokens,
-        completion_tokens=reply.usage.completion_tokens,
-        cached_tokens=reply.usage.cached_tokens,
-        cache_write_tokens=reply.usage.cache_write_tokens,
         budget_tokens=reply.usage.budget_tokens,
-        cost_usd=reply.usage.cost_usd,
+        **asdict(reply.usage),
     )
 
 
@@ -832,7 +827,7 @@ class AgentLoop:
                 agent=self.name,
                 angle=_angle_for(self.name, self.priority, self.clock(), self.heartbeat_s),
                 notes=[note.path.name for note in notes],
-                messages=[{"role": m.role, "content": clean(m.content)} for m in messages],
+                messages=[{"role": m.role, "content": m.content} for m in messages],
             )
 
             while rounds < effective_cap:
@@ -1017,7 +1012,7 @@ class AgentLoop:
                         id=call.id,
                         name=call.name,
                         chars=len(result),
-                        result=clean(result),
+                        result=result,
                     )
                     # Stats are computed from the tool's own full result,
                     # before either truncation -- the loop's MAX_TOOL_RESULT_CHARS
@@ -1379,20 +1374,13 @@ class AgentLoop:
                 model=model,
                 rounds=rounds,
                 cap=cap,
-                summary=clean(summary),
+                summary=summary,
                 next_wake_s=int(next_wake_s),
                 prompt_tokens=self.trace.prompt_tokens if self.trace is not None else 0,
                 completion_tokens=self.trace.completion_tokens if self.trace is not None else 0,
                 lost_events=session.lost,
             )
             session.close()
-            try:
-                if session.size <= INLINE_HOUSEKEEP_BYTES:
-                    self.sessions.housekeep()
-                else:
-                    await asyncio.to_thread(self.sessions.housekeep)
-            except Exception:  # housekeeping is never worth a cycle
-                log.warning("[%s] session housekeeping failed", self.name, exc_info=True)
 
         self.ctx.extras.pop("end_cycle", None)
         self.ctx.extras.pop("owed_refused", None)
@@ -1441,6 +1429,14 @@ class AgentLoop:
             # loop pending forever; this event is what tells it the cycle is
             # over and any such entry should resolve, one way or another.
             self.events.publish({"type": "cycle_ended", "loop": self.name, "status": status})
+        if session is not None:
+            # On a thread, since gzip and fsync on a Pi would hold up every other
+            # loop, and last, since the hop lets them run: a reader polling the
+            # counts above must never see a cycle that is over but uncounted.
+            try:
+                await asyncio.to_thread(self.sessions.housekeep)
+            except Exception:  # housekeeping is never worth a cycle
+                log.warning("[%s] session housekeeping failed", self.name, exc_info=True)
         return result
 
 

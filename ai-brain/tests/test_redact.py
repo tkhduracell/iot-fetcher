@@ -228,12 +228,20 @@ def test_idempotent():
         '{"client_secret": "abcdef123456"}',
         "{'refresh_token': 'abcdef123456'}",
         "POST /oauth?grant_type=x&client_secret=abcdef123456&scope=y",
+        "GET /login?next=%2Foauth%3Fclient_secret%3Dabcdef123456",
+        "GET /login?next=%2Foauth%3Fclient_secret%3dabcdef123456%26scope%3Dread",
+        "refresh_token%3Aabcdef123456",
     ],
 )
 def test_secret_named_values_are_masked(line):
     out = redact(line)
     assert "abcdef123456" not in out
     assert MASK in out
+
+
+def test_url_encoded_separators_only_count_after_a_secret_name():
+    line = "GET /login?next=%2Fhome%3Fscope%3Dreadreadread"
+    assert redact(line) == line
 
 
 def test_a_secret_in_a_sentence_after_a_prefixed_name():
