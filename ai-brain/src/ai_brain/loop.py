@@ -27,7 +27,6 @@ sleep, because a brain that stops thinking is worse than one that thinks badly.
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import json
 import logging
 import os
@@ -40,6 +39,7 @@ from typing import Any, Literal
 
 from ai_brain.approvals import NOTE_SENDER as APPROVALS_SENDER
 from ai_brain.approvals import rejected_groups, rejection_memory_section
+from ai_brain.caps import CapState, after_reply, nudge_due
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
 from ai_brain.context import estimate_tool_tokens, fit_context, read_back
 from ai_brain.events import EventBus
@@ -55,7 +55,7 @@ from ai_brain.llm import (
     ToolSpec,
 )
 from ai_brain.memory import MEMORY_SINK, OWNER_SENDER, MemoryDir, Note, render_inbox
-from ai_brain.profiles import ModelProfile
+from ai_brain.profiles import ModelProfiles
 from ai_brain.sessions import (
     ABANDONED,
     RESUMABLE_STATUSES,
@@ -92,13 +92,6 @@ CYCLE_MAX_PROMPT_TOKENS = 400_000
 # CYCLE_MAX_ROUNDS_HARD_CEILING lives in config.py (it is validated there,
 # against _parse_max_rounds_by_model's own N range) and is imported rather
 # than redefined here -- two copies of the same ceiling is how they drift.
-
-# Sent once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP rounds before the effective
-# cap: a cycle that is about to be cut off gets one chance to land what it
-# found rather than losing an unfinished thought to max_rounds. Deliberately
-# small -- a nudge much earlier would fire on ordinary cycles nowhere near
-# their cap, since the cap can be as low as CYCLE_MAX_ROUNDS itself (16).
-WRAP_UP_ROUNDS_BEFORE_CAP = 2
 
 # A per-minute rate limit (the ledger's rpm/tpm windows) refuses a round for at
 # most a minute, and a cycle's transcript is worth more than that: ending it
@@ -612,7 +605,8 @@ def _log_reply(
     round_: int,
     reply: Reply,
     duration_s: float,
-    caps: dict,
+    caps: CapState,
+    budget_hit: int,
 ) -> None:
     """Everything needed to rebuild this turn as a ``Message``.
 
@@ -646,7 +640,13 @@ def _log_reply(
         thought_signature=reply.thought_signature,
         provider_blocks=blocks,
         redacted=redacted,
-        caps=caps,
+        caps={
+            "effective": caps.effective_cap,
+            "budget_stopped": caps.budget_stopped,
+            "floor": caps.floor_cap,
+            "budget_hit": budget_hit,
+            "quota_stopped": caps.quota_stopped,
+        },
         duration_s=round(duration_s, 1),
         budget_tokens=reply.usage.budget_tokens,
         **asdict(reply.usage),
@@ -716,10 +716,16 @@ class AgentLoop:
         self.clock = clock
         self.pause_file = Path(pause_file)
         self.max_rounds = max_rounds
-        self.max_rounds_by_model = list(max_rounds_by_model or [])
         self.max_tokens = max_tokens
         self.max_prompt_tokens = max_prompt_tokens
-        self.max_prompt_tokens_by_model = list(max_prompt_tokens_by_model or [])
+        # Only the two per-round settings: the chain was built from the same
+        # environment and already holds the window and thinking level it asks for.
+        self.profiles = ModelProfiles(
+            max_rounds=max_rounds,
+            max_rounds_by_model=max_rounds_by_model,
+            max_prompt_tokens=max_prompt_tokens,
+            max_prompt_tokens_by_model=max_prompt_tokens_by_model,
+        )
         # The budget the stop was judged against, for the cycle summary.
         self._budget_hit = max_prompt_tokens
         self.call_timeout_s = call_timeout_s
@@ -864,13 +870,10 @@ class AgentLoop:
         rounds = 0
         summary = ""
         next_wake_s = self.heartbeat_s
-        # The limit of whichever model answered the most recent round --
-        # starts at the plain default and only ever moves once a reply has
-        # actually come back, so a cycle that falls back to a weak model
-        # partway through is cut at the weak limit, not the strong one it
-        # started on. See _rounds_cap.
-        effective_cap = min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
-        trace.cap = effective_cap
+        # Starts at the plain default and only ever moves once a reply has
+        # actually come back. See caps.py.
+        caps = CapState(min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING))
+        trace.cap = caps.effective_cap
         # Fires once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP short of whatever
         # effective_cap turns out to be at the time.
         nudge_sent = False
@@ -881,26 +884,6 @@ class AgentLoop:
         # The first call of a resumed cycle may be refused over a signature
         # that did not survive the trip; see the ProviderError handler below.
         unsigned_retry_left = False
-        # True once budget_tokens first crosses max_prompt_tokens.
-        # Sticky forever after: a per-model cap bump on a later round must
-        # not undo a stop the token budget already called for.
-        budget_stopped = False
-        # Set the round a cap-drop rescue or the token-budget stop first
-        # fires, to rounds + WRAP_UP_ROUNDS_BEFORE_CAP at that moment --
-        # frozen from then on, so neither a per-model cap bump nor a further
-        # cap drop on a later round can move it. Without freezing it, a
-        # second per-model drop the very next round (still within the
-        # window, still before the *next* nudge check runs) would recompute
-        # against the new, later ``rounds`` and quietly shrink the promised
-        # window to less than WRAP_UP_ROUNDS_BEFORE_CAP -- the model would
-        # have been told "N rounds left" and then get fewer. None means
-        # neither has fired yet.
-        floor_cap: int | None = None
-        # True when the latest round's cap was set by the quota left on the only
-        # provider that can answer, not by a rounds setting. Re-derived every
-        # round (a fallback coming back into reach lifts it), unlike
-        # budget_stopped.
-        quota_stopped = False
         # Seconds this cycle has spent waiting out per-minute rate limits; see
         # WINDOW_WAIT_BUDGET_S.
         window_waited_s = 0.0
@@ -915,7 +898,7 @@ class AgentLoop:
         if self.pause_file.exists():
             notes = self.memory.unread_notes()
             return await self._finish(
-                "paused", "", 0, "paused by PAUSE file", next_wake_s, notes, effective_cap
+                "paused", "", 0, "paused by PAUSE file", next_wake_s, notes, caps.effective_cap
             )
 
         recovered, cooling = await self._wake_cycle()
@@ -933,7 +916,7 @@ class AgentLoop:
                 cooling,
                 self.heartbeat_s,
                 self.memory.unread_notes(),
-                effective_cap,
+                caps.effective_cap,
             )
         self._session = session = (
             self.sessions.reopen(recovered.path, recovered.cycle_id, recovered.last_seq)
@@ -970,26 +953,26 @@ class AgentLoop:
                 # it stands would close a cycle whose quota has since come back.
                 # Without the quota the cap is what the rounds settings and the
                 # floor made it: the floor alone once the token budget has stopped.
+                restored_cap = caps.effective_cap
                 if recovered.quota_stopped:
-                    effective_cap = self._rounds_cap(recovered.chain_key, recovered.model)
+                    restored_cap = self._rounds_cap(recovered.chain_key, recovered.model)
                     if recovered.floor_cap is not None:
-                        effective_cap = (
+                        restored_cap = (
                             recovered.floor_cap
                             if recovered.budget_stopped
-                            else max(effective_cap, recovered.floor_cap)
+                            else max(restored_cap, recovered.floor_cap)
                         )
                 elif recovered.effective_cap is not None:
-                    effective_cap = recovered.effective_cap
-                trace.cap = effective_cap
+                    restored_cap = recovered.effective_cap
+                trace.cap = restored_cap
                 messages, notes = self._resume_messages(
-                    recovered, session, notes, trace, effective_cap
+                    recovered, session, notes, trace, restored_cap
                 )
                 rounds = recovered.rounds
                 model = recovered.model
                 budget_tokens = recovered.budget_tokens
-                budget_stopped = recovered.budget_stopped
-                floor_cap = recovered.floor_cap
                 nudge_sent = recovered.nudge_sent
+                caps = CapState(restored_cap, recovered.floor_cap, recovered.budget_stopped)
                 if recovered.budget_hit is not None:
                     self._budget_hit = recovered.budget_hit
                 unsigned_retry_left = True
@@ -1001,16 +984,16 @@ class AgentLoop:
             if (
                 recovered is not None
                 and not already_over
-                and not nudge_sent
-                and effective_cap - WRAP_UP_ROUNDS_BEFORE_CAP <= rounds < effective_cap
+                and rounds < caps.effective_cap
+                and nudge_due(caps, rounds=rounds, nudge_sent=nudge_sent)
             ):
                 # The process died in the round that would have sent it, and the
                 # next chance comes after a reply this round may not leave room for.
-                nudge = _wrap_up_nudge(effective_cap - rounds)
+                nudge = _wrap_up_nudge(caps.effective_cap - rounds)
                 messages.append(Message("user", nudge))
                 session.append("message", kind="nudge", round=rounds, content=nudge)
                 nudge_sent = True
-            while not already_over and rounds < effective_cap:
+            while not already_over and rounds < caps.effective_cap:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
                 # only takes effect at the next cycle boundary is no pause at
                 # all when a cycle is a dozen provider calls long.
@@ -1091,82 +1074,41 @@ class AgentLoop:
                 trace.prompt_tokens += reply.usage.prompt_tokens
                 budget_tokens += reply.usage.budget_tokens
                 trace.completion_tokens += reply.usage.completion_tokens
-                # Evaluated after every reply, not just once at the start: a
-                # cycle that opened on a strong model and fell back to a weak
-                # one partway through must be cut at the weak model's limit,
-                # even though it has already passed it -- so this can only
-                # ever make effective_cap *smaller* than a round already
-                # played past, never retroactively grant more rounds for
-                # rounds already spent. new_cap dropping the cycle to (or
-                # past) its wrap-up window with no nudge sent yet is rescued
-                # just below, once, rather than left to end the cycle with the
-                # model never having seen a nudge at all.
-                new_cap = self._rounds_cap(reply.key, reply.model)
-                if not budget_stopped and self._prompt_budget_exceeded(
+                # Evaluated after every reply, not just once at the start: the
+                # model answering now may not be the one that answered before.
+                # The budget check stops mattering once it has tripped, which
+                # is also what keeps _budget_hit on the budget that stopped it.
+                over_budget = not caps.budget_stopped and self._prompt_budget_exceeded(
                     budget_tokens, reply.key or reply.model
-                ):
-                    # First round over CYCLE_MAX_PROMPT_TOKENS: same rescue as
-                    # a cap drop -- enough extra room for one nudge, never
-                    # more -- except this stop is sticky (budget_stopped
-                    # stays True forever after), since a per-model cap bump on
-                    # a later round must not undo a stop the token budget
-                    # already called for.
-                    budget_stopped = True
+                )
+                if over_budget:
                     log.warning(
                         "[%s] prompt tokens (%d) exceeded CYCLE_MAX_PROMPT_TOKENS (%d)",
                         self.name,
                         budget_tokens,
                         self._budget_hit,
                     )
-                if floor_cap is None and (
-                    budget_stopped or (not nudge_sent and new_cap <= rounds + WRAP_UP_ROUNDS_BEFORE_CAP)
-                ):
-                    # The rescue floor, set once: the token budget just
-                    # tripped, or a cap drop (a fallback to a weaker,
-                    # lower-cap model) landed the cycle inside or past its
-                    # wrap-up window before the nudge has ever been sent.
-                    # Fixed to rounds + WRAP_UP_ROUNDS_BEFORE_CAP right here,
-                    # clamped to the hard ceiling, and never recomputed --
-                    # recomputing it fresh against a larger ``rounds`` on a
-                    # later round (a second cap drop, or budget_stopped
-                    # already True) would quietly shrink the window below
-                    # what the nudge already promised the model.
-                    floor_cap = min(rounds + WRAP_UP_ROUNDS_BEFORE_CAP, CYCLE_MAX_ROUNDS_HARD_CEILING)
-                if budget_stopped:
-                    # The budget stop is exact, not a floor: once tripped, no
-                    # per-model cap -- however generous -- may push the cycle
-                    # past floor_cap (set on the same round budget_stopped
-                    # first became True, and frozen from then on -- so it is
-                    # never None here), unlike the cap-drop rescue below
-                    # which only ever raises effective_cap up to its floor.
-                    effective_cap = floor_cap if floor_cap is not None else new_cap
-                elif floor_cap is not None:
-                    effective_cap = max(new_cap, floor_cap)
-                else:
-                    effective_cap = new_cap
-                # The quota is a limit no rescue can buy more of: a key with 11
-                # requests a day has no 12th round to grant however the cap
-                # logic above feels about it. So it clamps last, over the
-                # floor too, and the nudge below -- keyed off effective_cap --
-                # lands while the cycle can still act on it instead of the
-                # next round meeting ChainExhausted with nothing written down.
-                # A day's tokens and a USD pool run out in rounds too, but how
-                # many depends on what a round costs. The round just played is
-                # the best price there is: the conversation is resent whole
-                # every round, so the next one costs at least as much -- which
-                # makes this a slight underestimate, and the nudge's two spare
-                # rounds are there to absorb it. A reply with no usage (a fake
-                # in a test) prices a round at 0, i.e. no token or USD clamp.
-                runway = self.chain.quota_runway(
-                    reply.key,
-                    self.priority,
-                    round_tokens=reply.usage.prompt_tokens + reply.usage.completion_tokens,
-                    round_usd=reply.usage.cost_usd,
+                caps = after_reply(
+                    caps,
+                    rounds=rounds,
+                    new_cap=self._rounds_cap(reply.key, reply.model),
+                    over_budget=over_budget,
+                    nudge_sent=nudge_sent,
+                    # A day's tokens and a USD pool run out in rounds too, but how
+                    # many depends on what a round costs. The round just played is
+                    # the best price there is: the conversation is resent whole
+                    # every round, so the next one costs at least as much -- which
+                    # makes this a slight underestimate, and the nudge's two spare
+                    # rounds are there to absorb it. A reply with no usage (a fake
+                    # in a test) prices a round at 0, i.e. no token or USD clamp.
+                    runway=self.chain.quota_runway(
+                        reply.key,
+                        self.priority,
+                        round_tokens=reply.usage.prompt_tokens + reply.usage.completion_tokens,
+                        round_usd=reply.usage.cost_usd,
+                    ),
                 )
-                quota_stopped = runway is not None and rounds + runway < effective_cap
-                if quota_stopped:
-                    effective_cap = rounds + runway
-                trace.cap = effective_cap
+                trace.cap = caps.effective_cap
                 trace.rounds.append(
                     RoundTrace(
                         at=self.clock(),
@@ -1179,19 +1121,7 @@ class AgentLoop:
                         ],
                     )
                 )
-                _log_reply(
-                    session,
-                    rounds,
-                    reply,
-                    call_duration,
-                    {
-                        "effective": effective_cap,
-                        "budget_stopped": budget_stopped,
-                        "floor": floor_cap,
-                        "budget_hit": self._budget_hit,
-                        "quota_stopped": quota_stopped,
-                    },
-                )
+                _log_reply(session, rounds, reply, call_duration, caps, self._budget_hit)
                 if self.events is not None and not trace.rounds[-1].tool_calls:
                     # A round with no tool calls is already complete the
                     # instant it is appended -- there is no later point to
@@ -1250,17 +1180,12 @@ class AgentLoop:
                     self.events.publish(_round_event(self.name, trace.rounds[-1]))
                 if self.ctx.extras.get("end_cycle"):
                     break
-                if not nudge_sent and rounds >= effective_cap - WRAP_UP_ROUNDS_BEFORE_CAP:
-                    # Once per cycle: fires the round it first comes within
-                    # WRAP_UP_ROUNDS_BEFORE_CAP of the *current* effective_cap,
-                    # so a cap that later drops (a fallback to a weaker model,
-                    # or the cap-drop rescue above) can still trigger it even
-                    # if the first check came too early to. The remaining
-                    # count in the text is the real one -- effective_cap minus
-                    # rounds played so far -- not always
-                    # WRAP_UP_ROUNDS_BEFORE_CAP, since the rescue above can
-                    # leave more than that in force.
-                    nudge = _wrap_up_nudge(effective_cap - rounds)
+                if nudge_due(caps, rounds=rounds, nudge_sent=nudge_sent):
+                    # The remaining count in the text is the real one -- the cap
+                    # minus rounds played so far -- not always
+                    # WRAP_UP_ROUNDS_BEFORE_CAP, since the rescue in after_reply
+                    # can leave more than that in force.
+                    nudge = _wrap_up_nudge(caps.effective_cap - rounds)
                     messages.append(Message("user", nudge))
                     session.append("message", kind="nudge", round=rounds, content=nudge)
                     nudge_sent = True
@@ -1269,24 +1194,24 @@ class AgentLoop:
             if ended:
                 minutes, summary = ended
                 next_wake_s = _clamp_wake(minutes, self.heartbeat_s)
-            elif status == "ok" and rounds >= effective_cap:
+            elif status == "ok" and rounds >= caps.effective_cap:
                 # The model ran out of rounds without calling end_cycle. That
                 # is not a normal cycle: nothing summarised the work and
                 # nothing chose a wake, so reporting it as ``ok`` hides a loop
                 # that may be going in circles every heartbeat.
                 status = "max_rounds"
-                if budget_stopped:
+                if caps.budget_stopped:
                     summary = (
                         f"hit CYCLE_MAX_PROMPT_TOKENS ({self._budget_hit}) "
                         f"without end_cycle: prompt tokens reached {budget_tokens}"
                     )
-                elif quota_stopped:
+                elif caps.quota_stopped:
                     summary = (
                         f"hit the provider quota after {rounds} rounds "
                         "without end_cycle"
                     )
                 else:
-                    summary = f"hit max_rounds ({effective_cap}) without end_cycle"
+                    summary = f"hit max_rounds ({caps.effective_cap}) without end_cycle"
                 log.warning("[%s] %s", self.name, summary)
         except TimeoutError:
             status, summary = (
@@ -1311,7 +1236,7 @@ class AgentLoop:
         finally:
             try:
                 result = await self._finish(
-                    status, model, rounds, summary, next_wake_s, notes, effective_cap
+                    status, model, rounds, summary, next_wake_s, notes, caps.effective_cap
                 )
             finally:
                 # Even if _finish raises: run_forever carries on in this task,
@@ -1680,11 +1605,7 @@ class AgentLoop:
         ``self.max_rounds``, never the hard ceiling -- the ceiling only
         clamps a match that is itself too generous.
         """
-        candidate = key or model
-        for pattern, rounds in self.max_rounds_by_model:
-            if fnmatch.fnmatch(candidate, pattern):
-                return min(rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
-        return min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING)
+        return self.profiles.for_key(key or model).max_rounds
 
     def _prompt_budget_exceeded(self, prompt_tokens: int, key: str = "") -> bool:
         """True once a cycle's running prompt-token total passes the budget.
@@ -1694,11 +1615,7 @@ class AgentLoop:
         ``self.max_prompt_tokens``. 0 is the documented off switch -- same
         spelling as ``HTTP_PORT``'s.
         """
-        budget = self.max_prompt_tokens
-        for pattern, n in self.max_prompt_tokens_by_model:
-            if fnmatch.fnmatch(key, pattern):
-                budget = n
-                break
+        budget = self.profiles.for_key(key).max_prompt_tokens
         self._budget_hit = budget
         return budget > 0 and prompt_tokens > budget
 
@@ -1710,7 +1627,7 @@ class AgentLoop:
             return messages
         fitted = fit_context(
             messages,
-            ModelProfile(provider.key, provider.context_tokens),
+            replace(self.profiles.for_key(provider.key), num_ctx=provider.context_tokens),
             reserve_tokens=self.max_tokens + estimate_tool_tokens(tools),
         )
         if fitted is not messages:
