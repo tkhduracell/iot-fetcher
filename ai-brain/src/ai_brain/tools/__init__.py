@@ -25,6 +25,7 @@ from ai_brain.errors import BadInput
 from ai_brain.fence import fence
 from ai_brain.llm import ToolCall, ToolSpec
 from ai_brain.memory import MemoryDir
+from ai_brain.provenance import note_read
 from ai_brain.redact import redact
 
 log = logging.getLogger(__name__)
@@ -122,7 +123,7 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
-def wrap_external(source: str, text: str) -> str:
+def wrap_external(source: str, text: str, *, note_as_read: bool = True) -> str:
     """Fence text that came from outside this system.
 
     A metric name is ours; a Drive document, a web page and a friendly name a
@@ -139,8 +140,15 @@ def wrap_external(source: str, text: str) -> str:
     or header, and once the model has read it, it can end up copied verbatim
     into a memory fact. Masking happens before fencing so a secret cannot
     hide the fence's own sentinel handling from itself.
+
+    It is also where a cycle learns it has read outside text, for the same
+    reason: every such read comes through here. See ``ai_brain.provenance``.
+    ``note_as_read`` is for text that wants the fence without being outside.
     """
-    return fence(source, redact(text))
+    fenced = fence(source, redact(text))
+    if note_as_read:
+        note_read((source,))
+    return fenced
 
 
 class ToolRegistry:

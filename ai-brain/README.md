@@ -472,6 +472,27 @@ Two guarantees are worth knowing when reading logs:
 - **Quiet hours.** `sonos_say` refuses between 22:00 and 07:00 Europe/Stockholm
   and records `blocked_quiet_hours`.
 
+## Provenance
+
+A fence tells a model not to obey a web page. It does nothing about the page having
+shaped what the model then writes, and a fact reads back later as this system's own
+words. So a cycle tracks what outside text it has read, and what it writes after that
+says so.
+
+- **What counts:** anything a tool returned through `wrap_external` (`web`,
+  `google-drive`, `home-assistant`, `docker`), and a tag it picks up by reading a tagged
+  note or fact, so the tag follows a claim from one loop to the next. Filip's own notes
+  and MCP edits carry none.
+- **Where it shows:** a fact keeps it in `facts/_meta.json`, and `read_fact` and
+  `read_expert` return it as `written_after_reading`. A note keeps it in its header, and
+  the inbox renders it on the line above the note's fence: `from: energy (...), after
+  reading external text (web)`. The fenced body cannot forge or remove that line. A
+  proposal keeps it in its file and shows it on the Slack card, above the buttons.
+- **A rewrite replaces the tag.** A cycle that reads a tagged fact is carrying the tag
+  already, so it only goes away when a rewrite happened with no outside text in view.
+- **Advisory only.** Nothing is ever refused because of it. It says the writer had read
+  this, not that what it wrote came from it.
+
 ## Reviewing the experts
 
 Every expert's memory is scoped to itself — it can only read and write its own

@@ -105,6 +105,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
                     "title": f.title,
                     "written_at": _iso(f.written_at),
                     "writes": f.writes,
+                    "written_after_reading": list(f.provenance),
                 }
                 for f in mem.fact_stats()
             ],
@@ -113,12 +114,17 @@ def build_mcp(system: System, token: str) -> MCPServer:
         }
 
     @mcp.tool()
-    def read_fact(agent: str, name: str) -> dict[str, str]:
-        """One fact's title and full body."""
+    def read_fact(agent: str, name: str) -> dict[str, Any]:
+        """One fact's title and full body, and any outside text it was written after."""
         fact = memory(agent).read_fact(checked(name))
         if fact is None:
             raise ToolError(f"{agent} has no fact {name!r}")
-        return {"name": fact.name, "title": fact.title, "body": fact.body}
+        return {
+            "name": fact.name,
+            "title": fact.title,
+            "body": fact.body,
+            "written_after_reading": list(fact.provenance),
+        }
 
     @mcp.tool()
     def read_facts(agent: str) -> list[dict[str, str]]:

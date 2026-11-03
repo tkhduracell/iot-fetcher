@@ -30,6 +30,7 @@ from pathlib import Path
 
 from ai_brain.errors import BadInput
 from ai_brain.fence import fence, safe_source
+from ai_brain.provenance import read_so_far
 from ai_brain.redact import redact
 
 log = logging.getLogger(__name__)
@@ -158,6 +159,8 @@ class Note:
     sender: str
     body: str
     created: datetime
+    # Outside text the sending cycle had read when it wrote this. See provenance.py.
+    provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -169,6 +172,7 @@ class FactStat:
     written_at: float
     first_written_at: float
     writes: int
+    provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -178,6 +182,8 @@ class Fact:
     name: str
     title: str
     body: str
+    # Outside text the cycle that wrote it had read by then. See provenance.py.
+    provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -552,7 +558,7 @@ class MemoryDir:
         self._record_mutation("write_fact", name, path)
         self._keep_fact_revision(name, path, clean_body)
         _atomic_write(path, clean_body)
-        self._bump_fact_meta(name, _fit_title(redact(title)))
+        self._bump_fact_meta(name, _fit_title(redact(title)), read_so_far())
 
     def read_fact(self, name: str) -> Fact | None:
         path = self.facts_dir / f"{safe_name(name)}.md"
@@ -561,7 +567,12 @@ class MemoryDir:
         body = path.read_text(encoding="utf-8")
         meta = self._read_fact_meta().get(name)
         title = meta.get("title") if isinstance(meta, dict) else None
-        return Fact(name=name, title=title or _fallback_title(body), body=body)
+        return Fact(
+            name=name,
+            title=title or _fallback_title(body),
+            body=body,
+            provenance=_provenance_of(meta),
+        )
 
     def delete_fact(self, name: str) -> bool:
         """Remove one fact. Returns False when there was nothing to remove.
@@ -631,6 +642,7 @@ class MemoryDir:
                     written_at=written_at,
                     first_written_at=first,
                     writes=writes,
+                    provenance=_provenance_of(entry),
                 )
             )
         stats.sort(key=lambda s: s.name)
@@ -647,7 +659,7 @@ class MemoryDir:
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.fact_meta_path, json.dumps(meta, indent=2, sort_keys=True))
 
-    def _bump_fact_meta(self, name: str, title: str) -> None:
+    def _bump_fact_meta(self, name: str, title: str, sources: tuple[str, ...] = ()) -> None:
         meta = self._read_fact_meta()
         entry = meta.get(name)
         now = self.clock().timestamp()
@@ -660,6 +672,11 @@ class MemoryDir:
         else:
             first, writes = now, 1
         meta[name] = {"first_written_at": first, "writes": writes, "title": title}
+        # Replaced with each write, not accumulated. A cycle that read a tagged
+        # fact is carrying its tag already, so a tag only goes when a rewrite
+        # happened with no outside text in view: the body is then the writer's.
+        if sources:
+            meta[name]["provenance"] = list(sources)
         self._write_fact_meta(meta)
 
     # -- gaps ----------------------------------------------------------
@@ -822,7 +839,9 @@ class MemoryDir:
             if not path.exists():
                 break
             counter += 1
-        _atomic_write(path, f"from: {sender}\nat: {_iso(now)}\n\n{body}")
+        sources = read_so_far()
+        provenance = f"provenance: {','.join(sources)}\n" if sources else ""
+        _atomic_write(path, f"from: {sender}\nat: {_iso(now)}\n{provenance}\n{body}")
         return path
 
     def unread_notes(self) -> list[Note]:
@@ -998,6 +1017,7 @@ class MemoryDir:
         head, _, body = text.partition("\n\n")
         sender = ""
         created = self.clock()
+        provenance: tuple[str, ...] = ()
         for line in head.splitlines():
             if line.startswith("from: "):
                 sender = line[len("from: ") :].strip()
@@ -1006,9 +1026,13 @@ class MemoryDir:
                     created = datetime.fromisoformat(line[len("at: ") :].strip())
                 except ValueError:
                     pass
+            elif line.startswith("provenance: "):
+                provenance = tuple(
+                    s for s in line[len("provenance: ") :].strip().split(",") if SAFE_NAME.match(s)
+                )
         if not sender:
             return None
-        return Note(path=path, sender=sender, body=body, created=created)
+        return Note(path=path, sender=sender, body=body, created=created, provenance=provenance)
 
 
 def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
@@ -1032,14 +1056,16 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
     escaping stops a body writing a tag of its own -- so a body that claims to
     be from Filip is still just a body from whoever the tag says. The fence puts
     the body on lines of its own, so a ``topic:`` first line is still the first
-    line the model reads.
+    line the model reads. A note written after its sender had read outside text
+    says so on the line above the fence, out of the body's reach for the same
+    reason.
     """
     shown: list[str] = []
     short = 0
     left = budget
     for note in reversed(notes):
         label = _label(note.sender)
-        head = f"from: {label} ({_iso(note.created)})"
+        head = f"from: {label} ({_iso(note.created)}){provenance_tag(note.provenance)}"
         source = f"note-{label}"
         owner = note.sender == OWNER_SENDER
         full = f"## {head}\n{fence(source, note.body, block=True)}"
@@ -1063,6 +1089,18 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
 
 def _block_or_empty(source: str, text: str) -> str:
     return fence(source, text, block=True) if text.strip() else "(empty)"
+
+
+def provenance_tag(sources: tuple[str, ...]) -> str:
+    """How a note or fact says what its writer had read. Empty when nothing."""
+    return f", after reading external text ({', '.join(sources)})" if sources else ""
+
+
+def _provenance_of(entry: object) -> tuple[str, ...]:
+    """A fact's tag from its sidecar. The sidecar is advisory, so anything odd in
+    it is treated as no tag rather than raising."""
+    raw = entry.get("provenance") if isinstance(entry, dict) else None
+    return tuple(str(s) for s in raw) if isinstance(raw, list) else ()
 
 
 def _label(sender: str) -> str:

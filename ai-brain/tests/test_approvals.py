@@ -116,6 +116,7 @@ async def test_propose_writes_a_pending_file(approvals, brain_dir):
         "status": "pending",
         "slack_ts": "ts-1",
         "result": "",
+        "provenance": [],
     }
 
 

@@ -37,6 +37,7 @@ from ai_brain.introspection import proposal_loops, token_rows, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
 from ai_brain.memory import MemoryDir
+from ai_brain.provenance import note_read
 from ai_brain.redact import redact
 from ai_brain.regex_safety import check_pattern
 from ai_brain.repo import RepoSnapshot
@@ -247,7 +248,10 @@ def _fenced(kind: str, memory: MemoryDir, text: str) -> str:
     is. An expert's name is config rather than a stranger's, but it lands in an
     attribute value, so it is flattened to the fence's alphabet.
     """
-    return wrap_external(f"{kind}-{safe_source(memory.name.lower())}", text)
+    # Fenced because another agent wrote it, but not a read of outside text in
+    # itself: reviewing the experts is the brain's whole job, and counting it would
+    # tag everything the brain ever wrote. A fact that is tagged says so on its own.
+    return wrap_external(f"{kind}-{safe_source(memory.name.lower())}", text, note_as_read=False)
 
 
 def _persona_preview(memory: MemoryDir) -> str:
@@ -365,13 +369,15 @@ async def _read_expert(ctx: ToolContext, args: dict) -> str:
         if found is None:
             known = ", ".join(memory.list_facts())
             return err(f"unknown fact: {fact_name} (known: {known})")
-        return ok(
-            {
-                "name": found.name,
-                "title": _fenced("fact", memory, found.title),
-                "body": _fenced("fact", memory, found.body),
-            }
-        )
+        result = {
+            "name": found.name,
+            "title": _fenced("fact", memory, found.title),
+            "body": _fenced("fact", memory, found.body),
+        }
+        if found.provenance:
+            note_read(found.provenance)
+            result["written_after_reading"] = list(found.provenance)
+        return ok(result)
     return err(f"read_expert: unknown what={what!r} (one of {', '.join(_READ_WHATS)})")
 
 

@@ -148,6 +148,7 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
     return {
         "cycle_id": trace.cycle_id,
         "resumed_after_s": trace.resumed_after_s,
+        "external_sources": sorted(trace.external_sources),
         "started_at": trace.started_at,
         "finished_at": trace.finished_at,
         "in_progress": trace.in_progress,
@@ -215,6 +216,7 @@ def _fact_stat_json(stat) -> dict:
         "written_at": stat.written_at,
         "first_written_at": stat.first_written_at,
         "writes": stat.writes,
+        "provenance": list(stat.provenance),
     }
 
 

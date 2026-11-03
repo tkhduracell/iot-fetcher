@@ -12,6 +12,7 @@ import asyncio
 import re
 
 from ai_brain.llm import ToolSpec
+from ai_brain.provenance import note_read
 from ai_brain.sessions import (
     MAX_READ_EVENTS,
     MAX_SEARCH_LIMIT,
@@ -155,7 +156,12 @@ async def _read_fact(ctx: ToolContext, args: dict) -> str:
     fact = ctx.memory.read_fact(str(args["name"]))
     if fact is None:
         return ok(None)
-    return ok({"name": fact.name, "title": fact.title, "body": fact.body})
+    result: dict = {"name": fact.name, "title": fact.title, "body": fact.body}
+    if fact.provenance:
+        # What it was written after reading now reaches this cycle by way of it.
+        note_read(fact.provenance)
+        result["written_after_reading"] = list(fact.provenance)
+    return ok(result)
 
 
 async def _delete_fact(ctx: ToolContext, args: dict) -> str:
