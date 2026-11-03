@@ -540,8 +540,12 @@ def test_first_failure_marks_the_file_incomplete(tmp_path, wall, monkeypatch):
     # Still a session as far as anything listing them is concerned, and pruned.
     assert list(session_files(tmp_path)) == [log.path]
     store = SessionStore(tmp_path, wall, retention_days=30, max_mb=0)
-    store.housekeep()
+    assert store.live_logs() == [log.path]
+    store.housekeep(keep="20270101-000000-aaaa")
     assert log.path.exists()
+    store.housekeep()
+    assert not log.path.exists()
+    assert (tmp_path / f"20270101-000000-aaaa{GZ_SUFFIX}").exists()
 
 
 def test_short_write_terminates_the_torn_line(tmp_path, wall, monkeypatch):

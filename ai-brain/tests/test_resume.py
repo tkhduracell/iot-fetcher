@@ -1504,7 +1504,39 @@ async def test_log_with_lost_events_at_the_end_is_not_resumed(brain_dir, tmp_pat
     await second.run_cycle()
 
     assert not any("interrupted" in m.content for m in provider.calls[0][0])
-    assert any(p.name.endswith(".holes") for p in session_files(brain_dir.root / "sessions"))
+    assert "holes" in brain_dir.journal_text(1)
+    assert all(p.name.endswith(".gz") for p in session_files(brain_dir.root / "sessions"))
+
+
+async def test_a_holed_log_still_archives_the_filip_note_it_answered(brain_dir, tmp_path, wall):
+    """The rename says the record has holes, not that nothing in it can be read,
+    and a fresh cycle that knows nothing of the answer would post a second one."""
+    note = brain_dir.drop_note("filip", "topic: pool\nwhat is the temperature")
+    sessions = brain_dir.root / "sessions"
+    _crashed_session(
+        brain_dir,
+        [
+            {**_opening(), "notes": [note.name]},
+            _reply_event(("a", "slack_post", {"topic": "pool", "text": "24 degrees"})),
+            {"type": "tool_call", "round": 1, "id": "a", "name": "slack_post"},
+            {
+                "type": "tool_result",
+                "round": 1,
+                "id": "a",
+                "name": "slack_post",
+                "result": json.dumps({"ok": True}),
+            },
+        ],
+    )
+    log = next(sessions.glob("*.jsonl"))
+    log.rename(log.with_name(log.name + ".holes"))
+
+    loop, provider = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+    await loop.run_cycle()
+
+    assert "1 of Filip's notes already answered" in brain_dir.journal_text(1)
+    assert brain_dir.unread_notes() == []
+    assert "what is the temperature" not in "\n".join(m.content for m in provider.calls[0][0])
 
 
 async def test_budget_stop_summary_names_the_budget_that_stopped_it(brain_dir, tmp_path, wall):
@@ -1804,3 +1836,103 @@ async def test_refused_history_retry_announces_the_round_once(brain_dir, tmp_pat
 
     assert len(provider.calls) == 2
     assert [e["type"] for e in events].count("round_started") == 1
+
+
+async def test_restart_ring_spends_filips_fresh_cycle(brain_dir, tmp_path, wall):
+    """A note that gets its fresh cycle from the restart's ring has had it: a later
+    run of deaths must not hand it another."""
+    brain_dir.drop_note("energy", "keeps killing")
+    for _ in range(4):
+        await _die_in_the_first_call(brain_dir, tmp_path, wall)
+    gave_up, _ = build_loop(brain_dir, tmp_path, wall, [])
+    assert (await gave_up.run_cycle()).status == "abandoned"
+
+    note = brain_dir.drop_note("filip", "topic: pool\nwhile the process was down")
+    restarted, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+    task = asyncio.create_task(restarted.run_forever())
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    state = json.loads((brain_dir.root / "_state.json").read_text())
+    assert note.name in state["owner_retried"]
+
+
+async def test_quota_coming_back_restores_a_budget_stop_to_its_floor(brain_dir, tmp_path, wall):
+    _crashed_session(
+        brain_dir,
+        [
+            _opening(),
+            _reply_event(
+                ("a", "list_facts", {}),
+                caps={"effective": 1, "budget_stopped": True, "floor": 3, "quota_stopped": True},
+            ),
+        ],
+    )
+    loop, provider = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+
+    result = await loop.run_cycle()
+
+    assert provider.calls
+    assert result.status == "ok"
+
+
+async def test_resume_sends_the_nudge_the_death_skipped(brain_dir, tmp_path, wall):
+    _crashed_session(
+        brain_dir,
+        [_opening(), _reply_event(("a", "list_facts", {}), caps={"effective": 2, "floor": 2})],
+    )
+    loop, provider = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+
+    await loop.run_cycle()
+
+    assert provider.calls
+    events = read_events(_log_path(brain_dir))
+    assert [e.get("kind") for e in events if e["type"] == "message"].count("nudge") == 1
+    # Sent before the round it warns about, not after.
+    types = [e["type"] for e in events]
+    nudge_at = next(i for i, e in enumerate(events) if e.get("kind") == "nudge")
+    assert "reply" in types[nudge_at:]
+
+
+async def test_abandon_survives_a_journal_that_cannot_be_written(brain_dir, tmp_path, wall):
+    brain_dir.drop_note("filip", "topic: pool\nfirst")
+    for _ in range(4):
+        await _die_in_the_first_call(brain_dir, tmp_path, wall)
+    # end_cycle is refused once, since the note is still owed its answer.
+    script = [reply("", end()), reply("", end())]
+    loop, provider = build_loop(brain_dir, tmp_path, wall, script)
+    real = brain_dir.append_journal
+    failed = []
+
+    def _full(line):
+        if "not resumed" in line:
+            failed.append(line)
+            raise OSError("disk full")
+        real(line)
+
+    loop.memory.append_journal = _full
+    result = await loop.run_cycle()
+
+    assert failed
+    assert result.status == "ok"
+    assert provider.calls
+
+
+async def test_resumed_trace_keeps_earlier_tool_results(brain_dir, tmp_path, wall):
+    _crashed_session(
+        brain_dir,
+        [
+            _opening(),
+            _reply_event(("a", "list_facts", {})),
+            {"type": "tool_call", "round": 1, "id": "a", "name": "list_facts"},
+            {"type": "tool_result", "round": 1, "id": "a", "name": "list_facts", "result": '{"ok": true}'},
+            _reply_event(("b", "die", {}), round_=2),
+            {"type": "tool_call", "round": 2, "id": "b", "name": "die"},
+        ],
+    )
+    loop, _ = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+
+    await loop.run_cycle()
+
+    assert loop.trace.rounds[0].tool_results[0]["name"] == "list_facts"
+    assert "outcome unknown" in loop.trace.rounds[1].tool_results[0]["result_preview"]

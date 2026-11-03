@@ -590,7 +590,16 @@ def _round_trace(event: dict) -> RoundTrace:
             for c in event.get("tool_calls") or []
             if isinstance(c, dict)
         ],
+        tool_results=[_result_trace(r["name"], r["result"]) for r in event.get("results", [])],
     )
+
+
+def _result_trace(name: str, result: str) -> dict:
+    return {
+        "name": name,
+        "result_preview": _trunc(result, TRACE_PREVIEW_CHARS),
+        "stats": _tool_result_stats(result),
+    }
 
 
 def _log_reply(
@@ -953,11 +962,16 @@ class AgentLoop:
                 # A cap the quota set was about what was left back then, and the
                 # next reply sets it again from what is left now. Restoring it as
                 # it stands would close a cycle whose quota has since come back.
-                if recovered.quota_stopped and not recovered.budget_stopped:
-                    effective_cap = max(
-                        self._rounds_cap(recovered.chain_key, recovered.model),
-                        recovered.floor_cap or 0,
-                    )
+                # Without the quota the cap is what the rounds settings and the
+                # floor made it: the floor alone once the token budget has stopped.
+                if recovered.quota_stopped:
+                    effective_cap = self._rounds_cap(recovered.chain_key, recovered.model)
+                    if recovered.floor_cap is not None:
+                        effective_cap = (
+                            recovered.floor_cap
+                            if recovered.budget_stopped
+                            else max(effective_cap, recovered.floor_cap)
+                        )
                 elif recovered.effective_cap is not None:
                     effective_cap = recovered.effective_cap
                 trace.cap = effective_cap
@@ -978,6 +992,18 @@ class AgentLoop:
             # bookkeeping after it was lost. Close the books without another
             # call, however much budget a call would cost.
             already_over = recovered is not None and recovered.over
+            if (
+                recovered is not None
+                and not already_over
+                and not nudge_sent
+                and effective_cap - WRAP_UP_ROUNDS_BEFORE_CAP <= rounds < effective_cap
+            ):
+                # The process died in the round that would have sent it, and the
+                # next chance comes after a reply this round may not leave room for.
+                nudge = _wrap_up_nudge(effective_cap - rounds)
+                messages.append(Message("user", nudge))
+                session.append("message", kind="nudge", round=rounds, content=nudge)
+                nudge_sent = True
             while not already_over and rounds < effective_cap:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
                 # only takes effect at the next cycle boundary is no pause at
@@ -1329,7 +1355,7 @@ class AgentLoop:
         return None, ""
 
     def _recover(self, path: Path) -> Recovered:
-        return recover(path, read_events(path), self._is_read_only, self._cap_tool_result)
+        return recover(path, read_events(path), READ_ONLY_TOOLS.__contains__, self._cap_tool_result)
 
     def _owner_retry(self) -> bool:
         """Whether the hold after a run of deaths gives way to a fresh cycle now.
@@ -1367,9 +1393,6 @@ class AgentLoop:
             return f"it is {_ago(age)} old", False
         return "", False
 
-    def _is_read_only(self, tool: str) -> bool:
-        return tool in READ_ONLY_TOOLS
-
     async def _close_session(self, state: Recovered, reason: str) -> None:
         session = self.sessions.reopen(state.path, state.cycle_id, state.last_seq)
         session.append("cycle_end", status=ABANDONED, rounds=state.rounds, summary=reason)
@@ -1405,7 +1428,11 @@ class AgentLoop:
         return line
 
     def _journal_abandon(self, line: str) -> None:
-        self.memory.append_journal(f"[{ABANDONED}] {line}")
+        # Its caller is about to start a fresh cycle, which a full disk must not stop.
+        try:
+            self.memory.append_journal(f"[{ABANDONED}] {line}")
+        except Exception:
+            log.exception("[%s] could not journal an abandoned cycle", self.name)
         log.warning("[%s] [%s] %s", self.name, ABANDONED, line)
         self.cycle_counts[ABANDONED] = self.cycle_counts.get(ABANDONED, 0) + 1
 
@@ -1438,9 +1465,12 @@ class AgentLoop:
         trace.completion_tokens = state.completion_tokens
         trace.model = state.model
         trace.rounds = [_round_trace(event) for event in state.replies]
+        # Full tool results, and this object lives as long as the cycle does.
+        state.replies = []
         session.append("resume", after_s=round(idle_s, 1), deaths=state.deaths)
         for result in state.pending_results:
             session.append("tool_result", **result)
+            trace.rounds[-1].tool_results.append(_result_trace(result["name"], result["result"]))
 
         shown = [n for n in unread if n.path.name in state.note_seq]
         new_notes = [n for n in unread if n.path.name not in state.note_seq]
@@ -1520,12 +1550,11 @@ class AgentLoop:
             # round the wait after giving up on a cycle the process kept dying
             # with: those notes were in it, and may be why. A note that arrives
             # while the process is up still rings as usual, and so does one from
-            # Filip that has not had its fresh cycle (see ``_owner_retry``).
+            # Filip that has not had its fresh cycle, which this ring then is (see
+            # ``_owner_retry``).
             cooling = self.last_cycle is not None and self.last_cycle.status == ABANDONED
             if self.memory is not None and (
-                self._waiting_owner_notes() - self._owner_retried
-                if cooling
-                else self.memory.unread_notes()
+                self._owner_retry() if cooling else self.memory.unread_notes()
             ):
                 self.wake.set()
             await self._sleep(delay)
@@ -1617,19 +1646,6 @@ class AgentLoop:
             step = min(remaining, WINDOW_WAIT_SLICE_S)
             await self._nap(step)
             remaining -= step
-
-    async def _mark_unanswered(self, owed: set[str]) -> None:
-        """The notes are archived, so no later cycle will answer them: say so on
-        Filip's message straight away rather than leaving the spinner for the
-        watchdog. A bare DM's spinner sits under ``chat``."""
-        slack_out = self.ctx.extras.get("slack_out")
-        if slack_out is None:
-            return
-        for topic in sorted(owed):
-            try:
-                await slack_out.mark_unanswered(CHAT_TOPIC if topic == ANY_TOPIC else topic)
-            except Exception:  # noqa: BLE001 - the reaction is decoration
-                log.exception("[%s] could not mark %s unanswered", self.name, topic)
 
     def _rounds_cap(self, key: str, model: str) -> int:
         """The rounds cap for whichever model just answered.
@@ -1793,8 +1809,16 @@ class AgentLoop:
         self.ctx.extras.pop("end_cycle", None)
         self.ctx.extras.pop("owed_refused", None)
         owed = self.ctx.extras.pop("owed_replies", None) or set()
-        if consumed:
-            await self._mark_unanswered(owed)
+        slack_out = self.ctx.extras.get("slack_out")
+        if consumed and slack_out is not None:
+            # The notes are archived now, so no later cycle will answer them:
+            # say so on Filip's message straight away rather than leaving the
+            # spinner for the watchdog. A bare DM's spinner sits under ``chat``.
+            for topic in sorted(owed):
+                try:
+                    await slack_out.mark_unanswered(CHAT_TOPIC if topic == ANY_TOPIC else topic)
+                except Exception:  # noqa: BLE001 - the reaction is decoration
+                    log.exception("[%s] could not mark %s unanswered", self.name, topic)
 
         result = CycleResult(
             status=status, model=model, rounds=rounds, next_wake_s=int(next_wake_s), cap=cap

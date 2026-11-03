@@ -757,8 +757,8 @@ inbox, and carrying on from them is how one bad reply turns into a cycle that
 never ends. A cycle that stopped cleanly before its first reply is dropped instead,
 since a fresh one loses nothing and sees a newer inbox. One that *died* before its
 first reply is resumed, so that repeat deaths can be counted. A log marked
-`.jsonl.holes` is never resumed: it cannot be trusted to say what happened, so its
-notes go to a fresh cycle.
+`.jsonl.holes` is never resumed: it cannot be trusted to say what happened, so it is
+abandoned like any other with holes and its notes go to a fresh cycle.
 
 - **Side effects are never replayed, and neither is anything else.** The harness
   runs no tool on resume. A call on record with no result gets a synthetic one:

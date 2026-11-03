@@ -346,10 +346,15 @@ class SessionStore:
         return SessionLog(path, cycle_id, self.clock, seq=seq)
 
     def live_logs(self) -> list[Path]:
-        """Uncompressed logs, oldest first: anything an earlier cycle left open."""
+        """Uncompressed logs, oldest first: anything an earlier cycle left open.
+
+        One with holes too. It will not be resumed, but it may say which of Filip's
+        notes were answered, and a fresh cycle that cannot tell would answer again.
+        """
         if self.directory is None or not self.directory.exists():
             return []
-        return sorted(self.directory.glob(f"*{LOG_SUFFIX}"))
+        found = [*self.directory.glob(f"*{LOG_SUFFIX}"), *self.directory.glob(f"*{HOLES_SUFFIX}")]
+        return sorted(found, key=lambda path: path.name)
 
     def housekeep(self, keep: str = "") -> None:
         """Compress finished logs and prune old ones, keeping cycle ``keep`` live.
@@ -358,7 +363,7 @@ class SessionStore:
         left uncompressed is picked up by the next cycle to end.
         """
         for path in self.live_logs():
-            if path.name != f"{keep}{LOG_SUFFIX}":
+            if cycle_id_of(path) != keep:
                 compress(path)
         self.prune()
 
@@ -596,7 +601,7 @@ def recover(
     not vouch for is treated as having had an effect. ``cap_result`` is the
     loop's own cut, since the log holds what the conversation could not.
     """
-    out = Recovered(path=path, cycle_id=cycle_id_of(path))
+    out = Recovered(path=path, cycle_id=cycle_id_of(path), has_hole=path.name.endswith(HOLES_SUFFIX))
     calls: list[ToolCall] = []
     started: set[str] = set()
     answered: set[str] = set()
@@ -690,6 +695,8 @@ def recover(
             out.messages.append(
                 Message("tool", cap_result(name, result), tool_call_id=call_id, name=name)
             )
+            if out.replies:
+                out.replies[-1].setdefault("results", []).append({"name": name, "result": result})
             out.external_sources.update(_sources_in(name, result))
             if name not in ("slack_post", "end_cycle"):
                 continue
