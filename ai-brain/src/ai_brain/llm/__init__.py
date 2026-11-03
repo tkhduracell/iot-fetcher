@@ -36,7 +36,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from ai_brain.config import match_by_model, think_value
-from ai_brain.ledger import Ledger, Limits, Priority
+from ai_brain.ledger import Ledger, Limits, Priority, WINDOW_REASONS
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from ai_brain.config import Settings
@@ -67,11 +67,7 @@ TIMEOUT_CHARGE_TOKENS = 4000
 # loop, and the per-minute windows. An
 # expert falling through to the LAN on every round is the design, so these
 # log at debug. See ``ProviderChain._log_skip``.
-_BY_DESIGN_SKIPS = frozenset({"priority", "reserved", "rpm", "tpm"})
-
-# The refusals that clear by themselves within a minute: a rolling window, not
-# a spent day. See ``ChainExhausted.windowed``.
-WINDOW_REASONS = frozenset({"rpm", "tpm"})
+_BY_DESIGN_SKIPS = frozenset({"priority", "reserved"}) | WINDOW_REASONS
 
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
@@ -481,16 +477,15 @@ class ProviderChain:
         hands the cycle to the next one), so a cycle that can fall through must
         not be cut short on the strength of the first model's budget. An
         unmetered ``lan:`` key lands here too, through its own ``rounds_left``.
-        The other providers are asked about tokens but not dollars: what a
-        round costs there is theirs to say, and all that matters is whether
-        they can take one.
+        All that matters about the other providers is whether they can take a
+        round at all.
         """
         if self.ledger.limits(key) is None:
             return None
         for provider in self.providers:
             if provider.key == key or not provider.available():
                 continue
-            if self.ledger.rounds_left(provider.key, priority, round_tokens) > 0:
+            if self.ledger.can_spend_today(provider.key, priority):
                 return None
         return self.ledger.rounds_left(key, priority, round_tokens, round_usd)
 
@@ -536,9 +531,7 @@ class ProviderChain:
             self._skipped.pop(key, None)
 
             reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
-            if reply is None:
-                called_and_failed = True
-            else:
+            if reply is not None:
                 usage = reply.usage
                 log.info(
                     "%s%s answered (in=%d out=%d tokens%s)",
@@ -551,11 +544,11 @@ class ProviderChain:
                     else "",
                 )
                 return reply
+            called_and_failed = True
 
         if earliest is None:
             earliest = self.ledger.next_available_at(priority)
-        windowed = window_refused and not called_and_failed and earliest is not None
-        raise ChainExhausted(retry_at=earliest, windowed=windowed)
+        raise ChainExhausted(retry_at=earliest, windowed=window_refused and not called_and_failed)
 
     async def _try(
         self,

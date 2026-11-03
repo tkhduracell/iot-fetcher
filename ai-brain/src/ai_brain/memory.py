@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ai_brain.fence import fence
+from ai_brain.errors import BadInput
+from ai_brain.fence import fence, safe_source
 from ai_brain.redact import redact
 
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -111,7 +112,7 @@ def now_utc() -> datetime:
 def safe_name(name: str) -> str:
     """Validate a memory item name. Tools take names, never paths."""
     if not isinstance(name, str) or not SAFE_NAME.match(name):
-        raise ValueError(f"unsafe memory name: {name!r}")
+        raise BadInput(f"unsafe memory name: {name!r}")
     return name
 
 
@@ -795,9 +796,7 @@ class MemoryDir:
         """
         sections = []
         if self.is_brain:
-            goals = self.goals_text()
-            goals_block = fence("goals", goals, block=True) if goals.strip() else "(empty)"
-            sections.append(f"# Goals\n{goals_block}")
+            sections.append(f"# Goals\n{_block_or_empty('goals', self.goals_text())}")
         open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
         # Silence when there is nothing unknown: an empty heading is pure
         # prompt budget, and the cap is there because a brain that opens gaps
@@ -810,10 +809,8 @@ class MemoryDir:
                 for g in open_gaps
             )
             sections.append(f"# Open gaps (Öppna luckor)\n{fence('gaps', luckor, block=True)}")
-        journal = self.journal_text(2)
-        journal_block = fence("journal", journal, block=True) if journal.strip() else "(empty)"
         inbox = render_inbox(notes)
-        sections.append(f"# Journal (last 2 days)\n{journal_block}")
+        sections.append(f"# Journal (last 2 days)\n{_block_or_empty('journal', self.journal_text(2))}")
         sections.append(f"# Inbox\n{inbox or '(empty)'}")
         return "\n\n".join(sections)
 
@@ -909,16 +906,18 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
     return "\n\n".join(reversed(shown))
 
 
+def _block_or_empty(source: str, text: str) -> str:
+    return fence(source, text, block=True) if text.strip() else "(empty)"
+
+
 def _label(sender: str) -> str:
     """A sender name as safe for a fence's ``source`` and the line above it.
 
     ``drop_note`` only writes names that pass ``safe_name``, so this changes
     nothing for a real note. It is for a header edited by hand: that "name" must
-    not carry text of its own outside the fence, or come out as ``filip`` --
-    which is why each bad character is replaced, not collapsed and stripped the
-    way ``slug_name`` does.
+    not carry text of its own outside the fence, or come out as ``filip``.
     """
-    return re.sub(r"[^a-z0-9_.-]", "_", sender)
+    return safe_source(sender)
 
 
 def _stamps(directory: Path) -> list[int]:

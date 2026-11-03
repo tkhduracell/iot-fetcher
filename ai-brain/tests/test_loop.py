@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import SEED
 from ai_brain.approvals import Approvals
 from ai_brain.config import load_settings
 from ai_brain.events import EventBus
@@ -936,7 +937,6 @@ async def test_each_role_is_sent_its_own_instructions(make_loop, brain_dir, expe
 
 # -- the seed and the instructions agree with each role's real tools -------
 
-SEED_DIR = Path(__file__).resolve().parents[1] / "seed"
 ROLES = ("brain", *EXPERTS)
 
 
@@ -948,7 +948,7 @@ def _tools_named_in(text: str, reg: ToolRegistry) -> set[str]:
 def test_the_seed_constitution_is_true_of_every_loop():
     """It is the one text all six loops read, so it can only say what is true
     of all of them. Only the brain can talk to Filip or propose; no loop acts."""
-    text = (SEED_DIR / "constitution.md").read_text(encoding="utf-8")
+    text = (SEED / "constitution.md").read_text(encoding="utf-8")
 
     assert _tools_named_in(text, _full_registry()) == set()
     for brain_only in ("slack", "propose", "approve", "sonos", "to-do"):
@@ -976,7 +976,7 @@ def test_an_experts_instructions_say_its_route_is_a_note_to_the_brain():
 @pytest.mark.parametrize("role", ROLES)
 def test_a_seed_persona_names_only_tools_its_loop_has(role):
     reg = _full_registry()
-    text = (SEED_DIR / "personas" / f"{role}.md").read_text(encoding="utf-8")
+    text = (SEED / "personas" / f"{role}.md").read_text(encoding="utf-8")
 
     assert _tools_named_in(text, reg) <= {s.name for s in reg.specs_for(role)}
 
@@ -999,7 +999,7 @@ def test_the_brain_is_not_told_it_can_search_the_web_or_drive():
 
 def test_the_researchers_seed_names_what_only_it_can_use():
     reg = _full_registry()
-    persona = (SEED_DIR / "personas" / "researcher.md").read_text(encoding="utf-8").lower()
+    persona = (SEED / "personas" / "researcher.md").read_text(encoding="utf-8").lower()
     offered = {s.name for s in reg.specs_for("researcher")}
 
     assert "web search" in persona and "drive" in persona
@@ -1391,18 +1391,7 @@ async def test_a_dry_token_budget_gets_a_wrap_up_nudge_not_chain_exhausted(make_
     """The day's tokens run out in rounds too. tpm=100 makes the key's day 14400
     tokens (it never throttles by itself, being under the 4000-token estimate);
     each round costs 3005, so only 5 fit -- the 6th would be ChainExhausted."""
-    script = [
-        reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED, prompt_tokens=3000)
-        for i in range(4)
-    ]
-    script.append(
-        reply(
-            "done",
-            call("end_cycle", "e", next_wake_minutes=30, summary="wrapped"),
-            key=METERED,
-            prompt_tokens=3000,
-        )
-    )
+    script = _rpm_script(4, prompt_tokens=3000)
     loop, (provider,), _ = make_quota_loop(
         [(METERED, Limits(rpm=100, tpm=100, rpd=1000), script)]
     )
@@ -1503,15 +1492,17 @@ def _rpm_script(n_tools, key=METERED, prompt_tokens=10):
     return script
 
 
+def _rpm_limited_chain():
+    return [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))]
+
+
 async def test_an_rpm_window_is_waited_out_and_the_cycle_keeps_its_transcript(
     make_quota_loop, naps
 ):
     """The brain's only key has RPM=8 by default: nine back-to-back rounds meet
     the window. Before this, that was ChainExhausted -> no_budget, a whole
     cycle's reasoning thrown away over a minute."""
-    loop, (provider,), _ = make_quota_loop(
-        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
-    )
+    loop, (provider,), _ = make_quota_loop(_rpm_limited_chain(), sleep=naps)
 
     result = await loop.run_cycle()
 
@@ -1523,6 +1514,23 @@ async def test_an_rpm_window_is_waited_out_and_the_cycle_keeps_its_transcript(
     assert max(naps.taken) <= 2.0  # slept in slices, so PAUSE is noticed
     # The model saw one unbroken conversation across the wait.
     assert [m.role for m in provider.calls[-1][0]].count("assistant") == 6
+
+
+async def test_a_waited_out_round_is_announced_once(make_quota_loop, naps):
+    """The live feed adds a pending entry per round_started and resolves one per
+    round, so a retry announcing itself again would leave one pending for good."""
+    bus = EventBus()
+    loop, _, _ = make_quota_loop(_rpm_limited_chain(), sleep=naps, events=bus)
+
+    with bus.subscribe() as queue:
+        result = await loop.run_cycle()
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    assert naps.total > 0
+    assert sum(e["type"] == "round_started" for e in events) == result.rounds == 6
 
 
 async def test_a_tpm_window_is_waited_out_too(make_quota_loop, naps):
@@ -1564,9 +1572,7 @@ async def test_a_window_does_not_hold_a_cycle_past_its_wait_budget(
     make_quota_loop, naps, monkeypatch
 ):
     monkeypatch.setattr("ai_brain.loop.WINDOW_WAIT_BUDGET_S", 30.0)
-    loop, _, _ = make_quota_loop(
-        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
-    )
+    loop, _, _ = make_quota_loop(_rpm_limited_chain(), sleep=naps)
 
     result = await loop.run_cycle()
 
@@ -1574,24 +1580,10 @@ async def test_a_window_does_not_hold_a_cycle_past_its_wait_budget(
     assert naps.taken == []  # the 60s window never fit in 30s, so it never waited
 
 
-async def test_a_wait_longer_than_any_window_is_not_taken(make_quota_loop, naps, monkeypatch):
-    monkeypatch.setattr("ai_brain.loop.WINDOW_WAIT_MAX_S", 10.0)
-    loop, _, _ = make_quota_loop(
-        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
-    )
-
-    result = await loop.run_cycle()
-
-    assert result.status == "no_budget"
-    assert naps.taken == []
-
-
 async def test_pause_appearing_during_a_rate_limit_wait_stops_the_cycle(
     make_quota_loop, naps, tmp_path
 ):
-    loop, (provider,), _ = make_quota_loop(
-        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
-    )
+    loop, (provider,), _ = make_quota_loop(_rpm_limited_chain(), sleep=naps)
     naps.before = lambda _s: (tmp_path / "PAUSE").write_text("")
 
     result = await loop.run_cycle()
@@ -1607,9 +1599,7 @@ async def test_cancellation_during_a_rate_limit_wait_propagates(make_quota_loop)
     async def cancelled(_seconds):
         raise asyncio.CancelledError
 
-    loop, _, _ = make_quota_loop(
-        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=cancelled
-    )
+    loop, _, _ = make_quota_loop(_rpm_limited_chain(), sleep=cancelled)
 
     with pytest.raises(asyncio.CancelledError):
         await loop.run_cycle()
@@ -1619,9 +1609,7 @@ async def test_cancellation_during_a_rate_limit_wait_propagates(make_quota_loop)
 
 async def test_the_wait_is_outside_the_chain_timeout(make_quota_loop, naps):
     """chain_timeout_s bounds a provider call; a wait that long must not trip it."""
-    loop, _, _ = make_quota_loop(
-        [(METERED, Limits(rpm=3, tpm=10_000_000, rpd=1000), _rpm_script(5))], sleep=naps
-    )
+    loop, _, _ = make_quota_loop(_rpm_limited_chain(), sleep=naps)
     loop.chain_timeout_s = 5.0  # far shorter than the 60s wait
 
     result = await loop.run_cycle()

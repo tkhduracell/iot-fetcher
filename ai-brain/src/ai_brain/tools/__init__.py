@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ai_brain.config import Settings
+from ai_brain.errors import BadInput
 from ai_brain.fence import fence
 from ai_brain.llm import ToolCall, ToolSpec
 from ai_brain.memory import MemoryDir
@@ -145,6 +146,8 @@ class ToolRegistry:
 
         try:
             return await tool.fn(ctx, args)
+        except BadInput as exc:
+            return err(str(exc))
         except Exception as exc:  # a tool crash must not end the cycle
             log.warning("[tool] %s failed", call.name, exc_info=True)
             return err(f"{type(exc).__name__}: {exc}")

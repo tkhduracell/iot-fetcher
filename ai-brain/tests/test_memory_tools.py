@@ -105,7 +105,7 @@ async def test_unsafe_fact_name_is_an_error(registry, make_ctx):
         title="t",
         body="an escape attempt, rejected before it ever touches disk",
     )
-    assert "ValueError" in out["error"]
+    assert "unsafe memory name" in out["error"]
 
 
 async def test_write_fact_flags_a_similarly_named_existing_fact(registry, make_ctx):

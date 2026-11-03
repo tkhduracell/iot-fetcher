@@ -43,7 +43,7 @@ from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
-from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain, Reply
+from ai_brain.llm import STREAM_SINK, ChainExhausted, Message, ProviderChain
 from ai_brain.memory import OWNER_SENDER, MemoryDir, Note
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.slack_io import CHAT_TOPIC
@@ -78,12 +78,10 @@ WRAP_UP_ROUNDS_BEFORE_CAP = 2
 # A per-minute rate limit (the ledger's rpm/tpm windows) refuses a round for at
 # most a minute, and a cycle's transcript is worth more than that: ending it
 # with ``no_budget`` throws away every round already paid for. So a round that
-# meets only such a window waits it out. Bounded three ways, because a wait is
-# time the cycle does not get back: one wait is at most a window and a bit
-# (anything longer is not a window), a cycle spends at most this much in total
-# (a shared key can be refilled by another loop the instant it reopens), and
-# the wait is sliced so a PAUSE file is noticed within a few seconds.
-WINDOW_WAIT_MAX_S = 75.0
+# meets only such a window waits it out. Bounded, because a wait is time the
+# cycle does not get back: a cycle spends at most this much in total (a shared
+# key can be refilled by another loop the instant it reopens), and the wait is
+# sliced so a PAUSE file is noticed within a few seconds.
 WINDOW_WAIT_BUDGET_S = 600.0
 WINDOW_WAIT_SLICE_S = 2.0
 # Past the exact reopening time, so a clock a hair behind the ledger's does not
@@ -740,6 +738,9 @@ class AgentLoop:
         # Seconds this cycle has spent waiting out per-minute rate limits; see
         # WINDOW_WAIT_BUDGET_S.
         window_waited_s = 0.0
+        # True when this pass of the round loop retries a round a window turned
+        # away, which round_started has already announced.
+        retrying_round = False
 
         # Paused: no provider call at all, but the cycle still closes its books
         # so the pause shows up in the journal like any other outcome. The
@@ -768,59 +769,54 @@ class AgentLoop:
                     status, summary = "paused", "paused mid-cycle"
                     log.info("[%s] PAUSE appeared mid-cycle, stopping", self.name)
                     break
-                if self.events is not None:
+                if self.events is not None and not retrying_round:
                     # Fired before the call, not after: a slow provider can
                     # take longer than the gap between two other loops'
                     # entire cycles, and a live feed that only speaks once a
                     # round lands would sit silent through exactly the part
-                    # someone watching it wants to see.
+                    # someone watching it wants to see. Once a round, though:
+                    # the feed adds a pending entry per event and resolves one
+                    # per round, so a retry's would stay pending for good.
                     self.events.publish(
                         {"type": "round_started", "loop": self.name, "at": self.clock()}
                     )
+                retrying_round = False
                 call_started = self.clock()
                 streamer = _DeltaPublisher(self.events, self.name) if self.events else None
                 sink_token = STREAM_SINK.set(streamer.add if streamer else None)
-                reply: Reply | None = None
                 try:
-                    while reply is None:
-                        try:
-                            reply = await asyncio.wait_for(
-                                self.chain.complete(
-                                    messages,
-                                    self.registry.specs_for(self.name, self.ctx.settings),
-                                    self.max_tokens,
-                                    self.priority,
-                                    agent=self.name,
-                                ),
-                                timeout=self.chain_timeout_s,
-                            )
-                        except ChainExhausted as exc:
-                            # A per-minute window is not a spent day: the
-                            # transcript so far is worth a minute's wait, which
-                            # is outside the chain's own timeout (that bounds a
-                            # call, not a queue). Anything else ends the cycle.
-                            pause = self._window_wait_s(exc, window_waited_s)
-                            if pause is None:
-                                raise
-                            log.info(
-                                "[%s] rate-limited by a per-minute window; "
-                                "waiting %.0fs mid-cycle",
-                                self.name,
-                                pause,
-                            )
-                            if not await self._wait_out_window(pause):
-                                break
-                            window_waited_s += pause
+                    reply = await asyncio.wait_for(
+                        self.chain.complete(
+                            messages,
+                            self.registry.specs_for(self.name, self.ctx.settings),
+                            self.max_tokens,
+                            self.priority,
+                            agent=self.name,
+                        ),
+                        timeout=self.chain_timeout_s,
+                    )
+                except ChainExhausted as exc:
+                    # A per-minute window is not a spent day: the transcript so
+                    # far is worth a minute's wait, which is outside the chain's
+                    # own timeout (that bounds a call, not a queue). The same
+                    # round runs again, its PAUSE check included. Anything else
+                    # ends the cycle.
+                    pause = self._window_wait_s(exc, window_waited_s)
+                    if pause is None:
+                        raise
+                    log.info(
+                        "[%s] rate-limited by a per-minute window; waiting %.0fs mid-cycle",
+                        self.name,
+                        pause,
+                    )
+                    await self._wait_out_window(pause)
+                    window_waited_s += pause
+                    retrying_round = True
+                    continue
                 finally:
                     STREAM_SINK.reset(sink_token)
                     if streamer:
                         streamer.flush()
-                if reply is None:
-                    # The PAUSE file appeared while waiting: same stop as the
-                    # check at the top of the round.
-                    status, summary = "paused", "paused mid-cycle"
-                    log.info("[%s] PAUSE appeared while waiting on a rate limit", self.name)
-                    break
                 rounds += 1
                 call_duration = self.clock() - call_started
                 model = reply.model
@@ -1121,33 +1117,29 @@ class AgentLoop:
     def _window_wait_s(self, exc: ChainExhausted, waited_s: float) -> float | None:
         """How long to wait out a per-minute rate limit, or None to give up.
 
-        None for anything that is not purely a window (``exc.windowed``), for a
-        refusal that says nothing about when it ends, for one that ends later
-        than any window could, and once the cycle has spent its
-        WINDOW_WAIT_BUDGET_S. Never less than a second, so a ``retry_at`` that
-        is already past (a skewed clock) cannot spin the round.
+        None for anything that is not purely a window (``exc.windowed``) and
+        once the cycle has spent its WINDOW_WAIT_BUDGET_S. Never less than a
+        second, so a ``retry_at`` that is already past (a skewed clock) cannot
+        spin the round.
         """
         if not exc.windowed or exc.retry_at is None:
             return None
         wait = max(1.0, exc.retry_at - self.clock() + WINDOW_WAIT_SLACK_S)
-        if wait > WINDOW_WAIT_MAX_S or waited_s + wait > WINDOW_WAIT_BUDGET_S:
+        if waited_s + wait > WINDOW_WAIT_BUDGET_S:
             return None
         return wait
 
-    async def _wait_out_window(self, seconds: float) -> bool:
-        """Sleep ``seconds`` in slices; False when PAUSE appeared meanwhile.
+    async def _wait_out_window(self, seconds: float) -> None:
+        """Sleep ``seconds`` in slices, stopping early if PAUSE appears.
 
         A cancel lands in the sleep like anywhere else and propagates, so
         shutdown is not held up by a rate limit.
         """
         remaining = seconds
-        while remaining > 0:
-            if self.pause_file.exists():
-                return False
+        while remaining > 0 and not self.pause_file.exists():
             step = min(remaining, WINDOW_WAIT_SLICE_S)
             await self._nap(step)
             remaining -= step
-        return not self.pause_file.exists()
 
     def _rounds_cap(self, key: str, model: str) -> int:
         """The rounds cap for whichever model just answered.

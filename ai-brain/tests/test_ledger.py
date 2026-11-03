@@ -447,11 +447,6 @@ def test_rounds_left_is_zero_when_the_tokens_are_already_gone(tmp_path):
     assert ledger.rounds_left("k", "brain", round_tokens=1000) == 0
 
 
-def test_rounds_left_ignores_negative_prices(tmp_path):
-    ledger = token_ledger(tmp_path, rpd=7)
-    assert ledger.rounds_left("k", "brain", round_tokens=-5, round_usd=-1.0) == 7
-
-
 @pytest.mark.parametrize("rpd", [3, 10, 11, 12, 30])
 @pytest.mark.parametrize(
     ("priority", "loops"),

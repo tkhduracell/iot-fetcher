@@ -654,9 +654,8 @@ def test_ledger_refuses_a_reserved_key_to_the_other_loop(tmp_path):
 # it is under can_spend's 4000-token estimate).
 
 
-def runway_chain(tmp_path, providers_limits, pools=None):
-    limits = {key: lim for key, lim in providers_limits}
-    ledger = Ledger(limits, tmp_path / "r.json", clock=lambda: T0, pools=pools)
+def runway_chain(tmp_path, providers_limits):
+    ledger = Ledger(dict(providers_limits), tmp_path / "r.json", clock=lambda: T0)
     return ProviderChain([FakeProvider(key, []) for key, _ in providers_limits], ledger), ledger
 
 

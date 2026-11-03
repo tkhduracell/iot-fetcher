@@ -609,7 +609,8 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
     if not groups:
         return ""
     entries = groups[:REJECTION_MEMORY_MAX_ENTRIES]
-    lines = ["# Filip has said no to"]
+    heading = "# Filip has said no to"
+    lines = []
     for group in entries:
         line = f"- {group.kind} / {group.target} (topic: {group.topic}): "
         line += f"rejected {group.count}x, last {group.last_at}"
@@ -625,9 +626,8 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
 
     text = _render(lines, 0)
     dropped = 0
-    while len(text) > REJECTION_MEMORY_MAX_CHARS and len(lines) > 1:
+    while len(heading) + 1 + len(text) > REJECTION_MEMORY_MAX_CHARS and lines:
         lines.pop()
         dropped += 1
         text = _render(lines, dropped)
-    heading, _, rows = text.partition("\n")
-    return f"{heading}\n{fence('rejections', rows, block=True)}"
+    return f"{heading}\n{fence('rejections', text, block=True)}"

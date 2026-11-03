@@ -15,9 +15,19 @@ from __future__ import annotations
 import re
 
 _SOURCE_RE = re.compile(r"[a-z0-9_.-]+")
+_UNSAFE_SOURCE_CHAR = re.compile(r"[^a-z0-9_.-]")
 _ZWSP = "\u200b"
 # Case-insensitive: HTML tag names are, so ``</EXTERNAL>`` closes the fence too.
 _FENCE_RE = re.compile(r"</?external", re.IGNORECASE)
+
+
+def safe_source(name: str) -> str:
+    """``name`` flattened to what ``fence`` accepts as a ``source``.
+
+    Each bad character is replaced, not collapsed or stripped, so a name that
+    is not ``filip`` cannot come out as ``filip``.
+    """
+    return _UNSAFE_SOURCE_CHAR.sub("_", name)
 
 
 def escape_fence(text: str) -> str:

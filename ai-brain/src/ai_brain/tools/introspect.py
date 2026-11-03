@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ai_brain import sensitive
+from ai_brain.fence import safe_source
 from ai_brain.introspection import proposal_loops, token_rows, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
@@ -246,8 +247,7 @@ def _fenced(kind: str, memory: MemoryDir, text: str) -> str:
     is. An expert's name is config rather than a stranger's, but it lands in an
     attribute value, so it is flattened to the fence's alphabet.
     """
-    name = re.sub(r"[^a-z0-9_.-]", "_", memory.name.lower())
-    return wrap_external(f"{kind}-{name}", text)
+    return wrap_external(f"{kind}-{safe_source(memory.name.lower())}", text)
 
 
 def _persona_preview(memory: MemoryDir) -> str:
@@ -260,22 +260,26 @@ def _gap_lines(memory: MemoryDir) -> str:
     return _fenced("gaps", memory, "\n".join(f"- {g.question}" for g in memory.gaps()))
 
 
-def _last_review(ctx: ToolContext, name: str) -> dict | None:
+def _latest_review(ctx: ToolContext, name: str) -> dict | None:
     brain = ctx.memories.get("brain")
-    if brain is None:
-        return None
-    reviews = brain.recent_reviews(name, n=1)
-    if not reviews:
+    reviews = brain.recent_reviews(name, n=1) if brain is not None else []
+    return reviews[0] if reviews else None
+
+
+def _last_review(ctx: ToolContext, name: str) -> dict | None:
+    latest = _latest_review(ctx, name)
+    if latest is None:
         return None
     # The findings are the brain's own words, but written after reading the
     # expert's memory, so they can quote it; fenced like the memory they quote.
-    review = dict(reviews[0])
+    review = dict(latest)
     if "findings" in review:
         review["findings"] = _fenced("review", ctx.memories[name], str(review["findings"]))
     return review
 
 
 def _one_expert_overview(ctx: ToolContext, memory: MemoryDir) -> dict:
+    stats = memory.fact_stats()
     return {
         "name": memory.name,
         "persona_preview": _persona_preview(memory),
@@ -285,12 +289,12 @@ def _one_expert_overview(ctx: ToolContext, memory: MemoryDir) -> dict:
                 "writes": stat.writes,
                 "first_written_at": stat.first_written_at,
             }
-            for stat in memory.fact_stats()
+            for stat in stats
         ],
         # Titles are free text, so they share one fence rather than one each:
         # forty facts would otherwise spend forty fences on a listing.
         "fact_titles": _fenced(
-            "titles", memory, "\n".join(f"{s.name}: {s.title}" for s in memory.fact_stats())
+            "titles", memory, "\n".join(f"{s.name}: {s.title}" for s in stats)
         ),
         "open_gaps": _gap_lines(memory),
         "unread_notes": len(memory.unread_notes()),
@@ -319,7 +323,7 @@ async def _expert_overview(ctx: ToolContext, args: dict) -> str:
     rows = []
     for expert_name in _expert_names(ctx):
         memory = ctx.memories[expert_name]
-        review = _last_review(ctx, expert_name)
+        review = _latest_review(ctx, expert_name)
         rows.append(
             {
                 "name": expert_name,

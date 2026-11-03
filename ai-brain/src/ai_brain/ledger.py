@@ -25,6 +25,7 @@ crash mid-write never leaves a torn ledger.
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import json
 import os
@@ -41,6 +42,10 @@ PACIFIC = ZoneInfo("America/Los_Angeles")
 
 WINDOW_S = 60.0
 EXPERT_FLOOR = 0.4
+# The refusals that clear by themselves within a minute: a rolling window, not
+# a spent day. Tells ``rounds_left`` a busy minute is not an empty day, and the
+# chain's ``ChainExhausted.windowed`` when a round is worth waiting out.
+WINDOW_REASONS = frozenset({"rpm", "tpm"})
 BACKOFF_BASE_S = 60.0
 BACKOFF_MAX_S = 3600.0
 EXHAUSTED_AFTER_429 = 3
@@ -118,12 +123,6 @@ def period_start(today: date, billing_day: int) -> date:
 
 def next_period_start(start: date, billing_day: int) -> date:
     return _clamped(*_shift_month(start.year, start.month, 1), billing_day)
-
-
-def _usd(amount: float) -> float:
-    """``amount`` to the nano-dollar, for comparing dollar sums that differ
-    only by float noise (a billionth of a dollar is below any real price)."""
-    return round(amount, 9)
 
 
 def _midnight(day: date) -> float:
@@ -378,16 +377,12 @@ class Ledger:
         allowance, nxt = self._sync_pool(state, now)
         if state.exhausted_until is not None and now < state.exhausted_until:
             return Decision(False, state.exhausted_until, "exhausted")
-        # Compared in whole nano-dollars: ``record`` adds each round's cost to
-        # the total one at a time, while a prediction adds ``rounds * cost``,
-        # and the two sums can differ by a float ulp -- enough to disagree on
-        # whether 10 rounds of $0.10 have reached a $1.00 allowance.
-        if _usd(state.usd_period + extra_usd) >= _usd(state.pool.monthly_usd):
+        if state.usd_period + extra_usd >= state.pool.monthly_usd:
             return Decision(False, _midnight(nxt), "usd_month")
-        if _usd(state.usd_day + extra_usd) >= _usd(allowance):
+        if state.usd_day + extra_usd >= allowance:
             return Decision(False, _next_midnight(now), "usd_day")
         if priority == "expert" and (
-            _usd(state.usd_day_expert + extra_usd) >= _usd(allowance * (1.0 - EXPERT_FLOOR))
+            state.usd_day_expert + extra_usd >= allowance * (1.0 - EXPERT_FLOOR)
         ):
             return Decision(False, _next_midnight(now), "priority")
         return None
@@ -496,17 +491,16 @@ class Ledger:
         those two budgets are only checked as they stand, which is all a
         caller can say before it has seen a round.
         """
-        decision = self.can_spend(key, priority)
-        if not decision.allowed and decision.reason not in ("rpm", "tpm"):
+        if not self.can_spend_today(key, priority):
             return 0
         bucket = self._buckets[key]
         now = self._clock()
-        tokens = max(0, int(round_tokens))
-        usd = max(0.0, float(round_usd))
 
         def refused(rounds: int) -> bool:
             return (
-                self._budget_refusal(bucket, priority, now, rounds, rounds * tokens, rounds * usd)
+                self._budget_refusal(
+                    bucket, priority, now, rounds, rounds * round_tokens, rounds * round_usd
+                )
                 is not None
             )
 
@@ -514,14 +508,13 @@ class Ledger:
         # that would be refused can be searched for. Round 0 is the key as it
         # stands, which can_spend just allowed; the daily request cap is
         # reached at the latest after ``rpd - requests_day`` rounds.
-        low, high = 0, max(1, bucket.limits.rpd - bucket.requests_day)
-        while high - low > 1:
-            mid = (low + high) // 2
-            if refused(mid):
-                high = mid
-            else:
-                low = mid
-        return high
+        cap = bucket.limits.rpd - bucket.requests_day
+        return bisect.bisect_left(range(cap), True, lo=1, key=refused)
+
+    def can_spend_today(self, key: str, priority: Priority) -> bool:
+        """``can_spend``, not counting a per-minute window against the key."""
+        decision = self.can_spend(key, priority)
+        return decision.allowed or decision.reason in WINDOW_REASONS
 
     def limits(self, key: str) -> Limits | None:
         """The configured budget for a key, or None when it has no bucket.

@@ -616,8 +616,8 @@ every model key. Nothing calls a provider without asking it first.
   loop sleeps until the oldest request leaves the window (plus half a second)
   and asks again, rather than ending the cycle `no_budget` and discarding the
   transcript. The wait is outside the per-call timeout, sliced into 2-second
-  naps so a `PAUSE` file or a shutdown is noticed at once, at most 75 s each
-  and 10 minutes per cycle; past that, or for anything that is not a window (a
+  naps so a `PAUSE` file or a shutdown is noticed at once, and at most 10
+  minutes per cycle; past that, or for anything that is not a window (a
   spent day, a parked key, a failing provider), the cycle ends as before.
   Because the wait is only a minute, `rounds_left` still ignores `rpm`/`tpm`.
 - **Experts starve first.** An expert may only spend while both remaining
