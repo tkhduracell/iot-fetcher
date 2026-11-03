@@ -97,30 +97,30 @@ def test_expert_allowed_above_40_percent(tmp_path):
     assert ledger.can_spend("gemini:a", "expert").allowed
 
 
-def test_requests_left_counts_the_daily_budget_down(tmp_path):
+def test_rounds_left_counts_the_daily_budget_down(tmp_path):
     ledger, st = make(tmp_path)
-    assert ledger.requests_left("gemini:a", "brain") == 10
+    assert ledger.rounds_left("gemini:a", "brain") == 10
     for _ in range(3):
         st["t"] += 61
         ledger.record("gemini:a", 1, 1)
-    assert ledger.requests_left("gemini:a", "brain") == 7
+    assert ledger.rounds_left("gemini:a", "brain") == 7
 
 
-def test_requests_left_stops_an_expert_at_the_floor(tmp_path):
+def test_rounds_left_stops_an_expert_at_the_floor(tmp_path):
     ledger, st = make(tmp_path)
-    assert ledger.requests_left("gemini:a", "expert") == 6
+    assert ledger.rounds_left("gemini:a", "expert") == 6
     for _ in range(5):
         st["t"] += 61
         ledger.record("gemini:a", 1, 1)
-    assert ledger.requests_left("gemini:a", "expert") == 1
-    assert ledger.requests_left("gemini:a", "brain") == 5
+    assert ledger.rounds_left("gemini:a", "expert") == 1
+    assert ledger.rounds_left("gemini:a", "brain") == 5
     st["t"] += 61
     ledger.record("gemini:a", 1, 1)
-    assert ledger.requests_left("gemini:a", "expert") == 0
+    assert ledger.rounds_left("gemini:a", "expert") == 0
 
 
 @pytest.mark.parametrize("rpd", [1, 3, 5, 7, 10, 11, 12, 100, 200])
-def test_requests_left_agrees_with_can_spend_at_the_floor(tmp_path, rpd):
+def test_rounds_left_agrees_with_can_spend_at_the_floor(tmp_path, rpd):
     """The count must be exactly how many more can_spend would allow."""
     limits = {"k": Limits(rpm=10**6, tpm=10**9, rpd=rpd)}
     ledger = Ledger(limits, tmp_path / "l.json", clock=lambda: 1_757_000_000.0)
@@ -129,29 +129,29 @@ def test_requests_left_agrees_with_can_spend_at_the_floor(tmp_path, rpd):
         ledger.record("k", 1, 1)
         spent += 1
     fresh = Ledger(limits, tmp_path / "other.json", clock=lambda: 1_757_000_000.0)
-    assert fresh.requests_left("k", "expert") == spent
+    assert fresh.rounds_left("k", "expert") == spent
 
 
-def test_requests_left_is_zero_for_anything_that_will_not_clear_soon(tmp_path):
+def test_rounds_left_is_zero_for_anything_that_will_not_clear_soon(tmp_path):
     limits = {
         "res": Limits(rpm=100, tpm=10**6, rpd=10, loops=frozenset({"expert"})),
         "dead": Limits(rpm=100, tpm=10**6, rpd=10),
     }
     ledger = Ledger(limits, tmp_path / "l.json", clock=lambda: 1_757_000_000.0)
-    assert ledger.requests_left("res", "brain") == 0
-    assert ledger.requests_left("unknown", "brain") == 0
+    assert ledger.rounds_left("res", "brain") == 0
+    assert ledger.rounds_left("unknown", "brain") == 0
     ledger.record_not_found("dead")
-    assert ledger.requests_left("dead", "brain") == 0
+    assert ledger.rounds_left("dead", "brain") == 0
     ledger.record_429("dead", 120)
-    assert ledger.requests_left("dead", "brain") == 0
+    assert ledger.rounds_left("dead", "brain") == 0
 
 
-def test_requests_left_ignores_the_per_minute_windows(tmp_path):
+def test_rounds_left_ignores_the_per_minute_windows(tmp_path):
     ledger, _ = make(tmp_path)
     for _ in range(2):  # rpm=2 is now full
         ledger.record("gemini:a", 1, 1)
     assert ledger.can_spend("gemini:a", "brain").reason == "rpm"
-    assert ledger.requests_left("gemini:a", "brain") == 8
+    assert ledger.rounds_left("gemini:a", "brain") == 8
 
 
 def test_rpd_exhausted_for_brain(tmp_path):
@@ -395,3 +395,85 @@ def test_usage_reflects_a_blocked_key(tmp_path):
 
     assert usage["keys"][0]["consecutive_429"] == 1
     assert usage["keys"][0]["blocked_until"] is not None
+
+
+# --- rounds_left beyond the request count -----------------------------------
+#
+# tpm=100 gives a synthetic daily token budget of 14400 and, being under the
+# 4000-token estimate, never throttles by itself -- so what these keys can run
+# out of is exactly the day's requests, the day's tokens and the expert floor.
+
+DAY_TOKENS = 14_400
+
+
+def token_ledger(path, rpd=10**6, loops=None, t0=1_757_000_000.0):
+    limits = {"k": Limits(rpm=10**6, tpm=100, rpd=rpd, loops=loops)}
+    assert limits["k"].daily_tokens == DAY_TOKENS
+    return Ledger(limits, path / "t.json", clock=lambda: t0)
+
+
+def test_rounds_left_counts_the_daily_tokens_down(tmp_path):
+    ledger = token_ledger(tmp_path)
+    # Unpriced, only the request budget speaks and it is huge.
+    assert ledger.rounds_left("k", "brain") == 10**6
+    # 1000 a round: 15 rounds start below 14400 (0..14000), the 16th would not.
+    assert ledger.rounds_left("k", "brain", round_tokens=1000) == 15
+    ledger.record("k", 4000, 1000)
+    assert ledger.rounds_left("k", "brain", round_tokens=1000) == 10
+
+
+def test_rounds_left_takes_the_tighter_of_requests_and_tokens(tmp_path):
+    ledger = token_ledger(tmp_path, rpd=5)
+    assert ledger.rounds_left("k", "brain", round_tokens=1000) == 5
+    assert ledger.rounds_left("k", "brain", round_tokens=5000) == 3
+
+
+def test_rounds_left_stops_an_expert_at_the_token_floor(tmp_path):
+    ledger = token_ledger(tmp_path)
+    # An expert on a shared key is refused once 60% of the day's tokens (8640)
+    # are spent: at 1000 a round that is 9 rounds (0..8000).
+    assert ledger.rounds_left("k", "expert", round_tokens=1000) == 9
+    assert ledger.rounds_left("k", "brain", round_tokens=1000) == 15
+    # On a key only experts may use there is no brain share to hold back.
+    (tmp_path / "only").mkdir()
+    only = token_ledger(tmp_path / "only", loops=frozenset({"expert"}))
+    assert only.rounds_left("k", "expert", round_tokens=1000) == 15
+
+
+def test_rounds_left_is_zero_when_the_tokens_are_already_gone(tmp_path):
+    ledger = token_ledger(tmp_path)
+    ledger.record("k", DAY_TOKENS, 0)
+    assert ledger.can_spend("k", "brain").reason == "rpd"
+    assert ledger.rounds_left("k", "brain", round_tokens=1000) == 0
+
+
+@pytest.mark.parametrize("rpd", [3, 10, 11, 12, 30])
+@pytest.mark.parametrize(
+    ("priority", "loops"),
+    [("brain", None), ("expert", None), ("expert", frozenset({"expert"}))],
+)
+@pytest.mark.parametrize("already", [0, 1, 4321])
+@pytest.mark.parametrize(
+    "round_tokens", [0, 1, 100, 999, 1000, 1001, 1500, 7000, DAY_TOKENS - 1, DAY_TOKENS, 50_000]
+)
+def test_rounds_left_is_exactly_how_many_rounds_can_spend_admits(
+    tmp_path, rpd, priority, loops, already, round_tokens
+):
+    """The count and the verdict share their rules; this holds them to it at
+    every boundary: the last counted round is admitted and the next is refused."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    predicted = token_ledger(tmp_path / "a", rpd=rpd, loops=loops)
+    actual = token_ledger(tmp_path / "b", rpd=rpd, loops=loops)
+    for ledger in (predicted, actual):
+        if already:
+            ledger.record("k", already, 0)
+
+    n = predicted.rounds_left("k", priority, round_tokens=round_tokens)
+
+    admitted = 0
+    while actual.can_spend("k", priority).allowed:
+        actual.record("k", round_tokens, 0)
+        admitted += 1
+        assert admitted <= rpd  # the request cap alone ends it; more is a test bug
+    assert n == admitted

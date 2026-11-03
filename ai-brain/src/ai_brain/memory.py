@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ai_brain.fence import fence
+from ai_brain.errors import BadInput
+from ai_brain.fence import fence, safe_source
 from ai_brain.redact import redact
 
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -111,7 +112,7 @@ def now_utc() -> datetime:
 def safe_name(name: str) -> str:
     """Validate a memory item name. Tools take names, never paths."""
     if not isinstance(name, str) or not SAFE_NAME.match(name):
-        raise ValueError(f"unsafe memory name: {name!r}")
+        raise BadInput(f"unsafe memory name: {name!r}")
     return name
 
 
@@ -756,20 +757,46 @@ class MemoryDir:
         The stable half -- constitution and identity/persona -- changes only
         when someone rewrites it, so a provider with a prefix cache can keep
         it (and the tool list ahead of it) warm across cycles that run close
-        together. Everything that moves from cycle to cycle is in the second.
+        together. The second half is what moves between cycles: the fact names.
 
-        Only text this system wrote itself belongs here. The journal and the
-        inbox carry words from other agents -- and, by way of the researcher's
-        web reads, from strangers -- so they are in neither half; see
+        Only text that cannot carry instructions belongs here: the constitution
+        and the persona, which a person writes (the brain's identity is the one
+        exception -- it rewrites it, see below), and fact *names*, which
+        ``safe_name`` limits to ``[a-z0-9_.-]``. Free text an agent wrote --
+        goals, gaps, the journal, the inbox -- may have been copied from a web
+        page by way of the researcher, so none of it is in either half; see
         ``external_parts``.
+
+        The brain's identity stays: it is the one place the system prompt says
+        who the brain is, and it is the brain's to rewrite. That is a decision
+        for Filip rather than a bug to fix quietly here.
         """
         stable = [f"# Constitution\n{constitution}"]
         stable.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
-        parts = []
-        if self.is_brain:
-            parts.append(f"# Goals\n{self.goals_text()}")
         facts = "\n".join(f"- {n}" for n in self.list_facts())
-        parts.append(f"# Facts available (use read_fact)\n{facts}")
+        return "\n\n".join(stable), f"# Facts available (use read_fact)\n{facts}"
+
+    def external_parts(self, notes: list[Note]) -> str:
+        """The goals, open gaps, journal and inbox, each fenced, for the user turn.
+
+        None of it is instructions. The inbox holds what other loops chose to
+        send -- an expert that has just read a web page included -- and the
+        journal, the goals and the gaps hold whatever earlier cycles wrote
+        down, which may have copied from the same place. In the system prompt
+        that text would speak with the same voice as the constitution; in a
+        fence in the user turn it is data, with where it came from named in the
+        fence's tag where the text cannot reach it. The goals and gaps are
+        still the agent's own agenda -- the cycle instructions say so -- they
+        just cannot give orders.
+
+        ``notes`` is the inbox the caller already read. A loop marks exactly
+        that list done at the end of the cycle, so re-reading the directory
+        here would render a note that then stays unread -- shown once for free,
+        and again next cycle.
+        """
+        sections = []
+        if self.is_brain:
+            sections.append(f"# Goals\n{_block_or_empty('goals', self.goals_text())}")
         open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
         # Silence when there is nothing unknown: an empty heading is pure
         # prompt budget, and the cap is there because a brain that opens gaps
@@ -781,29 +808,11 @@ class MemoryDir:
                 f"- [{g.id}] {g.question}" + (f" ({g.why})" if g.why else "")
                 for g in open_gaps
             )
-            parts.append(f"## Öppna luckor\n{luckor}")
-        return "\n\n".join(stable), "\n\n".join(parts)
-
-    def external_parts(self, notes: list[Note]) -> str:
-        """The journal and the inbox, each fenced, for the cycle's user turn.
-
-        Neither is instructions. The inbox holds what other loops chose to
-        send -- an expert that has just read a web page included -- and the
-        journal holds whatever earlier cycles wrote down, which may have
-        copied from the same place. In the system prompt that text would speak
-        with the same voice as the constitution; in a fence in the user turn
-        it is data, with the sender named in the fence's tag where the text
-        cannot reach it.
-
-        ``notes`` is the inbox the caller already read. A loop marks exactly
-        that list done at the end of the cycle, so re-reading the directory
-        here would render a note that then stays unread -- shown once for free,
-        and again next cycle.
-        """
-        journal = self.journal_text(2)
-        journal_block = fence("journal", journal, block=True) if journal.strip() else "(empty)"
+            sections.append(f"# Open gaps (Öppna luckor)\n{fence('gaps', luckor, block=True)}")
         inbox = render_inbox(notes)
-        return f"# Journal (last 2 days)\n{journal_block}\n\n# Inbox\n{inbox or '(empty)'}"
+        sections.append(f"# Journal (last 2 days)\n{_block_or_empty('journal', self.journal_text(2))}")
+        sections.append(f"# Inbox\n{inbox or '(empty)'}")
+        return "\n\n".join(sections)
 
     # -- housekeeping --------------------------------------------------
 
@@ -848,13 +857,20 @@ class MemoryDir:
 
 
 def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
-    """The inbox section, held to ``budget`` characters of note bodies.
+    """The inbox section, held to about ``budget`` characters of full notes.
 
     Notes are kept in full newest first while they fit the budget; a note
     that does not fit becomes a one-line preview (sender, time, the opening
     words), enough to tell what it was about and ask its sender if it
     matters, and older notes that still fit stay in full. Filip's notes never
     shrink and never spend the budget. Output stays in arrival order.
+
+    A full note is charged for everything it puts in the prompt -- its heading
+    and the fence round it as well as the body -- because the fence is resent
+    on every round of the cycle like the text inside it. Charging the body
+    alone let thirty short notes spend ~40 characters each, unbudgeted. A
+    preview is not charged: it is the cheap form already, and is capped by its
+    own length rather than by this budget.
 
     Every note body is fenced, preview or not. The fence's ``source`` names the
     sender, from the note's own header rather than its text, and the fence's
@@ -871,10 +887,11 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
         head = f"from: {label} ({_iso(note.created)})"
         source = f"note-{label}"
         owner = note.sender == OWNER_SENDER
-        if owner or len(note.body) <= left:
+        full = f"## {head}\n{fence(source, note.body, block=True)}"
+        if owner or len(full) <= left:
             if not owner:
-                left -= len(note.body)
-            shown.append(f"## {head}\n{fence(source, note.body, block=True)}")
+                left -= len(full)
+            shown.append(full)
         else:
             short += 1
             preview = " ".join(note.body[: INBOX_PREVIEW_CHARS * 2].split())
@@ -889,16 +906,18 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
     return "\n\n".join(reversed(shown))
 
 
+def _block_or_empty(source: str, text: str) -> str:
+    return fence(source, text, block=True) if text.strip() else "(empty)"
+
+
 def _label(sender: str) -> str:
     """A sender name as safe for a fence's ``source`` and the line above it.
 
     ``drop_note`` only writes names that pass ``safe_name``, so this changes
     nothing for a real note. It is for a header edited by hand: that "name" must
-    not carry text of its own outside the fence, or come out as ``filip`` --
-    which is why each bad character is replaced, not collapsed and stripped the
-    way ``slug_name`` does.
+    not carry text of its own outside the fence, or come out as ``filip``.
     """
-    return re.sub(r"[^a-z0-9_.-]", "_", sender)
+    return safe_source(sender)
 
 
 def _stamps(directory: Path) -> list[int]:

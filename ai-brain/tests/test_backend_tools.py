@@ -909,6 +909,22 @@ async def test_docker_tools_refuse_a_bad_container_name_before_any_request(
     assert not anything.called
 
 
+@pytest.mark.parametrize("tool", ["docker_top", "docker_logs"])
+@respx.mock
+async def test_a_bad_container_name_is_refused_without_logging_a_crash(
+    registry, ctx, tool, caplog
+):
+    # Refused input is not a tool crash: dispatch logs a WARNING with a
+    # traceback for those, which would bury a real crash among model typos.
+    anything = respx.route().mock(return_value=httpx.Response(200, json={}))
+    with caplog.at_level("DEBUG"):
+        out = await call(registry, ctx, tool, container="x/json#")
+
+    assert "invalid container name" in out["error"]
+    assert not anything.called
+    assert not [r for r in caplog.records if r.levelname in ("WARNING", "ERROR") or r.exc_info]
+
+
 @pytest.mark.parametrize("name", ["iot-fetcher", "abc123def456", "a_b.c-d", "A1"])
 @respx.mock
 async def test_docker_tools_accept_ordinary_names_and_ids(registry, ctx, name):

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ai_brain import sensitive
+from ai_brain.fence import safe_source
 from ai_brain.introspection import proposal_loops, token_rows, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
@@ -40,7 +41,7 @@ from ai_brain.redact import redact
 from ai_brain.regex_safety import check_pattern
 from ai_brain.repo import RepoSnapshot
 from ai_brain.sensitive import is_sensitive
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
+from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
 
 log = logging.getLogger(__name__)
 
@@ -235,33 +236,67 @@ def _expert_names(ctx: ToolContext) -> list[str]:
     return sorted(n for n in ctx.memories if n != "brain")
 
 
+def _fenced(kind: str, memory: MemoryDir, text: str) -> str:
+    """``text`` from another agent's memory, fenced with whose it is.
+
+    Everything an expert wrote -- persona, journal, fact titles and bodies,
+    gaps -- may carry words from a web page it read, and the brain, which holds
+    ``propose`` and ``slack_post``, is the loop that must not take them for
+    instructions. The fence says which agent and which file (``journal-energy``),
+    so a journal line claiming to be a different agent still reads as what it
+    is. An expert's name is config rather than a stranger's, but it lands in an
+    attribute value, so it is flattened to the fence's alphabet.
+    """
+    return wrap_external(f"{kind}-{safe_source(memory.name.lower())}", text)
+
+
 def _persona_preview(memory: MemoryDir) -> str:
     lines = memory.persona_text().splitlines()
-    return "\n".join(lines[:PERSONA_PREVIEW_LINES])
+    return _fenced("persona", memory, "\n".join(lines[:PERSONA_PREVIEW_LINES]))
 
 
-def _last_review(ctx: ToolContext, name: str) -> dict | None:
+def _gap_lines(memory: MemoryDir) -> str:
+    """The open gaps as one fenced block of questions, one per line."""
+    return _fenced("gaps", memory, "\n".join(f"- {g.question}" for g in memory.gaps()))
+
+
+def _latest_review(ctx: ToolContext, name: str) -> dict | None:
     brain = ctx.memories.get("brain")
-    if brain is None:
-        return None
-    reviews = brain.recent_reviews(name, n=1)
+    reviews = brain.recent_reviews(name, n=1) if brain is not None else []
     return reviews[0] if reviews else None
 
 
+def _last_review(ctx: ToolContext, name: str) -> dict | None:
+    latest = _latest_review(ctx, name)
+    if latest is None:
+        return None
+    # The findings are the brain's own words, but written after reading the
+    # expert's memory, so they can quote it; fenced like the memory they quote.
+    review = dict(latest)
+    if "findings" in review:
+        review["findings"] = _fenced("review", ctx.memories[name], str(review["findings"]))
+    return review
+
+
 def _one_expert_overview(ctx: ToolContext, memory: MemoryDir) -> dict:
+    stats = memory.fact_stats()
     return {
         "name": memory.name,
         "persona_preview": _persona_preview(memory),
         "facts": [
             {
                 "name": stat.name,
-                "title": stat.title,
                 "writes": stat.writes,
                 "first_written_at": stat.first_written_at,
             }
-            for stat in memory.fact_stats()
+            for stat in stats
         ],
-        "open_gaps": [g.question for g in memory.gaps()],
+        # Titles are free text, so they share one fence rather than one each:
+        # forty facts would otherwise spend forty fences on a listing.
+        "fact_titles": _fenced(
+            "titles", memory, "\n".join(f"{s.name}: {s.title}" for s in stats)
+        ),
+        "open_gaps": _gap_lines(memory),
         "unread_notes": len(memory.unread_notes()),
         "last_review": _last_review(ctx, memory.name),
     }
@@ -282,13 +317,13 @@ async def _expert_overview(ctx: ToolContext, args: dict) -> str:
             if loop is None or loop.last_cycle is None
             else {"status": loop.last_cycle.status, "rounds": loop.last_cycle.rounds}
         )
-        detail["journal_tail"] = memory.journal_text(JOURNAL_DAYS)
+        detail["journal_tail"] = _fenced("journal", memory, memory.journal_text(JOURNAL_DAYS))
         return ok(detail)
 
     rows = []
     for expert_name in _expert_names(ctx):
         memory = ctx.memories[expert_name]
-        review = _last_review(ctx, expert_name)
+        review = _latest_review(ctx, expert_name)
         rows.append(
             {
                 "name": expert_name,
@@ -313,12 +348,12 @@ async def _read_expert(ctx: ToolContext, args: dict) -> str:
 
     what = str(args["what"])
     if what == "persona":
-        return ok({"persona": memory.persona_text()})
+        return ok({"persona": _fenced("persona", memory, memory.persona_text())})
     if what == "journal":
         days = int(args.get("days") or JOURNAL_DAYS)
-        return ok({"journal": memory.journal_text(max(1, days))})
+        return ok({"journal": _fenced("journal", memory, memory.journal_text(max(1, days)))})
     if what == "gaps":
-        return ok({"gaps": [q.question for q in memory.gaps()]})
+        return ok({"gaps": _gap_lines(memory)})
     if what == "fact":
         fact_name = args.get("fact")
         if not fact_name:
@@ -330,7 +365,13 @@ async def _read_expert(ctx: ToolContext, args: dict) -> str:
         if found is None:
             known = ", ".join(memory.list_facts())
             return err(f"unknown fact: {fact_name} (known: {known})")
-        return ok({"name": found.name, "title": found.title, "body": found.body})
+        return ok(
+            {
+                "name": found.name,
+                "title": _fenced("fact", memory, found.title),
+                "body": _fenced("fact", memory, found.body),
+            }
+        )
     return err(f"read_expert: unknown what={what!r} (one of {', '.join(_READ_WHATS)})")
 
 

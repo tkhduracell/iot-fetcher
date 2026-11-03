@@ -19,16 +19,23 @@ One **brain** loop plus up to five **expert** loops:
 | `researcher` | `seed/personas/researcher.md` | `EXPERT_HEARTBEAT_MIN` |
 | `infra` | `seed/personas/infra.md` | `EXPERT_HEARTBEAT_MIN` |
 
-Experts observe and report. They can query VictoriaMetrics, Home Assistant
-(entity states over its own MCP server with `ha_context`, and the tail of its
-log with `ha_error_log`, which is how a broken integration gets diagnosed
-rather than guessed at), gdrive-rag and the web, write facts into their own
-memory, and drop notes in the brain's inbox. `infra` and `brain` can also see
-the containers this system runs in (`docker_ps`, `docker_top`, `docker_logs`)
--- everyone else's tool surface stops at the house. A container name is
+Experts observe and report, and each has only its own slice of the tools
+(`loops=` in `tools/`): VictoriaMetrics (`vm_query`, `vm_metrics`) for `energy`,
+`health` and `house-ops`; Home Assistant for `house-ops` (entity states over its
+own MCP server with `ha_context`, and the tail of its log with `ha_error_log`,
+which is how a broken integration gets diagnosed rather than guessed at);
+gdrive-rag (`drive_search`) and the web (`web_search`, `web_fetch`) for the
+`researcher` alone, which has no metrics or Home Assistant; the Airbnb calendar
+for `researcher`, `energy` and `house-ops`. Every expert writes facts into its
+own memory and drops notes in the brain's inbox. `infra` and `brain` can also
+see the containers this system runs in (`docker_ps`, `docker_top`,
+`docker_logs`) -- `infra`'s whole tool surface -- and the brain has the metrics
+and Home Assistant tools too, but not the web or Drive: it asks the researcher
+by note. A container name is
 checked against Docker's own name rule before any request is built (in the
 tools, in `propose` and again in the executor), since it is model-supplied and
-lands in a URL path. They cannot act on the
+lands in a URL path. In the read tools a bad name comes back as an ordinary
+error for the model to read, not a logged tool crash. They cannot act on the
 house and they cannot talk to Slack.
 Everything those reads return is fenced as external text — the log included,
 since it carries whatever an integration decided to print.
@@ -252,9 +259,14 @@ A loop that wakes every hour and reads the same gauges will, left alone, write
   baseline; after that only departures are news. Threads beat snapshots, and
   the journal is written in the agent's own voice, opinions included. The bar
   is shared by every loop; the rest is by role, because the tool surfaces
-  differ. The brain's text also covers goals, introspection, `propose` and
-  answering Filip in Slack; an expert's instead says how to reach the brain
-  (`send_note` with `to="brain"`) rather than describing tools it does not have.
+  differ. The brain's text also covers goals, introspection, `propose`, looking
+  things up (including asking the researcher, since it has no web or Drive of its
+  own) and answering Filip in Slack; an expert's instead says how to reach the
+  brain (`send_note` with `to="brain"`) rather than describing tools it does not
+  have. The constitution is shared by all six loops, so it is role-neutral: it
+  says nothing about Slack, `propose` or approval, which are the brain's (the
+  rules that used to be there are in the brain's instructions), and a test
+  checks that the seed and the instructions name only tools the role has.
 - **An angle** is handed to each loop in the user turn — "chase one anomaly",
   "build a baseline", "pick up an open thread", "read rather than measure",
   "tend your memory". It rotates hourly and is offset per loop, so five loops
@@ -262,20 +274,30 @@ A loop that wakes every hour and reads the same gauges will, left alone, write
   everyone to the first angle. It is explicitly a suggestion: a loop that is
   mid-investigation is told to ignore it.
 
-**What goes where in the prompt.** The system messages hold only text this
-system wrote: constitution, persona, goals, instructions, fact names, open gaps
-and the rejection summary. The journal and the inbox are in the user turn
-instead, each inside an `<external>` fence (the same one tool results use, in
-`ai_brain/fence.py`, which defuses any `<external`/`</external` in the text so
-it cannot close the fence). A note's fence names its sender
+**What goes where in the prompt.** The system messages hold only text that
+cannot carry instructions: the constitution, the persona, the cycle
+instructions and fact names (which `safe_name` limits to `[a-z0-9_.-]`). Every
+free-text thing an agent wrote is in the user turn instead, each inside its own
+`<external>` fence (the same one tool results use, in `ai_brain/fence.py`, which
+defuses any `<external`/`</external` in the text so it cannot close the fence):
+`goals` (the brain's), `gaps`, `rejections` (the "Filip has said no to"
+summary, whose targets and topics come from earlier proposals), `journal` and
+one fence per inbox note. A note's fence names its sender
 (`source="note-energy"`), taken from the note's header, so a body claiming to be
 from Filip is still labelled as whoever really sent it. The cycle instructions
-say fenced text is data, with one exception: a `note-filip` fence is Filip, and what he
-tells the brain is still ground truth. The reason is the path from the
+say fenced text is data, with two exceptions to "someone else wrote it": a
+`note-filip` fence is Filip, and what he tells the brain is still ground truth,
+and the `goals` and `gaps` fences are the agent's own agenda -- worked on, but
+unable to give orders. The brain's `identity.md` is the one self-rewritten file
+that is still in the system message (see below). The reason is the path from the
 researcher: a web page it reads can end up in a note to the brain, which holds
 `propose` and `slack_post`, and in a system message that text would carry the
 same weight as the constitution. (A `topic:` first line stays the first line
 inside the fence, so thread routing and the owed-reply check are unaffected.)
+The inbox is held to about 12,000 characters of full notes, each charged for its
+heading and fence as well as its body (the fence is resent every round); older
+notes from other loops shrink to a one-line preview past that, and Filip's never
+shrink or spend the budget.
 
 The bar for Slack is unchanged and deliberate: a finding, not a status report.
 A quiet day stays quiet.
@@ -352,10 +374,17 @@ The quota clamps the cap too. A model with 11 requests a day (see
 [Quota](#quota)) cannot play a 32-round cycle, and without a clamp the nudge
 would wait for round 30 while the cycle met `ChainExhausted` at round 12 with
 nothing written down. After every round the loop asks the ledger how many
-requests the answering key has left (`Ledger.requests_left`: the daily budget,
-and the expert floor for an expert on a key the brain shares) and, when no
+rounds the answering key has left (`Ledger.rounds_left`) and, when no
 *other* provider this loop may use is dialable with quota left, caps the cycle
-at `rounds + remaining`. The same nudge then fires two rounds before that
+at `rounds + remaining`. "Left" is the least of every budget `can_spend`
+enforces -- the daily requests, the daily tokens, the expert floor on both for
+an expert on a key the brain shares, and a USD pool's month, day and expert
+share -- and the two are one piece of code (`Ledger._budget_refusal`), so they
+cannot disagree about where a budget runs out. Tokens and dollars are counted
+per round, priced at what the round just played cost (the conversation is
+resent whole each round, so the next costs at least as much; the nudge's two
+spare rounds absorb the difference); the per-minute windows are not counted,
+since they reopen by themselves. The same nudge then fires two rounds before that
 point, and a cycle that still does not call `end_cycle` ends `max_rounds` with
 a summary naming the quota. A cycle that can fall through to another model
 (`BRAIN_MODELS=all`, say, or an expert with a `lan:` host up) is not clamped,
@@ -443,7 +472,11 @@ them, and the only one whose job is to reflect on what it finds:
 - **`read_expert(name, what, fact?, days?)`** — read that expert's `persona`,
   `journal` (`days` back, default 2), one named `fact`, or its `gaps`.
   Read-only: there is no tool to write into another loop's memory, brain
-  included.
+  included. Both tools fence everything an expert wrote -- persona, journal,
+  fact titles and bodies, gaps, and the brain's own findings about it -- as
+  external text (`source="journal-energy"` and so on), since an expert may have
+  copied it from a web page and the brain is the loop that can `propose` and
+  post. Fact titles come as one `fact_titles` block, gaps as one `gaps` block.
 - **`review_expert(name, verdict, findings)`** — record a verdict (`good`,
   `stale`, `wrong`, `repetitive`, `off_goal`) in the brain's own
   `reviews/<name>.jsonl` (capped at the last 50). Anything but `good` also
@@ -575,6 +608,18 @@ every model key. Nothing calls a provider without asking it first.
 - **Budgets** are per key: `RPM` requests/minute, `TPM` tokens/minute (both on
   a rolling 60-second window) and `RPD` requests/day, plus a synthetic daily
   token cap so experts can be starved before the brain is.
+- **A per-minute window is waited out, not fatal.** `RPM` and `TPM` apply to
+  `gemini-3.8-flash` like any metered key (8 requests a minute by default), and
+  a brain with that one key can play nine fast rounds inside a minute. When the
+  only thing refusing a round is such a window -- no call failed, and the chain
+  has nothing else to fall to -- `ChainExhausted` is marked `windowed` and the
+  loop sleeps until the oldest request leaves the window (plus half a second)
+  and asks again, rather than ending the cycle `no_budget` and discarding the
+  transcript. The wait is outside the per-call timeout, sliced into 2-second
+  naps so a `PAUSE` file or a shutdown is noticed at once, and at most 10
+  minutes per cycle; past that, or for anything that is not a window (a
+  spent day, a parked key, a failing provider), the cycle ends as before.
+  Because the wait is only a minute, `rounds_left` still ignores `rpm`/`tpm`.
 - **Experts starve first.** An expert may only spend while both remaining
   daily fractions are above 40%. The last 40% of each day belongs to the brain.
 - **A 429 is authoritative.** The server's `Retry-After` wins over local

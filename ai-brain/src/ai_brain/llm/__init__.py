@@ -36,7 +36,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from ai_brain.config import match_by_model, think_value
-from ai_brain.ledger import Ledger, Limits, Priority
+from ai_brain.ledger import Ledger, Limits, Priority, WINDOW_REASONS
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from ai_brain.config import Settings
@@ -67,7 +67,7 @@ TIMEOUT_CHARGE_TOKENS = 4000
 # loop, and the per-minute windows. An
 # expert falling through to the LAN on every round is the design, so these
 # log at debug. See ``ProviderChain._log_skip``.
-_BY_DESIGN_SKIPS = frozenset({"priority", "reserved", "rpm", "tpm"})
+_BY_DESIGN_SKIPS = frozenset({"priority", "reserved"}) | WINDOW_REASONS
 
 # Every provider prefix ``from_settings`` knows how to build. Exported so the
 # supervisor can reject a typo'd LLM_CHAIN at startup rather than at the first
@@ -233,9 +233,16 @@ class ProviderError(Exception):
 class ChainExhausted(Exception):
     """No provider in the chain could serve the request."""
 
-    def __init__(self, retry_at: float | None = None):
+    def __init__(self, retry_at: float | None = None, windowed: bool = False):
         super().__init__(f"all providers exhausted; retry_at={retry_at}")
         self.retry_at = retry_at
+        # True when nothing was wrong beyond a per-minute window: at least one
+        # provider was refused only for ``rpm``/``tpm``, no call went out and
+        # failed, and ``retry_at`` is when the first of them reopens. A caller
+        # in the middle of something worth keeping can wait that out; every
+        # other exhaustion (a day's quota, a parked key, a failing provider) is
+        # not something to wait for inside a cycle.
+        self.windowed = windowed
 
 
 class Provider(ABC):
@@ -445,30 +452,42 @@ class ProviderChain:
         self._skipped[key] = reason
         log.warning("skipping %s: %s", key, reason)
 
-    def quota_runway(self, key: str, priority: Priority) -> int | None:
+    def quota_runway(
+        self,
+        key: str,
+        priority: Priority,
+        round_tokens: int = 0,
+        round_usd: float = 0.0,
+    ) -> int | None:
         """How many more rounds the quota allows, when ``key`` is all there is.
 
         A cycle's rounds cap is a ceiling on effort, not a promise that the
         quota will last that long: a model with 11 requests a day answering a
         32-round cycle is cut off by ``ChainExhausted`` mid-thought, with no
-        chance to write anything down. This is the number the loop clamps its
-        cap to so the wrap-up nudge lands while the cycle can still act on it.
+        chance to write anything down. The same goes for a day's tokens and a
+        USD pool, which run out in rounds too, just not a fixed number of
+        them. This is the number the loop clamps its cap to so the wrap-up
+        nudge lands while the cycle can still act on it: the least of every
+        budget ``can_spend`` enforces (see ``Ledger.rounds_left``), priced at
+        ``round_tokens``/``round_usd`` a round.
 
         ``None`` means no clamp: either nothing is known about ``key``, or
         some *other* provider this priority may use is dialable and has quota
         left. Falling through the chain is the design (a drained brain model
         hands the cycle to the next one), so a cycle that can fall through must
         not be cut short on the strength of the first model's budget. An
-        unmetered ``lan:`` key lands here too, through its own ``requests_left``.
+        unmetered ``lan:`` key lands here too, through its own ``rounds_left``.
+        All that matters about the other providers is whether they can take a
+        round at all.
         """
         if self.ledger.limits(key) is None:
             return None
         for provider in self.providers:
             if provider.key == key or not provider.available():
                 continue
-            if self.ledger.requests_left(provider.key, priority) > 0:
+            if self.ledger.can_spend_today(provider.key, priority):
                 return None
-        return self.ledger.requests_left(key, priority)
+        return self.ledger.rounds_left(key, priority, round_tokens, round_usd)
 
     async def complete(
         self,
@@ -491,6 +510,11 @@ class ProviderChain:
             if retry_at is not None and (earliest is None or retry_at < earliest):
                 earliest = retry_at
 
+        # See ChainExhausted.windowed: a per-minute refusal somewhere, and no
+        # provider that was actually called and failed.
+        window_refused = False
+        called_and_failed = False
+
         for provider in self.providers:
             key = provider.key
             if not provider.available():
@@ -500,6 +524,7 @@ class ProviderChain:
             if not decision.allowed:
                 self._log_skip(key, decision.reason)
                 remember(decision.retry_at)
+                window_refused = window_refused or decision.reason in WINDOW_REASONS
                 continue
             # Spendable again: forget what it was last refused for, so the
             # next refusal is heard even if it is the same reason as before.
@@ -519,10 +544,11 @@ class ProviderChain:
                     else "",
                 )
                 return reply
+            called_and_failed = True
 
         if earliest is None:
             earliest = self.ledger.next_available_at(priority)
-        raise ChainExhausted(retry_at=earliest)
+        raise ChainExhausted(retry_at=earliest, windowed=window_refused and not called_and_failed)
 
     async def _try(
         self,
