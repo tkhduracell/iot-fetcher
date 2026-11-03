@@ -597,7 +597,7 @@ def recover(
     path: Path,
     events: list[dict],
     read_only: Callable[[str], bool],
-    cap_result: Callable[[str, str], str],
+    cap_result: Callable[[str, str, int | None], str],
 ) -> Recovered:
     """Rebuild a cycle from its log. Runs nothing and writes nothing.
 
@@ -696,8 +696,15 @@ def recover(
             call_id = str(event.get("id"))
             result = str(event.get("result") or "")
             answered.add(call_id)
+            logged_at = seq if isinstance(seq, int) else None
             out.messages.append(
-                Message("tool", cap_result(name, result), tool_call_id=call_id, name=name)
+                Message(
+                    "tool",
+                    cap_result(name, result, logged_at),
+                    tool_call_id=call_id,
+                    name=name,
+                    log_seq=logged_at or 0,
+                )
             )
             if out.replies:
                 out.replies[-1].setdefault("results", []).append({"name": name, "result": result})
@@ -767,9 +774,9 @@ MAX_SEARCH_QUERY_CHARS = 200
 # A tool name is the model's to invent, and a hit carries it outside the fence.
 _MAX_HIT_TOOL_CHARS = 64
 
-# Its results are this log's own text coming back, and its arguments the words
+# Their results are this log's own text coming back, and their arguments the words
 # searched for. Searching either would make every search find the last one.
-_NOT_SEARCHED_TOOLS = frozenset({"search_history"})
+_NOT_SEARCHED_TOOLS = frozenset({"search_history", "read_cycle_events"})
 
 # ``json.dumps`` writes non-ASCII as an escape, which is what ``tools.ok`` does to
 # every result: a logged one holds the six characters of an escape where the tool
@@ -882,6 +889,91 @@ def search_sessions(
             if len(hits) >= limit:
                 return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
     return {"hits": hits, "cycles_scanned": scanned, "truncated": False}
+
+
+# read_cycle_events' bounds, held under the loop's MAX_TOOL_RESULT_CHARS so that
+# fetching a truncated result does not itself get truncated.
+MAX_READ_RESULT_CHARS = 12_000
+MAX_READ_EVENTS = 50
+# What each event costs on top of its text: its other fields, and the fence.
+_READ_EVENT_OVERHEAD_CHARS = 160
+
+
+def event_text(event: dict) -> str:
+    """One event's text, as a person reading the log would want it."""
+    kind = event.get("type")
+    if kind == "tool_result":
+        return str(event.get("result") or "")
+    if kind == "reply":
+        parts = [str(event.get("text") or ""), str(event.get("thinking") or "")]
+        parts += [
+            f"called {c.get('name')}({json.dumps(c.get('args'), ensure_ascii=False)})"
+            for c in event.get("tool_calls") or []
+            if isinstance(c, dict)
+        ]
+        return "\n".join(part for part in parts if part)
+    if kind == "memory":
+        return f"{event.get('op')} {event.get('name')}, replacing:\n{event.get('old') or ''}"
+    if kind == "message":
+        return str(event.get("content") or "")
+    if kind == "opening":
+        return "\n\n".join(
+            f"[{m.get('role')}] {m.get('content')}"
+            for m in event.get("messages") or []
+            if isinstance(m, dict)
+        )
+    if kind == "cycle_end":
+        return str(event.get("summary") or "")
+    return ""
+
+
+def read_range(path: Path, start: int, end: int, offset: int = 0) -> dict:
+    """Events ``start``..``end`` of one log, cut to ``MAX_READ_RESULT_CHARS``.
+
+    ``offset`` is how far into the first event to begin, so one event longer
+    than a page can be read in pieces. A cut comes back as ``next``, the exact
+    arguments of the following call, so the model does not have to work it out.
+    """
+    wanted = [
+        e for e in read_events(path) if isinstance(e.get("seq"), int) and start <= e["seq"] <= end
+    ]
+    out: list[dict] = []
+    left = MAX_READ_RESULT_CHARS
+    next_args: dict | None = None
+    for event in wanted[:MAX_READ_EVENTS]:
+        text = event_text(event)
+        skip = offset if not out else 0
+        left -= _READ_EVENT_OVERHEAD_CHARS
+        chunk = _fit_encoded(text[skip:], left)
+        entry = {"seq": event["seq"], "type": event.get("type"), "text": chunk}
+        for key in ("name", "round"):
+            if event.get(key) is not None:
+                entry[key] = event[key]
+        if skip + len(chunk) < len(text):
+            entry["chars_total"] = len(text)
+            next_args = {"from": event["seq"], "to": end, "offset": skip + len(chunk)}
+        out.append(entry)
+        left -= len(json.dumps(chunk))
+        if next_args is not None:
+            break
+        if left <= 0:
+            following = event["seq"] + 1
+            if following <= end:
+                next_args = {"from": following, "to": end, "offset": 0}
+            break
+    if next_args is None and len(wanted) > MAX_READ_EVENTS:
+        next_args = {"from": wanted[MAX_READ_EVENTS]["seq"], "to": end, "offset": 0}
+    return {"events": out, "next": next_args}
+
+
+def _fit_encoded(text: str, budget: int) -> str:
+    """The longest prefix whose JSON encoding fits ``budget``. A tool result is
+    JSON, so escaping counts, and a result full of quotes can double in size."""
+    budget = max(budget, 0)
+    chunk = text[:budget]
+    while chunk and len(json.dumps(chunk)) > budget:
+        chunk = chunk[: len(chunk) * 3 // 4]
+    return chunk
 
 
 def session_files(directory: Path) -> list[Path]:

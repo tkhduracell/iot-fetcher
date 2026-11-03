@@ -133,7 +133,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `AIRBNB_ICAL_URL` | — | Secret iCal address of the Airbnb calendar (🏡 house, 📎 annex). A credential: env only, never logged or returned by a tool. Enables `airbnb_calendar` for researcher, energy and house-ops, and an hourly job that posts a Slack cleaning reminder for back-to-back changeovers. |
 | `AIRBNB_REMINDER_HOUR` | `18` | Stockholm hour after which tomorrow's back-to-back changeovers are reminded about. A same-day changeover is reminded at any hour, so a restart can't swallow it. |
 | `GEMINI_API_KEY` | — | Google AI Studio key. Required whenever `LLM_CHAIN` has a `gemini:` entry; the process refuses to start without it. |
-| `NUM_CTX_BY_MODEL` | `lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384` | Context window (tokens) requested per call, via `options.num_ctx` on Ollama's native `/api/chat` endpoint, for `ollama:` and `lan:` providers: comma-separated `pattern=N` entries, matched fnmatch-style against the `LLM_CHAIN` entry (`lan:qwen3.8:27b-mlx`) when the chain is built. First match wins; no match falls back to 32768 for `lan:` (a desktop on the LAN) and 16384 for `ollama:` (the rpi5's own in-compose service, 8GB RAM). `gemini:` entries ignore it. `N` must be 4096-262144 -- a malformed entry is a startup error. Unset or blank uses this default; `none`/`off` leaves every provider on its fallback. Ollama's own server default is 4096 and it truncates an oversized prompt silently **from the front** -- dropping the persona/system turn a cycle needs most -- so the window is always set explicitly; observed cycle prompts run ~9.7k-30k tokens. The per-request value overrides the server's own default, so keep `N` within what the host can hold in RAM. The `ollama` service in `docker-compose.yml` sets `OLLAMA_CONTEXT_LENGTH=16384` as a server-side fallback for clients that do not send `options.num_ctx`. This option is native-API-only: `/v1/chat/completions` ignores per-request `options`. When a prompt is estimated to exceed the budget, the provider logs a warning and trims the oldest tool-result messages rather than letting the server truncate the front. |
+| `NUM_CTX_BY_MODEL` | `lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384` | Context window (tokens) requested per call, via `options.num_ctx` on Ollama's native `/api/chat` endpoint, for `ollama:` and `lan:` providers: comma-separated `pattern=N` entries, matched fnmatch-style against the `LLM_CHAIN` entry (`lan:qwen3.8:27b-mlx`) when the chain is built. First match wins; no match falls back to 32768 for `lan:` (a desktop on the LAN) and 16384 for `ollama:` (the rpi5's own in-compose service, 8GB RAM). `gemini:` entries ignore it. `N` must be 4096-262144 -- a malformed entry is a startup error. Unset or blank uses this default; `none`/`off` leaves every provider on its fallback. Ollama's own server default is 4096 and it truncates an oversized prompt silently **from the front** -- dropping the persona/system turn a cycle needs most -- so the window is always set explicitly; observed cycle prompts run ~9.7k-30k tokens. The per-request value overrides the server's own default, so keep `N` within what the host can hold in RAM. The `ollama` service in `docker-compose.yml` sets `OLLAMA_CONTEXT_LENGTH=16384` as a server-side fallback for clients that do not send `options.num_ctx`. This option is native-API-only: `/v1/chat/completions` ignores per-request `options`. When a prompt would not fit, the loop trims it first -- see [What a model sees](#what-a-model-sees). |
 | `THINK_BY_MODEL` | `lan:qwen3.8*=xhigh` | Ollama's `think` field per model, for `ollama:` and `lan:` providers: `pattern=level` entries matched like `NUM_CTX_BY_MODEL`. `level` is `true`, `false`, `low`, `medium`, `high` or `xhigh`; anything else is a startup error. No match sends no `think` (the model's own default). Qwen3.8 on Ollama only knows `false`/`low`/`medium`/`xhigh` and silently runs `medium` for anything else, so use `xhigh` for its top level. Unset or blank uses this default; `none`/`off` sends no `think` anywhere. Thinking tokens count against `CYCLE_MAX_TOKENS` (`num_predict`). |
 | `EXPERTS` | `energy,health,house-ops,researcher,infra` | Which expert loops to start. Unset **or blank** means all five; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `240` | Minutes between brain cycles. The brain reflects on the experts rather than watching the house, so it wakes rarely. |
@@ -723,6 +723,7 @@ one. In between, each cycle appends what it did to
 | `tool_result` | What the tool returned, before the loop's `MAX_TOOL_RESULT_CHARS` cut. |
 | `memory` | A write to a fact, goals, identity or a gap, with the body it replaced. |
 | `message` | A turn the loop itself added, such as the wrap-up nudge. |
+| `context_fit` | A call's prompt was trimmed: for which model, and which results. |
 | `cycle_end` | Status, rounds, cap, summary, token totals, and how many events failed to land. |
 
 - **It never breaks a cycle.** A failed write is logged once and forgotten. Each
@@ -752,6 +753,32 @@ An agent reads its own log with `search_history`: a word or phrase, newest first
 in short snippets. It sees only its own loop's history. It is bounded in hits,
 snippet length and how much it decompresses per call, and its snippets come back
 fenced as external text, since a logged result can be a web page.
+
+## What a model sees
+
+Storage and context are kept apart. The session log holds everything, and
+`ai_brain.context.fit_context` decides what fits in front of one model on one
+call. It returns a new list and never touches the loop's own `messages`, so a
+result one small window could not hold is still there when a larger one answers.
+
+The policy runs per provider, not per round, since only the chain's walk knows who
+ends up answering and a fallback's window can be a fraction of the first choice's.
+It applies to providers with a window this process asks for (`ollama:`, `lan:`).
+`gemini:` and `anthropic:` have their own, far above `CYCLE_MAX_PROMPT_TOKENS`.
+
+The budget is `NUM_CTX_BY_MODEL`, less the reply (`CYCLE_MAX_TOKENS`), the tool list
+and a fixed overhead. Past it, oldest first: reasoning echoed on earlier turns, then
+tool results, each replaced by a stub naming where the original is. The system turns
+and the last turn are never touched. Each time, a `context_fit` event in the log
+records what was left out.
+
+Every cut is recoverable within the cycle. A trimmed result, or one past
+`MAX_TOOL_RESULT_CHARS`, says which `read_cycle_events(from, to)` call brings it back.
+That tool reads the current cycle's own log and nothing else (it takes no cycle id),
+pages through a long result with `next`, and fences what it returns as external.
+
+Providers keep one last-resort guard against Ollama silently cutting the *front* off
+a prompt, which is where the persona lives. On the loop's path it never fires.
 
 ## Resuming a cycle
 

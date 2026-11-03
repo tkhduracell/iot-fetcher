@@ -67,6 +67,7 @@ class LanOllamaProvider(Provider):
             LAN_REQUEST_TIMEOUT_S, connect=LAN_CONNECT_TIMEOUT_S
         )
         self._num_ctx = num_ctx
+        self.context_tokens = num_ctx
         self._think = think
         self._attempts_left = LAN_ATTEMPTS
 

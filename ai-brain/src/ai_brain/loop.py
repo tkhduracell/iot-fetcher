@@ -41,17 +41,21 @@ from typing import Any, Literal
 from ai_brain.approvals import NOTE_SENDER as APPROVALS_SENDER
 from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
+from ai_brain.context import estimate_tool_tokens, fit_context
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
 from ai_brain.llm import (
     STREAM_SINK,
     ChainExhausted,
     Message,
+    Provider,
     ProviderChain,
     ProviderError,
     Reply,
+    ToolSpec,
 )
 from ai_brain.memory import MEMORY_SINK, OWNER_SENDER, MemoryDir, Note, render_inbox
+from ai_brain.profiles import ModelProfile
 from ai_brain.sessions import (
     ABANDONED,
     RESUMABLE_STATUSES,
@@ -1030,13 +1034,15 @@ class AgentLoop:
                 streamer = _DeltaPublisher(self.events, self.name) if self.events else None
                 sink_token = STREAM_SINK.set(streamer.add if streamer else None)
                 try:
+                    tools = self.registry.specs_for(self.name, self.ctx.settings)
                     reply = await asyncio.wait_for(
                         self.chain.complete(
                             messages,
-                            self.registry.specs_for(self.name, self.ctx.settings),
+                            tools,
                             self.max_tokens,
                             self.priority,
                             agent=self.name,
+                            fit=lambda convo, provider: self._fit_prompt(convo, provider, tools),
                         ),
                         timeout=self.chain_timeout_s,
                     )
@@ -1209,7 +1215,7 @@ class AgentLoop:
                     # inside must still be on record as having been started.
                     session.append("tool_call", round=rounds, id=call.id, name=call.name)
                     result = await self.registry.dispatch(self.ctx, call)
-                    session.append(
+                    logged_at = session.append(
                         "tool_result",
                         round=rounds,
                         id=call.id,
@@ -1223,7 +1229,7 @@ class AgentLoop:
                     # count of "lines" in an already-truncated body would just
                     # be wrong.
                     stats = _tool_result_stats(result)
-                    result = self._cap_tool_result(call.name, result)
+                    result = self._cap_tool_result(call.name, result, logged_at)
                     trace.rounds[-1].tool_results.append(
                         {
                             "name": call.name,
@@ -1231,7 +1237,15 @@ class AgentLoop:
                             "stats": stats,
                         }
                     )
-                    messages.append(Message("tool", result, tool_call_id=call.id, name=call.name))
+                    messages.append(
+                        Message(
+                            "tool",
+                            result,
+                            tool_call_id=call.id,
+                            name=call.name,
+                            log_seq=logged_at or 0,
+                        )
+                    )
                 if self.events is not None:
                     self.events.publish(_round_event(self.name, trace.rounds[-1]))
                 if self.ctx.extras.get("end_cycle"):
@@ -1683,12 +1697,42 @@ class AgentLoop:
         self._budget_hit = budget
         return budget > 0 and prompt_tokens > budget
 
-    def _cap_tool_result(self, tool: str, result: str) -> str:
+    def _fit_prompt(
+        self, messages: list[Message], provider: Provider, tools: list[ToolSpec]
+    ) -> list[Message]:
+        """This cycle's conversation as ``provider`` should see it this call."""
+        fitted = fit_context(
+            messages,
+            ModelProfile(provider.key, provider.context_tokens),
+            reserve_tokens=self.max_tokens + estimate_tool_tokens(tools),
+        )
+        if fitted is not messages:
+            trimmed = [
+                was.log_seq
+                for was, now in zip(messages, fitted, strict=True)
+                if was.role == "tool" and was is not now
+            ]
+            log.info(
+                "[%s] trimmed %d tool result(s) from context for %s",
+                self.name,
+                len(trimmed),
+                provider.key,
+            )
+            # The record of what a model did not see: a judgement it made
+            # without some earlier result is otherwise impossible to spot.
+            session = self._session
+            if session is not None:
+                session.append("context_fit", chain_key=provider.key, trimmed=trimmed)
+        return fitted
+
+    def _cap_tool_result(self, tool: str, result: str, logged_at: int | None = None) -> str:
         """Keep one runaway tool result from swamping the conversation.
 
         Tools are supposed to trim themselves; this only catches the ones that
         did not. The marker is left in the text on purpose, so the model can
         see it was cut off rather than silently reasoning from half an answer.
+        ``logged_at`` is the result's event in the session log, where all of it
+        still is; with none, the marker cannot promise a way back.
         """
         if len(result) <= MAX_TOOL_RESULT_CHARS:
             return result
@@ -1700,7 +1744,12 @@ class AgentLoop:
             len(result),
             MAX_TOOL_RESULT_CHARS,
         )
-        return result[:MAX_TOOL_RESULT_CHARS] + f"\n…[truncated by loop: {dropped} more chars]"
+        where = (
+            f"\n…[rest: read_cycle_events(from={logged_at}, to={logged_at})]" if logged_at else ""
+        )
+        return (
+            result[:MAX_TOOL_RESULT_CHARS] + where + f"\n…[truncated by loop: {dropped} more chars]"
+        )
 
     def _opening_messages(self, notes: list[Note]) -> list[Message]:
         # Two system messages, stable first: the constitution, the identity
