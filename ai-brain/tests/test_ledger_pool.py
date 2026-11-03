@@ -148,3 +148,62 @@ def test_usage_reports_pools_only_when_configured(tmp_path):
     assert ledger.usage()["pools"][0]["pool"] == "anthropic"
     plain = Ledger({"gemini:a": Limits(rpm=1, tpm=1, rpd=1)}, tmp_path / "p.json")
     assert "pools" not in plain.usage()
+
+
+# --- rounds_left prices rounds in dollars too -------------------------------
+
+
+def test_rounds_left_counts_the_days_dollars_down(tmp_path):
+    ledger, _ = make(tmp_path, at(2026, 10, 17), monthly=24.0)  # 1.00 a day
+    # Unpriced, a pool says nothing a request count could: the (huge) rpd.
+    assert ledger.rounds_left(OPUS, "brain") == 10**6
+    # 0.30 a round: 0, 0.3, 0.6 and 0.9 are all under 1.00, the 5th is not.
+    assert ledger.rounds_left(OPUS, "brain", round_usd=0.3) == 4
+    ledger.record(OPUS, 10, 10, usd=0.5, priority="brain")
+    assert ledger.rounds_left(OPUS, "brain", round_usd=0.3) == 2
+
+
+def test_rounds_left_gives_an_expert_only_its_share_of_the_day(tmp_path):
+    ledger, _ = make(tmp_path, at(2026, 10, 17), monthly=24.0)
+    # Experts may spend 60% of the 1.00 allowance: 0, 0.25, 0.5 are under 0.6.
+    assert ledger.rounds_left(OPUS, "expert", round_usd=0.25) == 3
+    assert ledger.rounds_left(OPUS, "brain", round_usd=0.25) == 4
+    # The brain's own spend counts against the day but not the experts' share.
+    ledger.record(OPUS, 10, 10, usd=0.3, priority="brain")
+    assert ledger.rounds_left(OPUS, "expert", round_usd=0.25) == 3
+
+
+def test_rounds_left_is_zero_for_a_dry_pool(tmp_path):
+    ledger, _ = make(tmp_path, at(2026, 10, 17), monthly=24.0)
+    ledger.record(OPUS, 10, 10, usd=1.5, priority="brain")
+    assert ledger.can_spend(OPUS, "brain").reason == "usd_day"
+    assert ledger.rounds_left(OPUS, "brain", round_usd=0.1) == 0
+
+
+@pytest.mark.parametrize("priority", ["brain", "expert"])
+@pytest.mark.parametrize("already", [0.0, 0.4, 0.99])
+@pytest.mark.parametrize(
+    "round_usd", [0.01, 0.1, 0.25, 0.3, 1 / 3, 0.5, 0.6, 0.999, 1.0, 1.0001, 2.5]
+)
+def test_rounds_left_is_exactly_how_many_rounds_can_spend_admits_in_dollars(
+    tmp_path, priority, already, round_usd
+):
+    """Same boundary check as the token one, against the pool's three limits."""
+    t0 = at(2026, 10, 17)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    predicted, _ = make(tmp_path / "a", t0, monthly=24.0)
+    actual, state = make(tmp_path / "b", t0, monthly=24.0)
+    for ledger in (predicted, actual):
+        if already:
+            ledger.record(OPUS, 10, 10, usd=already, priority=priority)
+
+    n = predicted.rounds_left(OPUS, priority, round_tokens=20, round_usd=round_usd)
+
+    admitted = 0
+    while actual.can_spend(OPUS, priority).allowed:
+        actual.record(OPUS, 10, 10, usd=round_usd, priority=priority)
+        # Past the 50 rpm window; the day is nowhere near over at noon.
+        state["t"] += 61
+        admitted += 1
+    assert n == admitted

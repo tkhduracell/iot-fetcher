@@ -646,3 +646,77 @@ def test_ledger_refuses_a_reserved_key_to_the_other_loop(tmp_path):
     assert ledger.can_spend("k", "brain").allowed
     refused = ledger.can_spend("k", "expert")
     assert not refused.allowed and refused.reason == "reserved"
+
+
+# --- quota_runway: every budget can_spend enforces --------------------------
+#
+# tpm=100 gives a synthetic day of 14400 tokens (never throttling by itself, as
+# it is under can_spend's 4000-token estimate).
+
+
+def runway_chain(tmp_path, providers_limits, pools=None):
+    limits = {key: lim for key, lim in providers_limits}
+    ledger = Ledger(limits, tmp_path / "r.json", clock=lambda: T0, pools=pools)
+    return ProviderChain([FakeProvider(key, []) for key, _ in providers_limits], ledger), ledger
+
+
+def test_quota_runway_counts_a_dry_token_budget(tmp_path):
+    chain, ledger = runway_chain(tmp_path, [("a", Limits(rpm=100, tpm=100, rpd=1000))])
+    # No price yet: only the (large) request budget speaks.
+    assert chain.quota_runway("a", "brain") == 1000
+    assert chain.quota_runway("a", "brain", round_tokens=3000) == 5
+    ledger.record("a", 9000, 0)
+    assert chain.quota_runway("a", "brain", round_tokens=3000) == 2
+
+
+def test_quota_runway_counts_the_experts_token_floor(tmp_path):
+    chain, _ = runway_chain(tmp_path, [("a", Limits(rpm=100, tpm=100, rpd=1000))])
+    # 60% of 14400 is 8640: 0, 3000 and 6000 are under it, 9000 is not.
+    assert chain.quota_runway("a", "expert", round_tokens=3000) == 3
+    assert chain.quota_runway("a", "brain", round_tokens=3000) == 5
+
+
+def test_quota_runway_counts_a_usd_pool(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from ai_brain.ledger import Pool
+
+    noon = datetime(2026, 10, 17, 12, tzinfo=ZoneInfo("America/Los_Angeles")).timestamp()
+    limits = {"anthropic:x": Limits(rpm=50, tpm=10**8, rpd=10**6, usd_pool="anthropic")}
+    ledger = Ledger(
+        limits, tmp_path / "p.json", clock=lambda: noon, pools={"anthropic": Pool(24.0, 10)}
+    )
+    chain = ProviderChain([FakeProvider("anthropic:x", [])], ledger)
+    # 1.00 a day at 0.30 a round: 0, 0.3, 0.6 and 0.9 are under it.
+    assert chain.quota_runway("anthropic:x", "brain", 100, 0.3) == 4
+    assert chain.quota_runway("anthropic:x", "brain", 100, 0.0) == 10**6
+
+
+def test_quota_runway_is_none_when_another_provider_can_take_the_cycle(tmp_path):
+    chain, ledger = runway_chain(
+        tmp_path,
+        [
+            ("a", Limits(rpm=100, tpm=100, rpd=1000)),
+            ("b", Limits(rpm=100, tpm=100, rpd=1000)),
+        ],
+    )
+    ledger.record("a", 14000, 0)
+    # a has 1 round of tokens left, b is untouched: fall through, don't clamp.
+    assert chain.quota_runway("a", "brain", round_tokens=3000) is None
+    # With b dry as well there is nowhere to fall to.
+    ledger.record("b", 14400, 0)
+    assert chain.quota_runway("a", "brain", round_tokens=3000) == 1
+
+
+def test_quota_runway_does_not_clamp_an_unmetered_key(tmp_path):
+    from ai_brain.llm import UNMETERED
+
+    chain, _ = runway_chain(tmp_path, [("lan:q", UNMETERED)])
+    # A million requests and 1.4e10 tokens a day: far beyond any cycle's cap.
+    assert chain.quota_runway("lan:q", "brain", round_tokens=100_000, round_usd=0.0) > 10_000
+
+
+def test_quota_runway_knows_nothing_about_an_unlisted_key(tmp_path):
+    chain, _ = runway_chain(tmp_path, [("a", Limits(rpm=100, tpm=100, rpd=10))])
+    assert chain.quota_runway("nope", "brain", round_tokens=1000) is None

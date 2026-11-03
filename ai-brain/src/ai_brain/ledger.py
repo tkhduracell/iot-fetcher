@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import calendar
 import json
-import math
 import os
 import time
 from collections import deque
@@ -119,6 +118,12 @@ def period_start(today: date, billing_day: int) -> date:
 
 def next_period_start(start: date, billing_day: int) -> date:
     return _clamped(*_shift_month(start.year, start.month, 1), billing_day)
+
+
+def _usd(amount: float) -> float:
+    """``amount`` to the nano-dollar, for comparing dollar sums that differ
+    only by float noise (a billionth of a dollar is below any real price)."""
+    return round(amount, 9)
 
 
 def _midnight(day: date) -> float:
@@ -363,18 +368,69 @@ class Ledger:
         return state.day_allowance, nxt
 
     def _pool_decision(
-        self, state: _PoolState, priority: Priority, now: float
+        self, state: _PoolState, priority: Priority, now: float, extra_usd: float = 0.0
     ) -> Decision | None:
-        """Why a pool forbids spending now, or None when it allows it."""
+        """Why a pool forbids spending now, or None when it allows it.
+
+        ``extra_usd`` is dollars not yet recorded, taken as already spent: how
+        ``rounds_left`` asks the question after some more rounds.
+        """
         allowance, nxt = self._sync_pool(state, now)
         if state.exhausted_until is not None and now < state.exhausted_until:
             return Decision(False, state.exhausted_until, "exhausted")
-        if state.usd_period >= state.pool.monthly_usd:
+        # Compared in whole nano-dollars: ``record`` adds each round's cost to
+        # the total one at a time, while a prediction adds ``rounds * cost``,
+        # and the two sums can differ by a float ulp -- enough to disagree on
+        # whether 10 rounds of $0.10 have reached a $1.00 allowance.
+        if _usd(state.usd_period + extra_usd) >= _usd(state.pool.monthly_usd):
             return Decision(False, _midnight(nxt), "usd_month")
-        if state.usd_day >= allowance:
+        if _usd(state.usd_day + extra_usd) >= _usd(allowance):
             return Decision(False, _next_midnight(now), "usd_day")
-        if priority == "expert" and state.usd_day_expert >= allowance * (1.0 - EXPERT_FLOOR):
+        if priority == "expert" and (
+            _usd(state.usd_day_expert + extra_usd) >= _usd(allowance * (1.0 - EXPERT_FLOOR))
+        ):
             return Decision(False, _next_midnight(now), "priority")
+        return None
+
+    def _budget_refusal(
+        self,
+        bucket: _Bucket,
+        priority: Priority,
+        now: float,
+        rounds: int = 0,
+        tokens: int = 0,
+        usd: float = 0.0,
+    ) -> Decision | None:
+        """Why the day's budgets forbid spending on ``bucket``, or None.
+
+        Everything ``can_spend`` counts that a few more rounds can use up: the
+        USD pool, the daily request and token caps, and the expert floor. (The
+        per-minute windows are not here -- they reopen on their own.) It is the
+        one copy of those rules: ``can_spend`` calls it with the key as it
+        stands, and ``rounds_left`` calls it with ``rounds`` more requests,
+        ``tokens`` and ``usd`` taken as already spent, so the two cannot
+        disagree about where a budget runs out.
+        """
+        limits = bucket.limits
+        pool = self._pool_for(bucket)
+        if pool is not None:
+            refused = self._pool_decision(pool, priority, now, usd)
+            if refused is not None:
+                return refused
+
+        if (
+            bucket.requests_day + rounds >= limits.rpd
+            or bucket.tokens_day + tokens >= limits.daily_tokens
+        ):
+            return Decision(False, _next_midnight(now), "rpd")
+
+        # The floor holds the last 40% back for the brain, so it only means
+        # something on a key the brain may spend. On an expert-only key
+        # (EXPERT_MODELS without BRAIN_MODELS) it just strands that share.
+        if priority == "expert" and limits.brain_may_use:
+            req_left, tok_left = self._fractions(bucket, rounds, tokens)
+            if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
+                return Decision(False, _next_midnight(now), "priority")
         return None
 
     # ---------- queries ----------
@@ -400,22 +456,9 @@ class Ledger:
         if limits.loops is not None and priority not in limits.loops:
             return Decision(False, None, "reserved")
 
-        pool = self._pool_for(bucket)
-        if pool is not None:
-            refused = self._pool_decision(pool, priority, now)
-            if refused is not None:
-                return refused
-
-        if bucket.requests_day >= limits.rpd or bucket.tokens_day >= limits.daily_tokens:
-            return Decision(False, _next_midnight(now), "rpd")
-
-        # The floor holds the last 40% back for the brain, so it only means
-        # something on a key the brain may spend. On an expert-only key
-        # (EXPERT_MODELS without BRAIN_MODELS) it just strands that share.
-        if priority == "expert" and limits.brain_may_use:
-            req_left, tok_left = self._fractions(bucket)
-            if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
-                return Decision(False, _next_midnight(now), "priority")
+        refused = self._budget_refusal(bucket, priority, now)
+        if refused is not None:
+            return refused
 
         bucket.prune(now)
         if len(bucket.recent) >= limits.rpm:
@@ -430,34 +473,55 @@ class Ledger:
 
         return Decision(True, None, "ok")
 
-    def requests_left(self, key: str, priority: Priority) -> int:
-        """How many more requests ``priority`` may spend on ``key`` today.
+    def rounds_left(
+        self, key: str, priority: Priority, round_tokens: int = 0, round_usd: float = 0.0
+    ) -> int:
+        """How many more rounds ``priority`` may spend on ``key`` today.
 
         The same verdict as ``can_spend`` turned into a count: 0 for any
         refusal that will not clear within the minute (unknown, disabled,
         parked on 429s, reserved for the other kind of loop, a dry USD pool,
-        the daily cap or the expert floor), otherwise what is left of the
-        daily request budget -- stopping at the expert floor for an expert on
-        a key the brain also uses, since that is where ``can_spend`` starts
-        refusing it. ``rpm``/``tpm`` do not count against it: those windows
-        reopen on their own, and a cycle planning its remaining rounds should
-        not read a busy minute as an empty day. Read-only apart from the
-        day roll ``can_spend`` itself performs.
+        the daily cap or the expert floor), otherwise how many successive
+        rounds ``can_spend`` would admit before one of its budgets runs out --
+        the least of the daily requests, the daily tokens, the expert floor on
+        both, and the USD pool's month, day and expert share. ``rpm``/``tpm``
+        do not count against it: those windows reopen on their own, and a
+        cycle planning its remaining rounds should not read a busy minute as
+        an empty day. Read-only apart from the day roll and pool sync
+        ``can_spend`` itself performs.
 
-        Counts requests only. A USD-pooled key is paced in dollars, which no
-        request count predicts, so its (effectively unlimited) rpd is what
-        comes back for it.
+        Every round costs one request, but what it costs in tokens and dollars
+        is for the caller to say: ``round_tokens``/``round_usd`` are the price
+        of one round (the loop passes what its latest round cost). Left at 0
+        those two budgets are only checked as they stand, which is all a
+        caller can say before it has seen a round.
         """
         decision = self.can_spend(key, priority)
         if not decision.allowed and decision.reason not in ("rpm", "tpm"):
             return 0
         bucket = self._buckets[key]
-        limits = bucket.limits
-        if priority == "expert" and limits.brain_may_use:
-            # The request count at which can_spend's floor check starts
-            # refusing: remaining fraction 1 - n/rpd no longer above the floor.
-            return math.ceil(limits.rpd * (1.0 - EXPERT_FLOOR)) - bucket.requests_day
-        return limits.rpd - bucket.requests_day
+        now = self._clock()
+        tokens = max(0, int(round_tokens))
+        usd = max(0.0, float(round_usd))
+
+        def refused(rounds: int) -> bool:
+            return (
+                self._budget_refusal(bucket, priority, now, rounds, rounds * tokens, rounds * usd)
+                is not None
+            )
+
+        # Every budget only tightens as rounds are added, so the first round
+        # that would be refused can be searched for. Round 0 is the key as it
+        # stands, which can_spend just allowed; the daily request cap is
+        # reached at the latest after ``rpd - requests_day`` rounds.
+        low, high = 0, max(1, bucket.limits.rpd - bucket.requests_day)
+        while high - low > 1:
+            mid = (low + high) // 2
+            if refused(mid):
+                high = mid
+            else:
+                low = mid
+        return high
 
     def limits(self, key: str) -> Limits | None:
         """The configured budget for a key, or None when it has no bucket.
@@ -475,10 +539,14 @@ class Ledger:
         return self._fractions(bucket)
 
     @staticmethod
-    def _fractions(bucket: _Bucket) -> tuple[float, float]:
+    def _fractions(
+        bucket: _Bucket, extra_requests: int = 0, extra_tokens: int = 0
+    ) -> tuple[float, float]:
         limits = bucket.limits
-        req = 1.0 - bucket.requests_day / limits.rpd if limits.rpd else 0.0
-        tok = 1.0 - bucket.tokens_day / limits.daily_tokens if limits.daily_tokens else 0.0
+        requests = bucket.requests_day + extra_requests
+        tokens = bucket.tokens_day + extra_tokens
+        req = 1.0 - requests / limits.rpd if limits.rpd else 0.0
+        tok = 1.0 - tokens / limits.daily_tokens if limits.daily_tokens else 0.0
         return (max(0.0, req), max(0.0, tok))
 
     def next_available_at(self, priority: Priority) -> float | None:

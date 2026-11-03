@@ -1291,7 +1291,7 @@ async def test_a_cycle_that_ignores_the_nudge_ends_max_rounds_not_no_budget(make
     assert result.status == "max_rounds"
     assert result.rounds == 11
     assert "quota" in _last_journal_line(loop.memory)
-    assert ledger.requests_left(METERED, "brain") == 0
+    assert ledger.rounds_left(METERED, "brain") == 0
     # The provider was never asked for a 12th request that the ledger would refuse.
     assert len(provider.calls) == 11
 
@@ -1385,6 +1385,81 @@ async def test_the_expert_floor_shortens_an_experts_runway(make_quota_loop):
     assert result.status == "max_rounds"
     assert result.rounds == 6
     assert result.cap == 6
+
+
+async def test_a_dry_token_budget_gets_a_wrap_up_nudge_not_chain_exhausted(make_quota_loop):
+    """The day's tokens run out in rounds too. tpm=100 makes the key's day 14400
+    tokens (it never throttles by itself, being under the 4000-token estimate);
+    each round costs 3005, so only 5 fit -- the 6th would be ChainExhausted."""
+    script = [
+        reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED, prompt_tokens=3000)
+        for i in range(4)
+    ]
+    script.append(
+        reply(
+            "done",
+            call("end_cycle", "e", next_wake_minutes=30, summary="wrapped"),
+            key=METERED,
+            prompt_tokens=3000,
+        )
+    )
+    loop, (provider,), _ = make_quota_loop(
+        [(METERED, Limits(rpm=100, tpm=100, rpd=1000), script)]
+    )
+
+    result = await loop.run_cycle()
+
+    # After round 1 (3005 spent) four more rounds fit, so the cap is 5 and the
+    # nudge lands after round 3, leaving rounds 4 and 5.
+    assert result.status == "ok"
+    assert result.rounds == 5
+    assert result.cap == 5
+    assert "You have 2 rounds left" in _nudges(provider)[0]
+
+
+async def test_a_cycle_that_ignores_the_nudge_on_a_dry_token_budget_ends_max_rounds(
+    make_quota_loop,
+):
+    script = [
+        reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED, prompt_tokens=3000)
+        for i in range(6)
+    ]
+    loop, (provider,), ledger = make_quota_loop(
+        [(METERED, Limits(rpm=100, tpm=100, rpd=1000), script)]
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    assert result.rounds == 5
+    assert "quota" in _last_journal_line(loop.memory)
+    assert not ledger.can_spend(METERED, "brain").allowed
+    assert len(provider.calls) == 5  # no 6th request for the ledger to refuse
+
+
+async def test_a_token_budget_does_not_clamp_a_cycle_that_can_fall_through(make_quota_loop):
+    script = [
+        reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED, prompt_tokens=5000)
+        for i in range(3)
+    ]
+    fallback = [
+        reply(
+            "done",
+            call("end_cycle", "e", next_wake_minutes=30, summary="s"),
+            key="gemini:flash-lite",
+        )
+    ]
+    loop, _, _ = make_quota_loop(
+        [
+            (METERED, Limits(rpm=100, tpm=100, rpd=1000), script),
+            ("gemini:flash-lite", Limits(rpm=100, tpm=10_000_000, rpd=200), fallback),
+        ]
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert result.cap == 32
 
 
 # -- per-cycle prompt-token budget ---------------------------------------

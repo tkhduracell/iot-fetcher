@@ -370,10 +370,17 @@ The quota clamps the cap too. A model with 11 requests a day (see
 [Quota](#quota)) cannot play a 32-round cycle, and without a clamp the nudge
 would wait for round 30 while the cycle met `ChainExhausted` at round 12 with
 nothing written down. After every round the loop asks the ledger how many
-requests the answering key has left (`Ledger.requests_left`: the daily budget,
-and the expert floor for an expert on a key the brain shares) and, when no
+rounds the answering key has left (`Ledger.rounds_left`) and, when no
 *other* provider this loop may use is dialable with quota left, caps the cycle
-at `rounds + remaining`. The same nudge then fires two rounds before that
+at `rounds + remaining`. "Left" is the least of every budget `can_spend`
+enforces -- the daily requests, the daily tokens, the expert floor on both for
+an expert on a key the brain shares, and a USD pool's month, day and expert
+share -- and the two are one piece of code (`Ledger._budget_refusal`), so they
+cannot disagree about where a budget runs out. Tokens and dollars are counted
+per round, priced at what the round just played cost (the conversation is
+resent whole each round, so the next costs at least as much; the nudge's two
+spare rounds absorb the difference); the per-minute windows are not counted,
+since they reopen by themselves. The same nudge then fires two rounds before that
 point, and a cycle that still does not call `end_cycle` ends `max_rounds` with
 a summary naming the quota. A cycle that can fall through to another model
 (`BRAIN_MODELS=all`, say, or an expert with a `lan:` host up) is not clamped,

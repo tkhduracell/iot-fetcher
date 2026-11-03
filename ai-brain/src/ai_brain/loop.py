@@ -840,7 +840,19 @@ class AgentLoop:
                 # floor too, and the nudge below -- keyed off effective_cap --
                 # lands while the cycle can still act on it instead of the
                 # next round meeting ChainExhausted with nothing written down.
-                runway = self.chain.quota_runway(reply.key, self.priority)
+                # A day's tokens and a USD pool run out in rounds too, but how
+                # many depends on what a round costs. The round just played is
+                # the best price there is: the conversation is resent whole
+                # every round, so the next one costs at least as much -- which
+                # makes this a slight underestimate, and the nudge's two spare
+                # rounds are there to absorb it. A reply with no usage (a fake
+                # in a test) prices a round at 0, i.e. no token or USD clamp.
+                runway = self.chain.quota_runway(
+                    reply.key,
+                    self.priority,
+                    round_tokens=reply.usage.prompt_tokens + reply.usage.completion_tokens,
+                    round_usd=reply.usage.cost_usd,
+                )
                 quota_stopped = runway is not None and rounds + runway < effective_cap
                 if quota_stopped:
                     effective_cap = rounds + runway
