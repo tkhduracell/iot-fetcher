@@ -666,3 +666,58 @@ def test_whole_context_caps_the_gap_section(brain_dir, clock):
     assert len(lines) == 10
     assert "question number 14" in section
     assert "question number 4" not in section
+
+
+# --- the inbox budget charges what a note really costs -----------------------
+
+
+def _notes(clock, sender, bodies):
+    from pathlib import Path
+
+    from ai_brain.memory import Note
+
+    return [Note(Path(f"{i}.md"), sender, body, clock()) for i, body in enumerate(bodies)]
+
+
+def test_a_note_is_charged_for_its_heading_and_fence_not_just_its_body(clock):
+    from ai_brain.memory import render_inbox
+
+    [note] = _notes(clock, "energy", ["spike"])
+    full = render_inbox([note], budget=10**6)
+    assert len(full) > len(note.body) + 50  # the fence and heading are most of it
+
+    # Exactly what it costs fits; one character less and it is a preview.
+    assert render_inbox([note], budget=len(full)) == full
+    assert "shortened" in render_inbox([note], budget=len(full) - 1)
+    # The old accounting (body only) would have called 5 characters enough.
+    assert "shortened" in render_inbox([note], budget=len(note.body))
+
+
+def test_many_short_notes_cannot_outgrow_the_budget_on_fences_alone(clock):
+    from ai_brain.memory import render_inbox
+
+    notes = _notes(clock, "infra", [f"n{i:03d}" for i in range(200)])
+    out = render_inbox(notes, budget=3000)
+
+    full = [block for block in out.split("\n\n") if block.startswith("## from:")]
+    # Each full note is a heading line plus its fenced body: the sum of what
+    # was kept is what the budget is about.
+    assert full and len(full) < 200
+    assert sum(len(block) for block in full) <= 3000
+    assert f"{200 - len(full)} note(s) shortened" in out
+    # Newest kept in full, oldest shortened.
+    assert "n199" in full[-1] and "n000" not in "".join(full)
+    assert out.count("- from: infra") == 200 - len(full)
+
+
+def test_filips_notes_still_spend_nothing_and_never_shrink(clock):
+    from ai_brain.memory import render_inbox
+
+    filip = _notes(clock, "filip", ["ok"] * 50)
+    energy = _notes(clock, "energy", ["spike"])
+    full_energy = render_inbox(energy, budget=10**6)
+
+    out = render_inbox([*filip, *energy], budget=len(full_energy))
+
+    assert out.count('<external source="note-filip">') == 50
+    assert "shortened" not in out and full_energy in out

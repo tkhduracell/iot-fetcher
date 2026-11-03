@@ -294,6 +294,10 @@ researcher: a web page it reads can end up in a note to the brain, which holds
 `propose` and `slack_post`, and in a system message that text would carry the
 same weight as the constitution. (A `topic:` first line stays the first line
 inside the fence, so thread routing and the owed-reply check are unaffected.)
+The inbox is held to about 12,000 characters of full notes, each charged for its
+heading and fence as well as its body (the fence is resent every round); older
+notes from other loops shrink to a one-line preview past that, and Filip's never
+shrink or spend the budget.
 
 The bar for Slack is unchanged and deliberate: a finding, not a status report.
 A quiet day stays quiet.

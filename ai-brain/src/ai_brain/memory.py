@@ -860,13 +860,20 @@ class MemoryDir:
 
 
 def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
-    """The inbox section, held to ``budget`` characters of note bodies.
+    """The inbox section, held to about ``budget`` characters of full notes.
 
     Notes are kept in full newest first while they fit the budget; a note
     that does not fit becomes a one-line preview (sender, time, the opening
     words), enough to tell what it was about and ask its sender if it
     matters, and older notes that still fit stay in full. Filip's notes never
     shrink and never spend the budget. Output stays in arrival order.
+
+    A full note is charged for everything it puts in the prompt -- its heading
+    and the fence round it as well as the body -- because the fence is resent
+    on every round of the cycle like the text inside it. Charging the body
+    alone let thirty short notes spend ~40 characters each, unbudgeted. A
+    preview is not charged: it is the cheap form already, and is capped by its
+    own length rather than by this budget.
 
     Every note body is fenced, preview or not. The fence's ``source`` names the
     sender, from the note's own header rather than its text, and the fence's
@@ -883,10 +890,11 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
         head = f"from: {label} ({_iso(note.created)})"
         source = f"note-{label}"
         owner = note.sender == OWNER_SENDER
-        if owner or len(note.body) <= left:
+        full = f"## {head}\n{fence(source, note.body, block=True)}"
+        if owner or len(full) <= left:
             if not owner:
-                left -= len(note.body)
-            shown.append(f"## {head}\n{fence(source, note.body, block=True)}")
+                left -= len(full)
+            shown.append(full)
         else:
             short += 1
             preview = " ".join(note.body[: INBOX_PREVIEW_CHARS * 2].split())
