@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from ai_brain.config import Settings
+from ai_brain.docker_api import container_url
 
 log = logging.getLogger(__name__)
 
@@ -151,11 +152,13 @@ class Executors:
         return f"called {service} on {entity_id}"
 
     async def docker_restart(self, container: str) -> str:
+        # Before the dry-run shortcut, like the quiet-hours check: a rehearsal
+        # must report the refusal a live run would. Also covers a proposal that
+        # was stored before propose validated the name.
+        url = container_url(self.settings.docker_proxy_url, container, "restart")
         if self.settings.dry_run:
             log.info("[dry-run] docker_restart %s", container)
             return "dry-run"
-        base = self.settings.docker_proxy_url.rstrip("/")
-        url = f"{base}/containers/{container}/restart"
         response = await self.http.post(url, timeout=TIMEOUT_S)
         _raise_for_status(response, "docker_restart")
         return f"restarted {container}"
@@ -176,6 +179,10 @@ class Executors:
             )
         if kind == "docker_restart":
             return await self.docker_restart(_require(payload, "container", kind))
+        if kind == "idea":
+            # Nothing to execute: the approval itself is the outcome, and it
+            # comes back to the brain as an inbox note like any other.
+            return f"Filip wants this: {_require(payload, 'title', kind)}"
         raise ValueError(f"unknown kind: {kind}")
 
 

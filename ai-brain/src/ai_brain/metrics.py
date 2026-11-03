@@ -48,6 +48,14 @@ def render(loops: dict[str, Any], ledger: Ledger, now: float) -> list[str]:
         lines.append(f"ai_brain_ledger_remaining,model={model},kind=requests value={requests_left}")
         lines.append(f"ai_brain_ledger_remaining,model={model},kind=tokens value={tokens_left}")
 
+    # Dollars, for the paid pools: spent vs budget, this billing cycle and today.
+    for pool in ledger.pools():
+        tag = _tag(pool["pool"])
+        lines.append(f"ai_brain_usd_spent,pool={tag},kind=period value={pool['usd_period']}")
+        lines.append(f"ai_brain_usd_spent,pool={tag},kind=day value={pool['usd_day']}")
+        lines.append(f"ai_brain_usd_limit,pool={tag},kind=period value={pool['usd_limit']}")
+        lines.append(f"ai_brain_usd_limit,pool={tag},kind=day value={pool['usd_day_allowance']}")
+
     return lines
 
 
