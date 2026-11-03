@@ -25,6 +25,17 @@ type Config struct {
 	HAToken                  string
 	WallboxEntity            string
 	WallboxChargingStates    []string
+	// Car* is a second clamp trigger, independent of the Wallbox cloud
+	// integration (which has frozen at "Disconnected" while the car drew
+	// 10 kW). The car only counts while CarLocationEntity reads "home", so
+	// public charging doesn't clamp. Set CAR_CHARGING_ENTITY=off to disable.
+	CarChargingEntity        string
+	CarChargingStates        []string
+	CarLocationEntity        string
+	// UnclampHold is how long every trigger must read not-charging before
+	// the clamp is released. The car's status flaps charging↔idle every few
+	// minutes mid-session; releasing on each flap drains the battery.
+	UnclampHold              time.Duration
 	InfluxHost               string
 	InfluxToken              string
 	InfluxDatabase           string
@@ -50,7 +61,16 @@ func Load() (*Config, error) {
 	}
 
 	c.WallboxChargingStates = splitCSV(getenv("WALLBOX_CHARGING_STATES", "Charging"))
+	c.CarChargingEntity = getenv("CAR_CHARGING_ENTITY", "sensor.volvo_xc40_charging_status")
+	if strings.EqualFold(c.CarChargingEntity, "off") {
+		c.CarChargingEntity = ""
+	}
+	c.CarChargingStates = splitCSV(getenv("CAR_CHARGING_STATES", "charging"))
+	c.CarLocationEntity = getenv("CAR_LOCATION_ENTITY", "device_tracker.volvo_xc40_location")
 	var err error
+	if c.UnclampHold, err = getDuration("UNCLAMP_HOLD", 15*time.Minute); err != nil {
+		return nil, err
+	}
 	if c.PollInterval, err = getDuration("POLL_INTERVAL", 60*time.Second); err != nil {
 		return nil, err
 	}
@@ -65,6 +85,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// WatchedEntities is every HA entity the controller needs state for.
+func (c *Config) WatchedEntities() []string {
+	out := []string{c.WallboxEntity}
+	if c.CarChargingEntity != "" {
+		out = append(out, c.CarChargingEntity)
+		if c.CarLocationEntity != "" {
+			out = append(out, c.CarLocationEntity)
+		}
+	}
+	return out
 }
 
 func (c *Config) validate() error {

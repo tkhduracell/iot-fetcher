@@ -19,13 +19,23 @@ One **brain** loop plus up to five **expert** loops:
 | `researcher` | `seed/personas/researcher.md` | `EXPERT_HEARTBEAT_MIN` |
 | `infra` | `seed/personas/infra.md` | `EXPERT_HEARTBEAT_MIN` |
 
-Experts observe and report. They can query VictoriaMetrics, Home Assistant
-(entity states over its own MCP server with `ha_context`, and the tail of its
-log with `ha_error_log`, which is how a broken integration gets diagnosed
-rather than guessed at), gdrive-rag and the web, write facts into their own
-memory, and drop notes in the brain's inbox. `infra` and `brain` can also see
-the containers this system runs in (`docker_ps`, `docker_top`, `docker_logs`)
--- everyone else's tool surface stops at the house. They cannot act on the
+Experts observe and report, and each has only its own slice of the tools
+(`loops=` in `tools/`): VictoriaMetrics (`vm_query`, `vm_metrics`) for `energy`,
+`health` and `house-ops`; Home Assistant for `house-ops` (entity states over its
+own MCP server with `ha_context`, and the tail of its log with `ha_error_log`,
+which is how a broken integration gets diagnosed rather than guessed at);
+gdrive-rag (`drive_search`) and the web (`web_search`, `web_fetch`) for the
+`researcher` alone, which has no metrics or Home Assistant; the Airbnb calendar
+for `researcher`, `energy` and `house-ops`. Every expert writes facts into its
+own memory and drops notes in the brain's inbox. `infra` and `brain` can also
+see the containers this system runs in (`docker_ps`, `docker_top`,
+`docker_logs`) -- `infra`'s whole tool surface -- and the brain has the metrics
+and Home Assistant tools too, but not the web or Drive: it asks the researcher
+by note. A container name is
+checked against Docker's own name rule before any request is built (in the
+tools, in `propose` and again in the executor), since it is model-supplied and
+lands in a URL path. In the read tools a bad name comes back as an ordinary
+error for the model to read, not a logged tool crash. They cannot act on the
 house and they cannot talk to Slack.
 Everything those reads return is fenced as external text — the log included,
 since it carries whatever an integration decided to print.
@@ -38,8 +48,8 @@ The brain also has a read-only window onto the rest of the system that no
 expert gets: it can read (never write) any expert's persona, journal, facts
 and open gaps (`expert_overview`, `read_expert`), record a verdict on what it
 finds (`review_expert` — see [Reviewing the experts](#reviewing-the-experts)),
-see its own runtime state (`system_status` — cycle health, proposal loops, the
-ledger), and read the whole iot-fetcher repo's tracked source (`code_overview`,
+see its own runtime state (`system_status` — cycle health, proposal loops, budget
+pools and throttled keys), and read the whole iot-fetcher repo's tracked source (`code_overview`,
 `code_list`, `code_read`, `code_grep`, `code_log` — see
 [Reading the repo](#reading-the-repo)). Nothing here mutates anything but the
 brain's own `reviews/` directory and a note in the reviewed expert's inbox —
@@ -85,6 +95,7 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
 │   ├── inbox/                 unread notes from experts and approvals
 │   │   └── done/              processed notes, purged after 30 days
 │   ├── reviews/<expert>.jsonl the brain's verdicts on each expert (max 50 lines each)
+│   ├── sessions/<cycle-id>.jsonl[.gz]  everything one cycle did (see "Session log" below)
 │   └── outbox/
 │       ├── <proposal-id>.json pending/terminal proposals
 │       └── slack/<ts>.json    Slack posts that failed to send, retried later
@@ -92,6 +103,7 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
 │   ├── persona.md
 │   ├── journal/YYYY-MM-DD.md
 │   ├── facts/<name>.md
+│   ├── sessions/<cycle-id>.jsonl[.gz]
 │   └── inbox/ (+ done/)
 └── _repo/                     the code_* tools' snapshot of the public repo
     ├── current -> <sha>/      symlink, swapped atomically after each refresh
@@ -125,6 +137,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `EXPERTS` | `energy,health,house-ops,researcher,infra` | Which expert loops to start. Unset **or blank** means all five; set a shorter list, or `none`, for brain only — see [Rollout](#rollout). |
 | `BRAIN_HEARTBEAT_MIN` | `240` | Minutes between brain cycles. The brain reflects on the experts rather than watching the house, so it wakes rarely. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
+| `BRAIN_MIN_WAKE_GAP_MIN` | `30` | Least minutes from the end of one brain cycle to the start of one rung by an expert's `send_note` or the ledger. The note waits unread in the inbox until then. Notes from Filip (Slack, MCP) and from approvals still wake the brain at once. `0` turns the gate off. |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
 | `INFLUX_TOKEN` | — | Bearer token for VM reads and for writing its own metrics. |
 | `HA_URL` | `http://192.168.68.87:8123` | Home Assistant base URL. |
@@ -150,6 +163,8 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `CYCLE_MAX_TOKENS` | `8000` | Output tokens per round. |
 | `CYCLE_MAX_PROMPT_TOKENS` | `400000` | Per-cycle prompt-token budget across every round combined. `0` disables it. Crossing it mid-cycle is handled the same way a per-model cap drop is -- see [Effort and per-model rounds](#effort-and-per-model-rounds). |
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
+| `SESSION_RETENTION_DAYS` | `30` | Days a cycle's [session log](#session-log) is kept. `0` turns session logging off. |
+| `SESSION_MAX_MB` | `200` | Size cap on one agent's session logs; the oldest go first. `0` means age is the only limit. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
 | `REPO_SLUG` | `tkhduracell/iot-fetcher` | The public GitHub repo the `code_*` tools read (see [Reading the repo](#reading-the-repo)). |
 | `REPO_REF` | `main` | Branch or ref the snapshot tracks. |
@@ -222,6 +237,17 @@ state, so it is much easier to start narrow than to unpick a bad first day.
 
 5. **Drop `DRY_RUN`** once you are happy with what it is proposing.
 
+**Restarts do not wake the loops.** Each loop saves the wake it chose
+(`last_cycle_at` + `next_wake_s` in its `_state.json`) and, after a restart,
+waits out what is left of it before its first cycle, so a deploy does not spend
+the brain's handful of daily requests on a cycle that was not due. It starts at
+once when there is no saved state, the wake has already passed, the last cycle
+was cut off by the shutdown, or notes are waiting in its inbox -- the brain's
+expert notes still sit out `BRAIN_MIN_WAKE_GAP_MIN`, Filip's and approvals'
+start it immediately. The wait never exceeds the wake that was saved (a clock
+that stepped back cannot make it longer), and the wake bell ends it early like
+any other sleep.
+
 To pause at any point: `touch volumes/ai-brain-memory/PAUSE`. It takes effect
 at the top of the next round — so mid-cycle, not only at the next cycle — no
 restart needed, and it does not lose queued work.
@@ -231,17 +257,51 @@ restart needed, and it does not lose queued work.
 A loop that wakes every hour and reads the same gauges will, left alone, write
 "all systems operating normally" forever. Two things push against that:
 
-- **The cycle instructions** (`CYCLE_INSTRUCTIONS` in `loop.py`, shipped in the
+- **The cycle instructions** (`instructions_for` in `loop.py`, shipped in the
   image) set the bar: a cycle must end with something that was not true of its
   memory before it started. Normal readings are worth learning once, as a
   baseline; after that only departures are news. Threads beat snapshots, and
-  the journal is written in the agent's own voice, opinions included.
+  the journal is written in the agent's own voice, opinions included. The bar
+  is shared by every loop; the rest is by role, because the tool surfaces
+  differ. The brain's text also covers goals, introspection, `propose`, looking
+  things up (including asking the researcher, since it has no web or Drive of its
+  own) and answering Filip in Slack; an expert's instead says how to reach the
+  brain (`send_note` with `to="brain"`) rather than describing tools it does not
+  have. The constitution is shared by all six loops, so it is role-neutral: it
+  says nothing about Slack, `propose` or approval, which are the brain's (the
+  rules that used to be there are in the brain's instructions), and a test
+  checks that the seed and the instructions name only tools the role has.
 - **An angle** is handed to each loop in the user turn — "chase one anomaly",
   "build a baseline", "pick up an open thread", "read rather than measure",
   "tend your memory". It rotates hourly and is offset per loop, so five loops
   waking together do not all take the same one, and a restart does not reset
   everyone to the first angle. It is explicitly a suggestion: a loop that is
   mid-investigation is told to ignore it.
+
+**What goes where in the prompt.** The system messages hold only text that
+cannot carry instructions: the constitution, the persona, the cycle
+instructions and fact names (which `safe_name` limits to `[a-z0-9_.-]`). Every
+free-text thing an agent wrote is in the user turn instead, each inside its own
+`<external>` fence (the same one tool results use, in `ai_brain/fence.py`, which
+defuses any `<external`/`</external` in the text so it cannot close the fence):
+`goals` (the brain's), `gaps`, `rejections` (the "Filip has said no to"
+summary, whose targets and topics come from earlier proposals), `journal` and
+one fence per inbox note. A note's fence names its sender
+(`source="note-energy"`), taken from the note's header, so a body claiming to be
+from Filip is still labelled as whoever really sent it. The cycle instructions
+say fenced text is data, with two exceptions to "someone else wrote it": a
+`note-filip` fence is Filip, and what he tells the brain is still ground truth,
+and the `goals` and `gaps` fences are the agent's own agenda -- worked on, but
+unable to give orders. The brain's `identity.md` is the one self-rewritten file
+that is still in the system message (see below). The reason is the path from the
+researcher: a web page it reads can end up in a note to the brain, which holds
+`propose` and `slack_post`, and in a system message that text would carry the
+same weight as the constitution. (A `topic:` first line stays the first line
+inside the fence, so thread routing and the owed-reply check are unaffected.)
+The inbox is held to about 12,000 characters of full notes, each charged for its
+heading and fence as well as its body (the fence is resent every round); older
+notes from other loops shrink to a one-line preview past that, and Filip's never
+shrink or spend the budget.
 
 The bar for Slack is unchanged and deliberate: a finding, not a status report.
 A quiet day stays quiet.
@@ -313,6 +373,27 @@ WRAP_UP_ROUNDS_BEFORE_CAP` (never above the dropped cap if that is even
 higher, and never above `CYCLE_MAX_ROUNDS_HARD_CEILING`), just enough for the
 nudge to land and for the model to get one more round to act on it. This only
 ever happens once per cycle, the same as the nudge itself.
+
+The quota clamps the cap too. A model with 11 requests a day (see
+[Quota](#quota)) cannot play a 32-round cycle, and without a clamp the nudge
+would wait for round 30 while the cycle met `ChainExhausted` at round 12 with
+nothing written down. After every round the loop asks the ledger how many
+rounds the answering key has left (`Ledger.rounds_left`) and, when no
+*other* provider this loop may use is dialable with quota left, caps the cycle
+at `rounds + remaining`. "Left" is the least of every budget `can_spend`
+enforces -- the daily requests, the daily tokens, the expert floor on both for
+an expert on a key the brain shares, and a USD pool's month, day and expert
+share -- and the two are one piece of code (`Ledger._budget_refusal`), so they
+cannot disagree about where a budget runs out. Tokens and dollars are counted
+per round, priced at what the round just played cost (the conversation is
+resent whole each round, so the next costs at least as much; the nudge's two
+spare rounds absorb the difference); the per-minute windows are not counted,
+since they reopen by themselves. The same nudge then fires two rounds before that
+point, and a cycle that still does not call `end_cycle` ends `max_rounds` with
+a summary naming the quota. A cycle that can fall through to another model
+(`BRAIN_MODELS=all`, say, or an expert with a `lan:` host up) is not clamped,
+and neither is an unmetered `lan:` key. The quota is a hard limit, so unlike a
+cap drop it is never rescued upward by the wrap-up floor.
 
 The rounds actually used and the cap in force are both in the journal line
 (`rounds=12/32`) and the trace/API (`cap`), so `journal.md` and Grafana both
@@ -395,7 +476,11 @@ them, and the only one whose job is to reflect on what it finds:
 - **`read_expert(name, what, fact?, days?)`** — read that expert's `persona`,
   `journal` (`days` back, default 2), one named `fact`, or its `gaps`.
   Read-only: there is no tool to write into another loop's memory, brain
-  included.
+  included. Both tools fence everything an expert wrote -- persona, journal,
+  fact titles and bodies, gaps, and the brain's own findings about it -- as
+  external text (`source="journal-energy"` and so on), since an expert may have
+  copied it from a web page and the brain is the loop that can `propose` and
+  post. Fact titles come as one `fact_titles` block, gaps as one `gaps` block.
 - **`review_expert(name, verdict, findings)`** — record a verdict (`good`,
   `stale`, `wrong`, `repetitive`, `off_goal`) in the brain's own
   `reviews/<name>.jsonl` (capped at the last 50). Anything but `good` also
@@ -527,6 +612,18 @@ every model key. Nothing calls a provider without asking it first.
 - **Budgets** are per key: `RPM` requests/minute, `TPM` tokens/minute (both on
   a rolling 60-second window) and `RPD` requests/day, plus a synthetic daily
   token cap so experts can be starved before the brain is.
+- **A per-minute window is waited out, not fatal.** `RPM` and `TPM` apply to
+  `gemini-3.8-flash` like any metered key (8 requests a minute by default), and
+  a brain with that one key can play nine fast rounds inside a minute. When the
+  only thing refusing a round is such a window -- no call failed, and the chain
+  has nothing else to fall to -- `ChainExhausted` is marked `windowed` and the
+  loop sleeps until the oldest request leaves the window (plus half a second)
+  and asks again, rather than ending the cycle `no_budget` and discarding the
+  transcript. The wait is outside the per-call timeout, sliced into 2-second
+  naps so a `PAUSE` file or a shutdown is noticed at once, and at most 10
+  minutes per cycle; past that, or for anything that is not a window (a
+  spent day, a parked key, a failing provider), the cycle ends as before.
+  Because the wait is only a minute, `rounds_left` still ignores `rpm`/`tpm`.
 - **Experts starve first.** An expert may only spend while both remaining
   daily fractions are above 40%. The last 40% of each day belongs to the brain.
 - **A 429 is authoritative.** The server's `Retry-After` wins over local
@@ -597,7 +694,7 @@ brain carries on without it.
 | `GET /api/slack/sessions` | The topic-to-thread map and how many posts are queued. `configured: false` when Slack is off — a 200, not an error. |
 
 The trace is in memory only and is replaced at the start of every cycle: the
-journal is the history, this is the live view. Each round's `tool_results`
+[session log](#session-log) is the history, this is the live view. Each round's `tool_results`
 entries carry a `stats` object alongside `result_preview` -- `{"chars": N}`
 always, plus `ok` (false when the parsed result has an `"error"` key),
 `lines` (a string `body`'s line count), `series` and `hits` (list lengths),
@@ -607,6 +704,44 @@ the tool's full, untruncated result, so it stays accurate even once
 
 ```sh
 curl -s http://localhost:8091/api/agents/brain/trace
+```
+
+## Session log
+
+The journal says one line per cycle and the trace forgets everything at the next
+one. In between, each cycle appends what it did to
+`<agent>/sessions/<cycle-id>.jsonl`, one JSON object per line, while it runs:
+
+| Event | Holds |
+| --- | --- |
+| `opening` | The opening messages, the inbox files they rendered, the angle. |
+| `reply` | One model turn, with what is needed to rebuild it: text, thinking, tool calls, signatures, provider blocks, the model and chain key, token counts. |
+| `tool_call` | A tool is about to run. Its arguments are in the `reply` above it. |
+| `tool_result` | What the tool returned, before the loop's `MAX_TOOL_RESULT_CHARS` cut. |
+| `memory` | A write to a fact, goals, identity or a gap, with the body it replaced. |
+| `message` | A turn the loop itself added, such as the wrap-up nudge. |
+| `cycle_end` | Status, rounds, cap, summary, token totals, and how many events failed to land. |
+
+- **It never breaks a cycle.** A failed write is logged once and forgotten. Each
+  event has a `seq`, so a missing one shows as a gap, and the first failure also
+  renames the file to `.jsonl.holes`, since a hole at the end would otherwise look
+  like a log that simply stopped.
+- **SIGKILL loses at most the line being written:** each event is one unbuffered
+  `write`. There is no `fsync` per event, which would cost a journal commit on
+  the SD card for every tool call, so a power cut can lose the last few seconds.
+- **Everything is redacted first**, except the provider-signed blobs
+  (`thought_signature`, a thinking block's `signature`) which are ciphertext. A tool
+  argument is masked by its name too, along with every string nested under it.
+  Redaction goes by shape and name, so a value under 8 characters in free text
+  stays. A tool result is capped at 512k chars and a cycle at 64 MB.
+- **A finished log is gzipped and pruned:** by age (`SESSION_RETENTION_DAYS`) and
+  then, oldest first, by size (`SESSION_MAX_MB`). A log a crash left behind is
+  picked up by the next cycle to end.
+- **Files are `0600` and not served over HTTP.** The API has no authentication,
+  so its trace keeps carrying previews; the trace's `cycle_id` names the file.
+
+```sh
+sudo zcat volumes/ai-brain-memory/brain/sessions/20261103-101500-a1b2.jsonl.gz | jq -c '[.seq, .type, .name]'
 ```
 
 ## Memory MCP

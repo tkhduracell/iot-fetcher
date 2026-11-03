@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import fnmatch
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,7 +73,7 @@ NO_MAX_ROUNDS_BY_MODEL = frozenset({"none", "off"})
 # ``gemini:*3.8*`` or ``lan:qwen3.8*`` matches the chain key regardless of the
 # exact model string a provider hands back. First match wins; no match falls
 # back to CYCLE_MAX_ROUNDS. See loop.py's _rounds_cap.
-DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32"
+DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32,anthropic:*opus*=32"
 
 # No cycle may run longer than this regardless of CYCLE_MAX_ROUNDS_BY_MODEL --
 # a typo'd env value is a startup error (see _parse_max_rounds_by_model), but
@@ -137,9 +138,12 @@ def _parse_max_rounds_by_model(raw: str) -> list[tuple[str, int]]:
 # Per-model override of CYCLE_MAX_PROMPT_TOKENS, matched against the chain key
 # of whichever model answered the latest round (like CYCLE_MAX_ROUNDS_BY_MODEL).
 # Local models cost nothing per token, so they get a far larger budget -- still
-# finite, as a backstop against a cycle looping on huge tool results. 0 is
-# "no budget" for that model, same as CYCLE_MAX_PROMPT_TOKENS=0.
-DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL = "lan:*=2000000,ollama:*=2000000"
+# finite, as a backstop against a cycle looping on huge tool results. Opus is
+# paid by the token: 200k budget tokens (cache reads count a tenth) is about
+# $0.60-1.00 of prompt, twice a normal brain cycle's whole bill (~$0.4,
+# ~75k), so it only stops a cycle that is running away. 0 is "no budget" for
+# that model, same as CYCLE_MAX_PROMPT_TOKENS=0.
+DEFAULT_MAX_PROMPT_TOKENS_BY_MODEL = "lan:*=2000000,ollama:*=2000000,anthropic:*opus*=200000"
 MAX_PROMPT_TOKENS_CEILING = 10_000_000
 
 
@@ -158,7 +162,14 @@ def _parse_num_ctx_by_model(raw: str) -> list[tuple[str, int]]:
 # false/low/medium/xhigh and silently runs its default for anything else
 # ("high", "max"), so only these spellings are accepted. No match sends no
 # ``think`` at all -- the model's own default.
-DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh"
+# anthropic: entries map onto ``output_config.effort`` (see llm/claude.py:
+# ``false`` is ``low`` there, since thinking cannot be switched off). The brain
+# on Opus runs at ``medium``, Opus 5.5's own default, spelled out so a model
+# swap cannot silently change it. ``high`` was tried first: output (thinking
+# included) was a third of a brain cycle's bill, and the thinking blocks are
+# echoed back as input on every later round, so it costs twice. Raise it per
+# deployment with THINK_BY_MODEL=anthropic:*opus*=high. Haiku keeps its default.
+DEFAULT_THINK_BY_MODEL = "lan:qwen3.8*=xhigh,anthropic:*opus*=medium"
 THINK_VALUES = frozenset({"true", "false", "low", "medium", "high", "xhigh"})
 
 
@@ -212,12 +223,25 @@ class Settings:
     brain_models: frozenset[str] | None
     expert_models: frozenset[str] | None
     gemini_api_key: str
+    anthropic_api_key: str
+    # Start-tier requests/min for anthropic: keys. Spend is paced by the USD
+    # pool, not by requests or tokens.
+    anthropic_rpm: int
+    # The month's dollar budget for every anthropic: key together, and the day
+    # of month the plan's API credits refresh. Kept below the credit itself so
+    # a last call over the line still lands inside it.
+    claude_monthly_usd: float
+    claude_billing_day: int
     ollama_url: str
     num_ctx_by_model: list[tuple[str, int]]
     think_by_model: list[tuple[str, str]]
     experts: list[str]
     brain_heartbeat_s: int
     expert_heartbeat_s: int
+    # The least time between the end of one brain cycle and the next one an
+    # expert's or the ledger's note may start. Filip's and approvals' notes
+    # skip it. 0 turns the gate off.
+    brain_min_wake_gap_s: int
     vm_url: str
     influx_token: str
     ha_url: str
@@ -253,6 +277,8 @@ class Settings:
     repo_ref: str
     repo_refresh_h: int
     rejection_memory_days: int
+    session_retention_days: int
+    session_max_mb: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -340,6 +366,29 @@ def _num_ctx_by_model(env: Mapping[str, str]) -> list[tuple[str, int]]:
     return _parse_num_ctx_by_model(raw) or _parse_num_ctx_by_model(DEFAULT_NUM_CTX_BY_MODEL)
 
 
+def _float(raw: str, default: float) -> float:
+    raw = raw.strip()
+    if not raw:
+        return default
+    value = float(raw)
+    # nan compares False against everything and inf never runs out, so
+    # either would silently switch the cap off.
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"expected a finite, non-negative number, got {raw!r}")
+    return value
+
+
+def _billing_day(raw: str) -> int:
+    """CLAUDE_BILLING_DAY: 1-31, the day of month the API credits refresh."""
+    raw = raw.strip()
+    if not raw:
+        return 1
+    day = int(raw)
+    if not 1 <= day <= 31:
+        raise ValueError(f"CLAUDE_BILLING_DAY must be 1-31, got {raw!r}")
+    return day
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     if env is None:
         import os
@@ -369,12 +418,17 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         if get("EXPERT_MODELS").strip()
         else _experts_default(llm_chain, brain_models),
         gemini_api_key=get("GEMINI_API_KEY"),
+        anthropic_api_key=get("ANTHROPIC_API_KEY"),
+        anthropic_rpm=get_int("ANTHROPIC_RPM", 50),
+        claude_monthly_usd=_float(get("CLAUDE_MONTHLY_USD"), 95.0),
+        claude_billing_day=_billing_day(get("CLAUDE_BILLING_DAY")),
         ollama_url=get("OLLAMA_URL", "http://ollama:11434"),
         num_ctx_by_model=_num_ctx_by_model(env),
         think_by_model=_think_by_model(env),
         experts=_experts(get("EXPERTS")),
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 240) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
+        brain_min_wake_gap_s=max(0, get_int("BRAIN_MIN_WAKE_GAP_MIN", 30)) * 60,
         vm_url=get("VM_URL", "http://database-auth:8427"),
         influx_token=get("INFLUX_TOKEN"),
         ha_url=get("HA_URL", "http://192.168.68.87:8123"),
@@ -430,4 +484,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # long enough that "Filip said no last week" still holds, short enough
         # that a genuinely stale objection eventually stops gatekeeping.
         rejection_memory_days=get_int("REJECTION_MEMORY_DAYS", 30),
+        # The per-cycle session logs (see sessions.py). 0 days turns logging
+        # off altogether; 0 MB means age is the only limit. Per agent.
+        session_retention_days=max(0, get_int("SESSION_RETENTION_DAYS", 30)),
+        session_max_mb=max(0, get_int("SESSION_MAX_MB", 200)),
     )

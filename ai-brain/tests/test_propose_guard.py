@@ -11,7 +11,7 @@ import pytest
 from ai_brain.tools.propose import junk_proposal_reason
 
 # Real prompt text this whole feature exists to catch. Copied loosely from
-# loop.py's BRAIN_ANGLES/CYCLE_INSTRUCTIONS rather than imported verbatim, so
+# loop.py's BRAIN_ANGLES/instructions rather than imported verbatim, so
 # the test does not silently stop testing anything if the prompt wording
 # changes -- it still has to overlap enough to trip the guard.
 _ANGLE_ECHO = "Hunt contradictions. Compare what two experts believe about the same device or question, and find out which is right."
@@ -181,3 +181,18 @@ def test_unknown_kind_is_not_junk_by_this_guard():
     # approvals.propose is what rejects an unknown kind; this guard only
     # judges the text of kinds it recognises.
     assert junk_proposal_reason("launch_missiles", {}, "oops") is None
+
+
+
+def test_idea_why_is_checked_as_prose():
+    from ai_brain.tools.propose import junk_proposal_reason
+
+    assert junk_proposal_reason("idea", {"title": "digest", "why": "x"}, "self-review") is not None
+    assert (
+        junk_proposal_reason(
+            "idea",
+            {"title": "Weekly energy digest", "why": "Filip asked for the October cost twice this month"},
+            "energy-digest",
+        )
+        is None
+    )
