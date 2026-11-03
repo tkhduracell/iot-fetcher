@@ -11,7 +11,7 @@ import pytest
 from ai_brain.tools.propose import junk_proposal_reason
 
 # Real prompt text this whole feature exists to catch. Copied loosely from
-# loop.py's BRAIN_ANGLES/CYCLE_INSTRUCTIONS rather than imported verbatim, so
+# loop.py's BRAIN_ANGLES/instructions rather than imported verbatim, so
 # the test does not silently stop testing anything if the prompt wording
 # changes -- it still has to overlap enough to trip the guard.
 _ANGLE_ECHO = "Hunt contradictions. Compare what two experts believe about the same device or question, and find out which is right."

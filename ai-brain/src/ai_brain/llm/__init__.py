@@ -445,6 +445,31 @@ class ProviderChain:
         self._skipped[key] = reason
         log.warning("skipping %s: %s", key, reason)
 
+    def quota_runway(self, key: str, priority: Priority) -> int | None:
+        """How many more rounds the quota allows, when ``key`` is all there is.
+
+        A cycle's rounds cap is a ceiling on effort, not a promise that the
+        quota will last that long: a model with 11 requests a day answering a
+        32-round cycle is cut off by ``ChainExhausted`` mid-thought, with no
+        chance to write anything down. This is the number the loop clamps its
+        cap to so the wrap-up nudge lands while the cycle can still act on it.
+
+        ``None`` means no clamp: either nothing is known about ``key``, or
+        some *other* provider this priority may use is dialable and has quota
+        left. Falling through the chain is the design (a drained brain model
+        hands the cycle to the next one), so a cycle that can fall through must
+        not be cut short on the strength of the first model's budget. An
+        unmetered ``lan:`` key lands here too, through its own ``requests_left``.
+        """
+        if self.ledger.limits(key) is None:
+            return None
+        for provider in self.providers:
+            if provider.key == key or not provider.available():
+                continue
+            if self.ledger.requests_left(provider.key, priority) > 0:
+                return None
+        return self.ledger.requests_left(key, priority)
+
     async def complete(
         self,
         messages: list[Message],

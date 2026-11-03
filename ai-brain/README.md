@@ -25,7 +25,10 @@ log with `ha_error_log`, which is how a broken integration gets diagnosed
 rather than guessed at), gdrive-rag and the web, write facts into their own
 memory, and drop notes in the brain's inbox. `infra` and `brain` can also see
 the containers this system runs in (`docker_ps`, `docker_top`, `docker_logs`)
--- everyone else's tool surface stops at the house. They cannot act on the
+-- everyone else's tool surface stops at the house. A container name is
+checked against Docker's own name rule before any request is built (in the
+tools, in `propose` and again in the executor), since it is model-supplied and
+lands in a URL path. They cannot act on the
 house and they cannot talk to Slack.
 Everything those reads return is fenced as external text — the log included,
 since it carries whatever an integration decided to print.
@@ -223,6 +226,17 @@ state, so it is much easier to start narrow than to unpick a bad first day.
 
 5. **Drop `DRY_RUN`** once you are happy with what it is proposing.
 
+**Restarts do not wake the loops.** Each loop saves the wake it chose
+(`last_cycle_at` + `next_wake_s` in its `_state.json`) and, after a restart,
+waits out what is left of it before its first cycle, so a deploy does not spend
+the brain's handful of daily requests on a cycle that was not due. It starts at
+once when there is no saved state, the wake has already passed, the last cycle
+was cut off by the shutdown, or notes are waiting in its inbox -- the brain's
+expert notes still sit out `BRAIN_MIN_WAKE_GAP_MIN`, Filip's and approvals'
+start it immediately. The wait never exceeds the wake that was saved (a clock
+that stepped back cannot make it longer), and the wake bell ends it early like
+any other sleep.
+
 To pause at any point: `touch volumes/ai-brain-memory/PAUSE`. It takes effect
 at the top of the next round — so mid-cycle, not only at the next cycle — no
 restart needed, and it does not lose queued work.
@@ -232,17 +246,36 @@ restart needed, and it does not lose queued work.
 A loop that wakes every hour and reads the same gauges will, left alone, write
 "all systems operating normally" forever. Two things push against that:
 
-- **The cycle instructions** (`CYCLE_INSTRUCTIONS` in `loop.py`, shipped in the
+- **The cycle instructions** (`instructions_for` in `loop.py`, shipped in the
   image) set the bar: a cycle must end with something that was not true of its
   memory before it started. Normal readings are worth learning once, as a
   baseline; after that only departures are news. Threads beat snapshots, and
-  the journal is written in the agent's own voice, opinions included.
+  the journal is written in the agent's own voice, opinions included. The bar
+  is shared by every loop; the rest is by role, because the tool surfaces
+  differ. The brain's text also covers goals, introspection, `propose` and
+  answering Filip in Slack; an expert's instead says how to reach the brain
+  (`send_note` with `to="brain"`) rather than describing tools it does not have.
 - **An angle** is handed to each loop in the user turn — "chase one anomaly",
   "build a baseline", "pick up an open thread", "read rather than measure",
   "tend your memory". It rotates hourly and is offset per loop, so five loops
   waking together do not all take the same one, and a restart does not reset
   everyone to the first angle. It is explicitly a suggestion: a loop that is
   mid-investigation is told to ignore it.
+
+**What goes where in the prompt.** The system messages hold only text this
+system wrote: constitution, persona, goals, instructions, fact names, open gaps
+and the rejection summary. The journal and the inbox are in the user turn
+instead, each inside an `<external>` fence (the same one tool results use, in
+`ai_brain/fence.py`, which defuses any `<external`/`</external` in the text so
+it cannot close the fence). A note's fence names its sender
+(`source="note-energy"`), taken from the note's header, so a body claiming to be
+from Filip is still labelled as whoever really sent it. The cycle instructions
+say fenced text is data, with one exception: a `note-filip` fence is Filip, and what he
+tells the brain is still ground truth. The reason is the path from the
+researcher: a web page it reads can end up in a note to the brain, which holds
+`propose` and `slack_post`, and in a system message that text would carry the
+same weight as the constitution. (A `topic:` first line stays the first line
+inside the fence, so thread routing and the owed-reply check are unaffected.)
 
 The bar for Slack is unchanged and deliberate: a finding, not a status report.
 A quiet day stays quiet.
@@ -314,6 +347,20 @@ WRAP_UP_ROUNDS_BEFORE_CAP` (never above the dropped cap if that is even
 higher, and never above `CYCLE_MAX_ROUNDS_HARD_CEILING`), just enough for the
 nudge to land and for the model to get one more round to act on it. This only
 ever happens once per cycle, the same as the nudge itself.
+
+The quota clamps the cap too. A model with 11 requests a day (see
+[Quota](#quota)) cannot play a 32-round cycle, and without a clamp the nudge
+would wait for round 30 while the cycle met `ChainExhausted` at round 12 with
+nothing written down. After every round the loop asks the ledger how many
+requests the answering key has left (`Ledger.requests_left`: the daily budget,
+and the expert floor for an expert on a key the brain shares) and, when no
+*other* provider this loop may use is dialable with quota left, caps the cycle
+at `rounds + remaining`. The same nudge then fires two rounds before that
+point, and a cycle that still does not call `end_cycle` ends `max_rounds` with
+a summary naming the quota. A cycle that can fall through to another model
+(`BRAIN_MODELS=all`, say, or an expert with a `lan:` host up) is not clamped,
+and neither is an unmetered `lan:` key. The quota is a hard limit, so unlike a
+cap drop it is never rescued upward by the wrap-up floor.
 
 The rounds actually used and the cap in force are both in the journal line
 (`rounds=12/32`) and the trace/API (`cap`), so `journal.md` and Grafana both

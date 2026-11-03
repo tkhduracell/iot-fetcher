@@ -407,8 +407,11 @@ async def run(settings: Settings) -> None:
 
     finders = getattr(system.chain, "lan_finders", [])
     if finders:
-        # Before the loops, not after: every loop wakes on startup, and a cycle
-        # that begins while the sweep is still running sees no LAN host. For an
+        # Before the loops, not after: a loop with no saved wake, one whose
+        # wake has already passed or one with notes waiting starts a cycle
+        # straight away (the rest wait out their saved wake, see
+        # AgentLoop._startup_delay_s), and a cycle that begins while the sweep
+        # is still running sees no LAN host. For an
         # expert that is the whole chain -- the free tier is above its floor and
         # the local host is not there yet -- so it burns its first cycle on
         # no_budget and sleeps two hours. Concurrent: one finder's sweep taking

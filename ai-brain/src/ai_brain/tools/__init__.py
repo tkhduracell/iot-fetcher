@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ai_brain.config import Settings
+from ai_brain.fence import fence
 from ai_brain.llm import ToolCall, ToolSpec
 from ai_brain.memory import MemoryDir
 from ai_brain.redact import redact
@@ -75,27 +75,15 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
-_SOURCE_RE = re.compile(r"[a-z0-9_.-]+")
-_ZWSP = "\u200b"
-# Case-insensitive: HTML tag names are, so ``</EXTERNAL>`` closes the fence too.
-_FENCE_RE = re.compile(r"</?external", re.IGNORECASE)
-
-
 def wrap_external(source: str, text: str) -> str:
     """Fence text that came from outside this system.
 
     A metric name is ours; a Drive document, a web page and a friendly name a
     human typed into Home Assistant are not. Anything in the second group is
     data the model reads, never instructions it follows, so it is handed over
-    inside an ``<external>`` element that says where it came from.
-
-    The fence only means anything if the fenced text cannot close it, so any
-    ``<external`` or ``</external`` inside ``text`` -- in any case, since HTML
-    tag names are case-insensitive -- gets a zero-width space wedged after the
-    ``<``. That breaks the tag while leaving the text
-    readable, so a page saying "put </external> here" still reads correctly and
-    still cannot escape. ``source`` is ours rather than a stranger's, but it is
-    validated too, since it lands in an attribute value.
+    inside an ``<external>`` element that says where it came from. The fence
+    and its escaping live in ``ai_brain.fence`` (see there for why the text
+    cannot close it).
 
     Every caller that hands the model log or page text from outside this
     system routes through here, which makes this the one place to catch a
@@ -105,11 +93,7 @@ def wrap_external(source: str, text: str) -> str:
     into a memory fact. Masking happens before fencing so a secret cannot
     hide the fence's own sentinel handling from itself.
     """
-    if not _SOURCE_RE.fullmatch(source):
-        raise ValueError(f"wrap_external: invalid source {source!r}")
-    masked = redact(text)
-    safe = _FENCE_RE.sub(lambda m: m.group(0)[0] + _ZWSP + m.group(0)[1:], masked)
-    return f'<external source="{source}">{safe}</external>'
+    return fence(source, redact(text))
 
 
 class ToolRegistry:

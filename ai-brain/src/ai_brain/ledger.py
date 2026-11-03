@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import math
 import os
 import time
 from collections import deque
@@ -66,6 +67,10 @@ class Limits:
     loops: frozenset[str] | None = None
     # The USD pool this key spends from, if it is paid in dollars. See Pool.
     usd_pool: str | None = None
+
+    @property
+    def brain_may_use(self) -> bool:
+        return self.loops is None or "brain" in self.loops
 
     @property
     def daily_tokens(self) -> int:
@@ -407,8 +412,7 @@ class Ledger:
         # The floor holds the last 40% back for the brain, so it only means
         # something on a key the brain may spend. On an expert-only key
         # (EXPERT_MODELS without BRAIN_MODELS) it just strands that share.
-        brain_may_use = limits.loops is None or "brain" in limits.loops
-        if priority == "expert" and brain_may_use:
+        if priority == "expert" and limits.brain_may_use:
             req_left, tok_left = self._fractions(bucket)
             if not (req_left > EXPERT_FLOOR and tok_left > EXPERT_FLOOR):
                 return Decision(False, _next_midnight(now), "priority")
@@ -425,6 +429,35 @@ class Ledger:
             return Decision(False, bucket.window_oldest() + WINDOW_S, "tpm")
 
         return Decision(True, None, "ok")
+
+    def requests_left(self, key: str, priority: Priority) -> int:
+        """How many more requests ``priority`` may spend on ``key`` today.
+
+        The same verdict as ``can_spend`` turned into a count: 0 for any
+        refusal that will not clear within the minute (unknown, disabled,
+        parked on 429s, reserved for the other kind of loop, a dry USD pool,
+        the daily cap or the expert floor), otherwise what is left of the
+        daily request budget -- stopping at the expert floor for an expert on
+        a key the brain also uses, since that is where ``can_spend`` starts
+        refusing it. ``rpm``/``tpm`` do not count against it: those windows
+        reopen on their own, and a cycle planning its remaining rounds should
+        not read a busy minute as an empty day. Read-only apart from the
+        day roll ``can_spend`` itself performs.
+
+        Counts requests only. A USD-pooled key is paced in dollars, which no
+        request count predicts, so its (effectively unlimited) rpd is what
+        comes back for it.
+        """
+        decision = self.can_spend(key, priority)
+        if not decision.allowed and decision.reason not in ("rpm", "tpm"):
+            return 0
+        bucket = self._buckets[key]
+        limits = bucket.limits
+        if priority == "expert" and limits.brain_may_use:
+            # The request count at which can_spend's floor check starts
+            # refusing: remaining fraction 1 - n/rpd no longer above the floor.
+            return math.ceil(limits.rpd * (1.0 - EXPERT_FLOOR)) - bucket.requests_day
+        return limits.rpd - bucket.requests_day
 
     def limits(self, key: str) -> Limits | None:
         """The configured budget for a key, or None when it has no bucket.

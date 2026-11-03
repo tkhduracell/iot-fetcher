@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ai_brain.fence import fence
 from ai_brain.redact import redact
 
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
@@ -33,7 +34,7 @@ MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
 MAX_REVISIONS = 20
 MAX_CONTEXT_GAPS = 10
-# The inbox's share of the system prompt. A brain that sat out an outage came
+# The inbox's share of the prompt. A brain that sat out an outage came
 # back to 118 notes (~46k tokens) and paid for them on every round of the
 # cycle; past this, the oldest notes from other loops shrink to one line each.
 # Filip's own notes are always shown in full and do not count against it.
@@ -749,13 +750,7 @@ class MemoryDir:
 
     # -- context -------------------------------------------------------
 
-    def read_context(self, constitution: str, notes: list[Note] | None = None) -> str:
-        """Render the whole system prompt (both halves of ``context_parts``)."""
-        return "\n\n".join(self.context_parts(constitution, notes))
-
-    def context_parts(
-        self, constitution: str, notes: list[Note] | None = None
-    ) -> tuple[str, str]:
+    def context_parts(self, constitution: str) -> tuple[str, str]:
         """The system prompt as (stable, volatile).
 
         The stable half -- constitution and identity/persona -- changes only
@@ -763,21 +758,18 @@ class MemoryDir:
         it (and the tool list ahead of it) warm across cycles that run close
         together. Everything that moves from cycle to cycle is in the second.
 
-        ``notes`` is the inbox the caller already read. A loop marks exactly
-        that list done at the end of the cycle, so re-reading the directory
-        here would render a note that then stays unread -- shown once for free,
-        and again next cycle.
+        Only text this system wrote itself belongs here. The journal and the
+        inbox carry words from other agents -- and, by way of the researcher's
+        web reads, from strangers -- so they are in neither half; see
+        ``external_parts``.
         """
         stable = [f"# Constitution\n{constitution}"]
         stable.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
         parts = []
         if self.is_brain:
             parts.append(f"# Goals\n{self.goals_text()}")
-        parts.append(f"# Journal (last 2 days)\n{self.journal_text(2)}")
         facts = "\n".join(f"- {n}" for n in self.list_facts())
         parts.append(f"# Facts available (use read_fact)\n{facts}")
-        inbox = render_inbox(self.unread_notes() if notes is None else notes)
-        parts.append(f"# Inbox\n{inbox}")
         open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
         # Silence when there is nothing unknown: an empty heading is pure
         # prompt budget, and the cap is there because a brain that opens gaps
@@ -791,6 +783,27 @@ class MemoryDir:
             )
             parts.append(f"## Öppna luckor\n{luckor}")
         return "\n\n".join(stable), "\n\n".join(parts)
+
+    def external_parts(self, notes: list[Note]) -> str:
+        """The journal and the inbox, each fenced, for the cycle's user turn.
+
+        Neither is instructions. The inbox holds what other loops chose to
+        send -- an expert that has just read a web page included -- and the
+        journal holds whatever earlier cycles wrote down, which may have
+        copied from the same place. In the system prompt that text would speak
+        with the same voice as the constitution; in a fence in the user turn
+        it is data, with the sender named in the fence's tag where the text
+        cannot reach it.
+
+        ``notes`` is the inbox the caller already read. A loop marks exactly
+        that list done at the end of the cycle, so re-reading the directory
+        here would render a note that then stays unread -- shown once for free,
+        and again next cycle.
+        """
+        journal = self.journal_text(2)
+        journal_block = fence("journal", journal, block=True) if journal.strip() else "(empty)"
+        inbox = render_inbox(notes)
+        return f"# Journal (last 2 days)\n{journal_block}\n\n# Inbox\n{inbox or '(empty)'}"
 
     # -- housekeeping --------------------------------------------------
 
@@ -842,29 +855,50 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
     words), enough to tell what it was about and ask its sender if it
     matters, and older notes that still fit stay in full. Filip's notes never
     shrink and never spend the budget. Output stays in arrival order.
+
+    Every note body is fenced, preview or not. The fence's ``source`` names the
+    sender, from the note's own header rather than its text, and the fence's
+    escaping stops a body writing a tag of its own -- so a body that claims to
+    be from Filip is still just a body from whoever the tag says. The fence puts
+    the body on lines of its own, so a ``topic:`` first line is still the first
+    line the model reads.
     """
     shown: list[str] = []
     short = 0
     left = budget
     for note in reversed(notes):
-        head = f"from: {note.sender} ({_iso(note.created)})"
-        if note.sender == OWNER_SENDER:
-            shown.append(f"## {head}\n{note.body}")
-        elif len(note.body) <= left:
-            left -= len(note.body)
-            shown.append(f"## {head}\n{note.body}")
+        label = _label(note.sender)
+        head = f"from: {label} ({_iso(note.created)})"
+        source = f"note-{label}"
+        owner = note.sender == OWNER_SENDER
+        if owner or len(note.body) <= left:
+            if not owner:
+                left -= len(note.body)
+            shown.append(f"## {head}\n{fence(source, note.body, block=True)}")
         else:
             short += 1
             preview = " ".join(note.body[: INBOX_PREVIEW_CHARS * 2].split())
             if len(preview) > INBOX_PREVIEW_CHARS:
                 preview = preview[:INBOX_PREVIEW_CHARS] + "…"
-            shown.append(f"- {head}: {preview}")
+            shown.append(f"- {head}: {fence(source, preview)}")
     if short:
         shown.append(
             f"({short} note(s) shortened to one line to keep the inbox "
             f"under {budget} characters; ask the sender if one matters.)"
         )
     return "\n\n".join(reversed(shown))
+
+
+def _label(sender: str) -> str:
+    """A sender name as safe for a fence's ``source`` and the line above it.
+
+    ``drop_note`` only writes names that pass ``safe_name``, so this changes
+    nothing for a real note. It is for a header edited by hand: that "name" must
+    not carry text of its own outside the fence, or come out as ``filip`` --
+    which is why each bad character is replaced, not collapsed and stripped the
+    way ``slug_name`` does.
+    """
+    return re.sub(r"[^a-z0-9_.-]", "_", sender)
 
 
 def _stamps(directory: Path) -> list[int]:
