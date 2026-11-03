@@ -122,7 +122,13 @@ _STATUSES: frozenset[str] = frozenset(
 # counts, the same way each loop's memory is its own directory.
 STATE_FILENAME = "_state.json"
 
-CYCLE_INSTRUCTIONS = """\
+# The cycle instructions are three texts, because the loops do not share a tool
+# surface: the registry gives `propose`, `slack_post`, goals/identity rewrites
+# and the introspection tools to the brain alone. Describing them to an expert
+# spends a round discovering that a tool does not exist -- and a weak fallback
+# model is the one least able to shrug that off. What every loop is told lives
+# in SHARED_INSTRUCTIONS; the rest is picked by role in ``instructions_for``.
+SHARED_INSTRUCTIONS = """\
 # This cycle
 You are running one think cycle. Use tools to look at the world and to record
 what you learn. End by calling end_cycle with a short summary and the number of
@@ -157,8 +163,11 @@ dashboard. Write your journal and your facts in your own voice, with opinions
 in them: what surprised you, what you expected, what you still do not
 understand. Dry is fine. Vague is not -- "the pool pump draws 203W, which is
 the same as every night this week" tells you something next month;
-"all nominal" does not.
+"all nominal" does not."""
 
+# Only the brain has these tools (rewrite_goals, system_status and friends,
+# propose, slack_post -- see the loops= allowlists in tools/).
+BRAIN_INSTRUCTIONS = """\
 # Goals
 Your goals are yours to write. Keep two or three live at a time, each concrete
 enough to know when it is done, and rewrite the file when one is finished or
@@ -199,6 +208,34 @@ Otherwise the bar for speaking is a finding: something you learned that changes
 what Filip would do, or would want to know about his own house. Not a status
 report, and not "I looked at things and they were fine". A quiet day is a quiet
 day -- but a week of them means you are not looking hard enough."""
+
+# What an expert has instead: no Slack, no propose, no goals file. Its only
+# way out of its own memory is `send_note` (memory_tools, every loop), and the
+# brain is the only loop that can carry a finding on to Filip.
+EXPERT_INSTRUCTIONS = """\
+# Reaching the brain
+You cannot act on the house and you cannot talk to Filip. The brain is the one
+loop that can do either, and it cannot see your journal or your facts. When you
+find something it should know, call `send_note` with to="brain" and a body that
+stands on its own: what you saw, the numbers, and what you think it means. The
+note rings the brain and it reads it on its next cycle.
+
+The bar is a finding, not a status report. A quiet cycle sends nothing.
+
+Notes in your Inbox come from the brain or from another expert. A "Brain
+review" note is a verdict on your memory: fix or delete the facts it names."""
+
+# The brain's full prompt, as it was before the split. Kept under the old name
+# for the code that reads the brain's instructions as text (propose's echo
+# guard) and for the tests that pin their wording.
+CYCLE_INSTRUCTIONS = SHARED_INSTRUCTIONS + "\n\n" + BRAIN_INSTRUCTIONS
+
+
+def instructions_for(priority: Priority) -> str:
+    """The cycle instructions for a loop of this ``priority``."""
+    if priority == "brain":
+        return CYCLE_INSTRUCTIONS
+    return SHARED_INSTRUCTIONS + "\n\n" + EXPERT_INSTRUCTIONS
 
 # Angles rotate so a loop that has fallen into a rut is handed a different
 # starting point. They are suggestions in the prompt rather than switches in
@@ -1058,7 +1095,7 @@ class AgentLoop:
         # goals, journal, inbox, gaps, rejections, the compaction hint --
         # comes after.
         stable, volatile = self.memory.context_parts(self.constitution, notes=notes)
-        stable += "\n\n" + CYCLE_INSTRUCTIONS
+        stable += "\n\n" + instructions_for(self.priority)
         rejections = self._rejection_memory_section()
         if rejections:
             volatile += "\n\n" + rejections

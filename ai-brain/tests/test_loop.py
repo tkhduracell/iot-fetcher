@@ -838,6 +838,105 @@ def test_wrap_up_nudge_text_reports_the_real_remaining_count():
     )
 
 
+# -- instructions match the loop's tools ---------------------------------
+
+EXPERTS = ("energy", "health", "house-ops", "researcher", "infra")
+
+
+def _full_registry() -> ToolRegistry:
+    from ai_brain.tools.backend import register_backend_tools
+    from ai_brain.tools.propose import register_propose_tool
+
+    reg = ToolRegistry()
+    register_memory_tools(reg)
+    register_backend_tools(reg)
+    register_slack_tools(reg)
+    register_propose_tool(reg)
+    return reg
+
+
+def _backticked_tools(text: str, reg: ToolRegistry) -> set[str]:
+    every = {s.name for s in reg.specs_for("brain")} | {
+        s.name for loop in EXPERTS for s in reg.specs_for(loop)
+    }
+    return {name for name in every if f"`{name}`" in text}
+
+
+def test_an_experts_instructions_name_only_tools_it_has():
+    from ai_brain.loop import instructions_for
+
+    reg = _full_registry()
+    text = instructions_for("expert")
+    named = _backticked_tools(text, reg)
+
+    assert "send_note" in named
+    for loop in EXPERTS:
+        offered = {s.name for s in reg.specs_for(loop)}
+        assert named <= offered, (loop, named - offered)
+    for brain_only in ("propose", "slack_post", "rewrite_goals", "system_status", "code_overview"):
+        assert brain_only not in text
+
+
+def test_the_brains_instructions_name_only_tools_it_has():
+    from ai_brain.loop import instructions_for
+
+    reg = _full_registry()
+    named = _backticked_tools(instructions_for("brain"), reg)
+
+    assert {"propose", "system_status", "list_proposals"} <= named
+    assert named <= {s.name for s in reg.specs_for("brain")}
+
+
+def test_the_brains_instructions_are_the_whole_old_prompt():
+    from ai_brain.loop import BRAIN_INSTRUCTIONS, SHARED_INSTRUCTIONS, instructions_for
+
+    assert instructions_for("brain") == CYCLE_INSTRUCTIONS
+    assert CYCLE_INSTRUCTIONS == SHARED_INSTRUCTIONS + "\n\n" + BRAIN_INSTRUCTIONS
+    for heading in ("# Goals", "# Introspection (brain only)", "# Acting", "# Answering Filip"):
+        assert heading in BRAIN_INSTRUCTIONS
+        assert heading not in SHARED_INSTRUCTIONS
+
+
+async def test_each_role_is_sent_its_own_instructions(make_loop, brain_dir, expert_dir, registry, wall, tmp_path):
+    loop, provider = make_loop(
+        [reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="s"))]
+    )
+    await loop.run_cycle()
+    assert "# Acting" in _system_text(provider.calls[0][0])
+
+    expert = AgentLoop(
+        name="energy",
+        memory=expert_dir,
+        chain=ProviderChain(
+            [
+                FakeProvider(
+                    "fake:2",
+                    script=[reply("done", call("end_cycle", "c", next_wake_minutes=30, summary="s"))],
+                )
+            ],
+            Ledger({"fake:2": Limits(rpm=100, tpm=1_000_000, rpd=1000)}, tmp_path / "l2.json", clock=wall),
+        ),
+        registry=registry,
+        ctx=ToolContext(
+            loop="energy",
+            memory=expert_dir,
+            memories={"brain": brain_dir, "energy": expert_dir},
+            settings=load_settings({}),
+            wake=lambda name: None,
+        ),
+        heartbeat_s=HEARTBEAT,
+        priority="expert",
+        constitution="be useful",
+        clock=wall,
+        pause_file=tmp_path / "PAUSE",
+    )
+    messages = expert._opening_messages([])
+    text = _system_text(messages)
+    assert "# Reaching the brain" in text
+    assert "# Acting" not in text
+    assert "# This cycle" in text
+
+
 # -- the quota caps a cycle too ------------------------------------------
 
 METERED = "gemini:gemini-3.8-flash"
