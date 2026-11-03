@@ -1,6 +1,8 @@
 // Package ha implements a minimal Home Assistant WebSocket client that
-// surfaces state_changed events for a single configurable entity. Used by
-// the controller to react to Wallbox state changes.
+// surfaces state_changed events for a configurable set of entities. Used by
+// the controller to react to Wallbox / car charging state changes. On every
+// (re)connect it also emits the current state of each watched entity via
+// get_states, so the controller never starts blind.
 package ha
 
 import (
@@ -17,7 +19,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Event is a filtered state_changed event for the configured entity.
+// Event is a filtered state_changed event for one of the watched entities.
+// OldState is empty for the snapshot events emitted on connect.
 type Event struct {
 	EntityID string
 	OldState string
@@ -34,11 +37,15 @@ type Listener interface {
 
 // Dial creates a Listener and spawns a goroutine that stays connected for
 // the lifetime of ctx. Cancelling ctx is the only way to stop it.
-func Dial(ctx context.Context, url, token, entityID string, log *slog.Logger) Listener {
+func Dial(ctx context.Context, url, token string, entityIDs []string, log *slog.Logger) Listener {
+	watch := make(map[string]bool, len(entityIDs))
+	for _, id := range entityIDs {
+		watch[id] = true
+	}
 	l := &listener{
 		url:       url,
 		token:     token,
-		entityID:  entityID,
+		watch:     watch,
 		log:       log,
 		events:    make(chan Event, 16),
 		connected: make(chan bool, 4),
@@ -51,7 +58,7 @@ func Dial(ctx context.Context, url, token, entityID string, log *slog.Logger) Li
 type listener struct {
 	url      string
 	token    string
-	entityID string
+	watch    map[string]bool
 	log      *slog.Logger
 
 	events    chan Event
@@ -174,6 +181,15 @@ func (l *listener) connectAndServe(ctx context.Context) error {
 		return fmt.Errorf("send subscribe: %w", err)
 	}
 
+	// 4b. snapshot current states — state_changed only fires on change.
+	statesID := l.msgID.Add(1)
+	if err := conn.WriteJSON(map[string]any{
+		"id":   statesID,
+		"type": "get_states",
+	}); err != nil {
+		return fmt.Errorf("send get_states: %w", err)
+	}
+
 	// 5. read loop
 	for {
 		if ctx.Err() != nil {
@@ -183,6 +199,12 @@ func (l *listener) connectAndServe(ctx context.Context) error {
 		if err := readJSONCtx(ctx, conn, &msg); err != nil {
 			return fmt.Errorf("read: %w", err)
 		}
+		if msg.Type == "result" && msg.ID == statesID {
+			if err := l.emitSnapshot(ctx, msg.Result); err != nil {
+				return err
+			}
+			continue
+		}
 		if msg.Type != "event" || msg.Event == nil {
 			continue
 		}
@@ -190,7 +212,7 @@ func (l *listener) connectAndServe(ctx context.Context) error {
 			continue
 		}
 		data := msg.Event.Data
-		if data.EntityID != l.entityID {
+		if !l.watch[data.EntityID] {
 			continue
 		}
 		old, new := "", ""
@@ -206,6 +228,28 @@ func (l *listener) connectAndServe(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+func (l *listener) emitSnapshot(ctx context.Context, raw json.RawMessage) error {
+	var states []struct {
+		EntityID string `json:"entity_id"`
+		State    string `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &states); err != nil {
+		l.log.WarnContext(ctx, "ha get_states decode failed", "err", err)
+		return nil
+	}
+	for _, st := range states {
+		if !l.watch[st.EntityID] {
+			continue
+		}
+		select {
+		case l.events <- Event{EntityID: st.EntityID, NewState: st.State}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func (l *listener) notifyConnected(up bool) {

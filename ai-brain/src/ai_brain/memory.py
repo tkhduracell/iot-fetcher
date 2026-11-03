@@ -9,6 +9,7 @@ Layout under ``root``::
     inbox/<ts>-<sender>-<n>.md
     inbox/done/
     outbox/             (brain only, with outbox/slack/)
+    sessions/<cycle-id>.jsonl[.gz]  (see ai_brain.sessions)
 
 All writes go through a temp file plus ``os.replace`` so a reader never sees a
 half-written file.
@@ -17,15 +18,21 @@ half-written file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ai_brain.errors import BadInput
+from ai_brain.fence import fence, safe_source
 from ai_brain.redact import redact
+
+log = logging.getLogger(__name__)
 
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
@@ -33,11 +40,28 @@ MAX_FACTS = 40
 MAX_JOURNAL_FILES = 30
 MAX_REVISIONS = 20
 MAX_CONTEXT_GAPS = 10
+# The inbox's share of the prompt. A brain that sat out an outage came
+# back to 118 notes (~46k tokens) and paid for them on every round of the
+# cycle; past this, the oldest notes from other loops shrink to one line each.
+# Filip's own notes are always shown in full and do not count against it.
+MAX_CONTEXT_INBOX_CHARS = 12_000
+INBOX_PREVIEW_CHARS = 160
+# The sender of Filip's own notes (Slack, the MCP server). Never shortened.
+OWNER_SENDER = "filip"
 MAX_TITLE_TOKENS = 20
 
 # The fact sidecar lives beside the facts but is not one: ``list_facts`` globs
 # ``*.md``, so a ``.json`` name can never be mistaken for a fact.
 FACT_META_NAME = "_meta.json"
+
+# Where a cycle's memory mutations go: ``sink(op, name, old_body)``. A
+# ContextVar rather than an attribute on MemoryDir, because the MCP server and a
+# running cycle write through the same MemoryDir at the same time: this is set
+# inside the loop's own task, so a human's outside edit landing mid-cycle is not
+# recorded as something the agent did. Same mechanism as ``llm.STREAM_SINK``.
+MEMORY_SINK: ContextVar[Callable[[str, str, str], None] | None] = ContextVar(
+    "MEMORY_SINK", default=None
+)
 
 
 def _fit_title(title: str) -> str:
@@ -77,7 +101,7 @@ def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """A persona file's leading ``---\\nkey: value\\n---`` block, and the rest.
 
     A persona is fed straight into the model's own system prompt (see
-    ``read_context``), so whatever lives in the frontmatter must never reach
+    ``context_parts``), so whatever lives in the frontmatter must never reach
     it -- this is the one place that boundary is drawn, and every reader of a
     persona (the prompt, the API) goes through it rather than reading the
     file directly. Deliberately not YAML: one ``key: value`` per line, no
@@ -102,7 +126,7 @@ def now_utc() -> datetime:
 def safe_name(name: str) -> str:
     """Validate a memory item name. Tools take names, never paths."""
     if not isinstance(name, str) or not SAFE_NAME.match(name):
-        raise ValueError(f"unsafe memory name: {name!r}")
+        raise BadInput(f"unsafe memory name: {name!r}")
     return name
 
 
@@ -273,7 +297,7 @@ class MemoryDir:
 
     def persona_text(self) -> str:
         """The persona body only -- never the frontmatter. This is what goes
-        into the model's own prompt (see ``read_context``), so the split
+        into the model's own prompt (see ``context_parts``), so the split
         happens here rather than trusting every caller to remember it."""
         _, body = split_frontmatter(self._read(self.persona_path))
         return body.strip()
@@ -291,11 +315,13 @@ class MemoryDir:
 
     def rewrite_identity(self, body: str) -> None:
         self._require_brain("rewrite_identity")
+        self._record_mutation("rewrite_identity", "identity", self.persona_path)
         self._keep_revision("identity", self.persona_path, body)
         _atomic_write(self.persona_path, body)
 
     def rewrite_goals(self, body: str) -> None:
         self._require_brain("rewrite_goals")
+        self._record_mutation("rewrite_goals", "goals", self.goals_path)
         self._keep_revision("goals", self.goals_path, body)
         _atomic_write(self.goals_path, body)
 
@@ -409,7 +435,9 @@ class MemoryDir:
         # being public) could end up in git history -- so it gets its own
         # redaction pass rather than relying solely on the tool-output fence.
         self.facts_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write(self.facts_dir / f"{safe_name(name)}.md", redact(body))
+        path = self.facts_dir / f"{safe_name(name)}.md"
+        self._record_mutation("write_fact", name, path)
+        _atomic_write(path, redact(body))
         self._bump_fact_meta(name, _fit_title(redact(title)))
 
     def read_fact(self, name: str) -> Fact | None:
@@ -432,6 +460,7 @@ class MemoryDir:
         path = self.facts_dir / f"{safe_name(name)}.md"
         if not path.exists():
             return False
+        self._record_mutation("delete_fact", name, path)
         path.unlink()
         meta = self._read_fact_meta()
         if meta.pop(name, None) is not None:
@@ -543,6 +572,8 @@ class MemoryDir:
             closed_at=None,
             answer="",
         )
+        # Reopening wipes the old answer, which is on no other record.
+        self._record_mutation("open_gap", gap_id, path)
         self._write_gap(gap)
         return gap
 
@@ -552,6 +583,7 @@ class MemoryDir:
         gap = self._read_gap(path)
         if gap is None:
             return False
+        self._record_mutation("close_gap", gap_id, path)
         self._write_gap(
             Gap(
                 id=gap.id,
@@ -741,26 +773,52 @@ class MemoryDir:
 
     # -- context -------------------------------------------------------
 
-    def read_context(self, constitution: str, notes: list[Note] | None = None) -> str:
-        """Render the whole system prompt.
+    def context_parts(self, constitution: str) -> tuple[str, str]:
+        """The system prompt as (stable, volatile).
+
+        The stable half -- constitution and identity/persona -- changes only
+        when someone rewrites it, so a provider with a prefix cache can keep
+        it (and the tool list ahead of it) warm across cycles that run close
+        together. The second half is what moves between cycles: the fact names.
+
+        Only text that cannot carry instructions belongs here: the constitution
+        and the persona, which a person writes (the brain's identity is the one
+        exception -- it rewrites it, see below), and fact *names*, which
+        ``safe_name`` limits to ``[a-z0-9_.-]``. Free text an agent wrote --
+        goals, gaps, the journal, the inbox -- may have been copied from a web
+        page by way of the researcher, so none of it is in either half; see
+        ``external_parts``.
+
+        The brain's identity stays: it is the one place the system prompt says
+        who the brain is, and it is the brain's to rewrite. That is a decision
+        for Filip rather than a bug to fix quietly here.
+        """
+        stable = [f"# Constitution\n{constitution}"]
+        stable.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
+        facts = "\n".join(f"- {n}" for n in self.list_facts())
+        return "\n\n".join(stable), f"# Facts available (use read_fact)\n{facts}"
+
+    def external_parts(self, notes: list[Note]) -> str:
+        """The goals, open gaps, journal and inbox, each fenced, for the user turn.
+
+        None of it is instructions. The inbox holds what other loops chose to
+        send -- an expert that has just read a web page included -- and the
+        journal, the goals and the gaps hold whatever earlier cycles wrote
+        down, which may have copied from the same place. In the system prompt
+        that text would speak with the same voice as the constitution; in a
+        fence in the user turn it is data, with where it came from named in the
+        fence's tag where the text cannot reach it. The goals and gaps are
+        still the agent's own agenda -- the cycle instructions say so -- they
+        just cannot give orders.
 
         ``notes`` is the inbox the caller already read. A loop marks exactly
         that list done at the end of the cycle, so re-reading the directory
         here would render a note that then stays unread -- shown once for free,
         and again next cycle.
         """
-        parts = [f"# Constitution\n{constitution}"]
-        parts.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
+        sections = []
         if self.is_brain:
-            parts.append(f"# Goals\n{self.goals_text()}")
-        parts.append(f"# Journal (last 2 days)\n{self.journal_text(2)}")
-        facts = "\n".join(f"- {n}" for n in self.list_facts())
-        parts.append(f"# Facts available (use read_fact)\n{facts}")
-        inbox = "\n\n".join(
-            f"## from: {n.sender} ({_iso(n.created)})\n{n.body}"
-            for n in (self.unread_notes() if notes is None else notes)
-        )
-        parts.append(f"# Inbox\n{inbox}")
+            sections.append(f"# Goals\n{_block_or_empty('goals', self.goals_text())}")
         open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
         # Silence when there is nothing unknown: an empty heading is pure
         # prompt budget, and the cap is there because a brain that opens gaps
@@ -772,8 +830,11 @@ class MemoryDir:
                 f"- [{g.id}] {g.question}" + (f" ({g.why})" if g.why else "")
                 for g in open_gaps
             )
-            parts.append(f"## Öppna luckor\n{luckor}")
-        return "\n\n".join(parts)
+            sections.append(f"# Open gaps (Öppna luckor)\n{fence('gaps', luckor, block=True)}")
+        inbox = render_inbox(notes)
+        sections.append(f"# Journal (last 2 days)\n{_block_or_empty('journal', self.journal_text(2))}")
+        sections.append(f"# Inbox\n{inbox or '(empty)'}")
+        return "\n\n".join(sections)
 
     # -- housekeeping --------------------------------------------------
 
@@ -790,6 +851,24 @@ class MemoryDir:
         return len(self.list_facts()) > MAX_FACTS or journal_files > MAX_JOURNAL_FILES
 
     # -- internals -----------------------------------------------------
+
+    @staticmethod
+    def _record_mutation(op: str, name: str, path: Path) -> None:
+        """Tell the running cycle's log what is about to be replaced.
+
+        Reads the old body only when a cycle is listening, so an MCP edit or a
+        test pays nothing for it. An old body that cannot be read must not stop
+        the write that was going to replace it.
+        """
+        sink = MEMORY_SINK.get()
+        if sink is None:
+            return
+        try:
+            old = MemoryDir._read(path)
+        except (OSError, ValueError):
+            log.warning("could not log the old body of %s %s", op, name, exc_info=True)
+            old = ""
+        sink(op, name, old)
 
     def _require_brain(self, op: str) -> None:
         if not self.is_brain:
@@ -815,6 +894,70 @@ class MemoryDir:
         if not sender:
             return None
         return Note(path=path, sender=sender, body=body, created=created)
+
+
+def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
+    """The inbox section, held to about ``budget`` characters of full notes.
+
+    Notes are kept in full newest first while they fit the budget; a note
+    that does not fit becomes a one-line preview (sender, time, the opening
+    words), enough to tell what it was about and ask its sender if it
+    matters, and older notes that still fit stay in full. Filip's notes never
+    shrink and never spend the budget. Output stays in arrival order.
+
+    A full note is charged for everything it puts in the prompt -- its heading
+    and the fence round it as well as the body -- because the fence is resent
+    on every round of the cycle like the text inside it. Charging the body
+    alone let thirty short notes spend ~40 characters each, unbudgeted. A
+    preview is not charged: it is the cheap form already, and is capped by its
+    own length rather than by this budget.
+
+    Every note body is fenced, preview or not. The fence's ``source`` names the
+    sender, from the note's own header rather than its text, and the fence's
+    escaping stops a body writing a tag of its own -- so a body that claims to
+    be from Filip is still just a body from whoever the tag says. The fence puts
+    the body on lines of its own, so a ``topic:`` first line is still the first
+    line the model reads.
+    """
+    shown: list[str] = []
+    short = 0
+    left = budget
+    for note in reversed(notes):
+        label = _label(note.sender)
+        head = f"from: {label} ({_iso(note.created)})"
+        source = f"note-{label}"
+        owner = note.sender == OWNER_SENDER
+        full = f"## {head}\n{fence(source, note.body, block=True)}"
+        if owner or len(full) <= left:
+            if not owner:
+                left -= len(full)
+            shown.append(full)
+        else:
+            short += 1
+            preview = " ".join(note.body[: INBOX_PREVIEW_CHARS * 2].split())
+            if len(preview) > INBOX_PREVIEW_CHARS:
+                preview = preview[:INBOX_PREVIEW_CHARS] + "…"
+            shown.append(f"- {head}: {fence(source, preview)}")
+    if short:
+        shown.append(
+            f"({short} note(s) shortened to one line to keep the inbox "
+            f"under {budget} characters; ask the sender if one matters.)"
+        )
+    return "\n\n".join(reversed(shown))
+
+
+def _block_or_empty(source: str, text: str) -> str:
+    return fence(source, text, block=True) if text.strip() else "(empty)"
+
+
+def _label(sender: str) -> str:
+    """A sender name as safe for a fence's ``source`` and the line above it.
+
+    ``drop_note`` only writes names that pass ``safe_name``, so this changes
+    nothing for a real note. It is for a header edited by hand: that "name" must
+    not carry text of its own outside the fence, or come out as ``filip``.
+    """
+    return safe_source(sender)
 
 
 def _stamps(directory: Path) -> list[int]:

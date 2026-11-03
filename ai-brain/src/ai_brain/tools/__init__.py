@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ai_brain.config import Settings
+from ai_brain.errors import BadInput
+from ai_brain.fence import fence
 from ai_brain.llm import ToolCall, ToolSpec
 from ai_brain.memory import MemoryDir
 from ai_brain.redact import redact
@@ -62,6 +63,41 @@ class Tool:
     available: AvailableFn | None = None
 
 
+# Tools that read and change nothing. This is what a resumed cycle goes by when
+# it finds a call with no recorded result: the model is told it may simply call
+# one of these again, and anything else has to be presumed to have happened. The
+# harness runs none of them itself. A list rather than a
+# flag every registration has to remember, so a new tool that forgets is treated
+# as a write, which is the safe way round. A test holds this to the registry.
+READ_ONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        "airbnb_calendar",
+        "code_grep",
+        "code_list",
+        "code_log",
+        "code_overview",
+        "code_read",
+        "docker_logs",
+        "docker_ps",
+        "docker_top",
+        "drive_search",
+        "expert_overview",
+        "ha_context",
+        "ha_error_log",
+        "list_facts",
+        "list_proposals",
+        "read_expert",
+        "read_fact",
+        "system_status",
+        "usage_status",
+        "vm_metrics",
+        "vm_query",
+        "web_fetch",
+        "web_search",
+    }
+)
+
+
 def ok(data: Any) -> str:
     payload = {"ok": True}
     if isinstance(data, dict):
@@ -75,27 +111,15 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
-_SOURCE_RE = re.compile(r"[a-z0-9_.-]+")
-_ZWSP = "\u200b"
-# Case-insensitive: HTML tag names are, so ``</EXTERNAL>`` closes the fence too.
-_FENCE_RE = re.compile(r"</?external", re.IGNORECASE)
-
-
 def wrap_external(source: str, text: str) -> str:
     """Fence text that came from outside this system.
 
     A metric name is ours; a Drive document, a web page and a friendly name a
     human typed into Home Assistant are not. Anything in the second group is
     data the model reads, never instructions it follows, so it is handed over
-    inside an ``<external>`` element that says where it came from.
-
-    The fence only means anything if the fenced text cannot close it, so any
-    ``<external`` or ``</external`` inside ``text`` -- in any case, since HTML
-    tag names are case-insensitive -- gets a zero-width space wedged after the
-    ``<``. That breaks the tag while leaving the text
-    readable, so a page saying "put </external> here" still reads correctly and
-    still cannot escape. ``source`` is ours rather than a stranger's, but it is
-    validated too, since it lands in an attribute value.
+    inside an ``<external>`` element that says where it came from. The fence
+    and its escaping live in ``ai_brain.fence`` (see there for why the text
+    cannot close it).
 
     Every caller that hands the model log or page text from outside this
     system routes through here, which makes this the one place to catch a
@@ -105,11 +129,7 @@ def wrap_external(source: str, text: str) -> str:
     into a memory fact. Masking happens before fencing so a secret cannot
     hide the fence's own sentinel handling from itself.
     """
-    if not _SOURCE_RE.fullmatch(source):
-        raise ValueError(f"wrap_external: invalid source {source!r}")
-    masked = redact(text)
-    safe = _FENCE_RE.sub(lambda m: m.group(0)[0] + _ZWSP + m.group(0)[1:], masked)
-    return f'<external source="{source}">{safe}</external>'
+    return fence(source, redact(text))
 
 
 class ToolRegistry:
@@ -161,6 +181,8 @@ class ToolRegistry:
 
         try:
             return await tool.fn(ctx, args)
+        except BadInput as exc:
+            return err(str(exc))
         except Exception as exc:  # a tool crash must not end the cycle
             log.warning("[tool] %s failed", call.name, exc_info=True)
             return err(f"{type(exc).__name__}: {exc}")

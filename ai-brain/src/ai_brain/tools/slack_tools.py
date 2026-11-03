@@ -22,12 +22,12 @@ from __future__ import annotations
 
 from ai_brain.config import Settings
 from ai_brain.llm import ToolSpec
-from ai_brain.memory import Note
+from ai_brain.memory import OWNER_SENDER, Note
 from ai_brain.slack_io import SlackRateCapped
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
 
 BRAIN_ONLY = frozenset({"brain"})
-NOTE_SENDER = "filip"
+NOTE_SENDER = OWNER_SENDER
 ANY_TOPIC = "*"
 
 
@@ -62,6 +62,12 @@ def owed_replies(notes: list[Note]) -> set[str]:
     return owed
 
 
+def tick_off(owed: set[str], topic: str) -> None:
+    """What a post on ``topic`` answers: that topic, and any bare DM."""
+    owed.discard(topic)
+    owed.discard(ANY_TOPIC)
+
+
 def _out(ctx: ToolContext):
     return ctx.extras.get("slack_out")
 
@@ -80,8 +86,7 @@ async def _slack_post(ctx: ToolContext, args: dict) -> str:
     # resolve_topic (inside out.post) actually routed the reply.
     owed = ctx.extras.get("owed_replies")
     if owed:
-        owed.discard(topic)
-        owed.discard(ANY_TOPIC)
+        tick_off(owed, topic)
     # resolve_topic runs again here (post() already ran it once, internally)
     # purely to report back where the message actually landed -- cheap, since
     # it is just a sessions.json read, and the alternative is threading the
