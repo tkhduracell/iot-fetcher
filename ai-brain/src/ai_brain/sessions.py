@@ -52,12 +52,13 @@ import re
 import secrets
 import shutil
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ai_brain.fence import safe_source
 from ai_brain.llm import Message, ToolCall
 from ai_brain.redact import MASK, SECRET_NAME, masked_under_name, redact
 
@@ -434,8 +435,12 @@ def read_events(path: Path) -> list[dict]:
     power cut can, so neither raises: a reader gets whatever is intact. A gap
     in the ``seq`` numbers is how it can tell the record is incomplete.
     """
+    return [event for _, event in _iter_events(path)]
+
+
+def _iter_events(path: Path) -> Iterator[tuple[int, dict]]:
+    """``read_events`` as it comes, with each event's size on disk."""
     opener: Callable[..., Any] = gzip.open if path.name.endswith(GZ_SUFFIX) else open
-    events: list[dict] = []
     try:
         with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -444,10 +449,9 @@ def read_events(path: Path) -> list[dict]:
                 except ValueError:
                     continue
                 if isinstance(event, dict):
-                    events.append(event)
+                    yield len(line), event
     except (OSError, EOFError, zlib.error):
         log.warning("[session] %s is damaged; using what was readable", path)
-    return events
 
 
 @dataclass
@@ -751,6 +755,133 @@ def recover(
     if resume_at is not None:
         del out.messages[resume_at]
     return out
+
+
+# search_history's bounds. Scanning decompresses and parses every file it reads, on
+# a Pi, for one tool call: past this much of that the search stops and says so.
+MAX_SEARCH_DECOMPRESSED_CHARS = 64_000_000
+SEARCH_SNIPPET_CHARS = 300
+MAX_SEARCH_LIMIT = 20
+# A snippet is as long as what it matched, so this is part of bounding one too.
+MAX_SEARCH_QUERY_CHARS = 200
+# A tool name is the model's to invent, and a hit carries it outside the fence.
+_MAX_HIT_TOOL_CHARS = 64
+
+# Its results are this log's own text coming back, and its arguments the words
+# searched for. Searching either would make every search find the last one.
+_NOT_SEARCHED_TOOLS = frozenset({"search_history"})
+
+# ``json.dumps`` writes non-ASCII as an escape, which is what ``tools.ok`` does to
+# every result: a logged one holds the six characters of an escape where the tool
+# said "ä", and a search for the word would never find it.
+_JSON_UNICODE_ESCAPE = re.compile(r"(?<!\\)\\u([0-9a-fA-F]{4})")
+
+
+def _unescaped(text: str) -> str:
+    """Logged JSON with its non-ASCII readable. A regex rather than a parse, since
+    a result cut to the event limit is no longer JSON."""
+    if "\\u" not in text:
+        return text
+    return _JSON_UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text)
+
+
+def _searchable(event: dict) -> str:
+    """An event's text a search should look at.
+
+    Not the ``opening``: it is the constitution and the persona every time, and
+    would match on every cycle regardless of what the cycle did.
+    """
+    kind = event.get("type")
+    if kind == "reply":
+        calls = json.dumps(
+            [
+                c.get("args")
+                for c in event.get("tool_calls") or []
+                if c.get("name") not in _NOT_SEARCHED_TOOLS
+            ],
+            ensure_ascii=False,
+        )
+        return "\n".join((str(event.get("text") or ""), str(event.get("thinking") or ""), calls))
+    if kind == "tool_result" and event.get("name") not in _NOT_SEARCHED_TOOLS:
+        return _unescaped(str(event.get("result") or ""))
+    if kind == "memory":
+        return _unescaped(str(event.get("old") or ""))
+    if kind == "cycle_end":
+        return str(event.get("summary") or "")
+    return ""
+
+
+def _snippet(text: str, at: int, length: int) -> str:
+    half = SEARCH_SNIPPET_CHARS // 2
+    start = max(0, at - half)
+    end = min(len(text), at + length + half)
+    prefix = "…" if start else ""
+    suffix = "…" if end < len(text) else ""
+    return f"{prefix}{text[start:end]}{suffix}"
+
+
+def search_sessions(
+    directory: Path,
+    query: str,
+    *,
+    now: float,
+    days: int,
+    limit: int,
+    exclude: str = "",
+) -> dict:
+    """Plain case-insensitive substring search over one agent's past cycles.
+
+    Newest first, one hit per event. Plain substring on purpose: a model's
+    regex over tens of megabytes on a Pi is a way to stall a cycle for nothing
+    a word would not find. Takes one directory and no agent name, which is what
+    keeps a loop to its own history.
+    """
+    needle = query.lower()
+    cutoff = datetime.fromtimestamp(now, UTC) - timedelta(days=days)
+    hits: list[dict] = []
+    scanned = 0
+    chars = 0
+    seen: set[str] = set()
+    for path in reversed(session_files(directory)):
+        day = _cycle_day(path.name)
+        if day is None or day < cutoff:
+            break
+        # Not a compress's leftover temp file, and not a cycle twice: a power cut
+        # during ``compress`` leaves both copies, and the .gz sorts first here.
+        if not path.name.endswith((LOG_SUFFIX, HOLES_SUFFIX, GZ_SUFFIX)):
+            continue
+        cycle = cycle_id_of(path)
+        if cycle == exclude or cycle in seen:
+            continue
+        seen.add(cycle)
+        scanned += 1
+        for size, event in _iter_events(path):
+            chars += size
+            if chars > MAX_SEARCH_DECOMPRESSED_CHARS:
+                return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
+            text = _searchable(event)
+            lowered = text.lower()
+            at = lowered.find(needle)
+            if at < 0:
+                continue
+            # Lowercasing can change a string's length ("İ"), and ``at`` is an
+            # offset into the lowered text.
+            hit = {
+                "cycle": cycle,
+                "at": event.get("at"),
+                "type": event.get("type"),
+                "snippet": _snippet(
+                    text if len(lowered) == len(text) else lowered, at, len(needle)
+                ),
+            }
+            if event.get("round") is not None:
+                hit["round"] = event["round"]
+            if event.get("type") == "tool_result":
+                hit["tool"] = safe_source(str(event.get("name")))[:_MAX_HIT_TOOL_CHARS]
+            hits.append(hit)
+            if len(hits) >= limit:
+                return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
+    return {"hits": hits, "cycles_scanned": scanned, "truncated": False}
 
 
 def session_files(directory: Path) -> list[Path]:

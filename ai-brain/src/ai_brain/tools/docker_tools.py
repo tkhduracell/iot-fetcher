@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from ai_brain.docker_api import container_url
 from ai_brain.llm import ToolSpec
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
+from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
 from ai_brain.tools.http import decode_json, request, stream_tail
 
 DOCKER_LOOPS = frozenset({"brain", "infra"})
@@ -28,14 +28,6 @@ SOURCE = "docker"
 LOG_TAIL_BYTES = 256 * 1024
 DEFAULT_LOG_LINES = 50
 MAX_LOG_LINES = 200
-
-
-def _int_arg(args: dict, key: str, default: int, low: int, high: int) -> int:
-    try:
-        value = int(float(args.get(key, default)))
-    except (TypeError, ValueError):
-        return default
-    return max(low, min(value, high))
 
 
 async def _docker_ps(ctx: ToolContext, _args: dict) -> str:
@@ -101,7 +93,7 @@ async def _docker_top(ctx: ToolContext, args: dict) -> str:
 
 async def _docker_logs(ctx: ToolContext, args: dict) -> str:
     url = container_url(ctx.settings.docker_proxy_url, args["container"], "logs")
-    wanted = _int_arg(args, "lines", DEFAULT_LOG_LINES, 1, MAX_LOG_LINES)
+    wanted = int_arg(args, "lines", DEFAULT_LOG_LINES, 1, MAX_LOG_LINES)
 
     _, body, truncated, problem = await stream_tail(
         ctx,

@@ -13,9 +13,10 @@ up on their next cycle; nothing is paused.
 Writes need ``MCP_TOKEN``. With it set, every request must carry
 ``Authorization: Bearer <token>`` and the write tools exist; without it the
 server is read-only and unauthenticated, like the introspection API. Every
-outside overwrite or delete of a fact, persona, goals or the constitution
-keeps the previous body as a revision (see ``history``), so a refactor can
-be undone.
+overwrite or delete of a fact, by an outside edit or by the agent's own cycle,
+keeps the previous body as a revision, as does every outside edit of a persona,
+goals or the constitution (see ``history``). ``restore_fact`` puts a fact back,
+so neither a refactor nor an agent's own tidying is final.
 """
 
 from __future__ import annotations
@@ -45,8 +46,9 @@ the brain, goals. The constitution is shared by all of them.
 Start with list_agents, then agent_overview for the agent you are working
 on. Facts are the durable knowledge read back into every cycle -- keep them
 few, sharp and non-overlapping. Edits land on disk immediately and the agent
-sees them on its next cycle. Every overwrite or delete keeps a revision;
-history shows them.
+sees them on its next cycle. Every overwrite or delete keeps a revision,
+including an agent's own: history shows them, history kind=deleted names facts
+that no longer exist, and restore_fact puts one back.
 """
 
 MAX_JOURNAL_DAYS = 14
@@ -164,8 +166,15 @@ def build_mcp(system: System, token: str) -> MCPServer:
     @mcp.tool()
     def history(agent: str, kind: str, name: str = "", limit: int = 5) -> list[dict[str, Any]]:
         """Previous bodies, newest first. kind: persona | goals | fact (needs name) |
-        constitution (agent ignored)."""
+        deleted (facts that no longer exist, without bodies) | constitution (agent
+        ignored). Each fact revision has ``by`` (agent or outside) and the
+        ``revision`` number restore_fact takes."""
         mem = memory(agent) if kind != "constitution" else system.memories["brain"]
+        if kind == "deleted":
+            return [
+                {"name": name, "at": _iso(r.at), "revision": r.stamp, "title": r.title, "by": r.by}
+                for name, r in mem.deleted_facts()[: max(limit, 0)]
+            ]
         if kind == "persona":
             revisions = mem.identity_history(limit)
         elif kind == "goals":
@@ -175,8 +184,11 @@ def build_mcp(system: System, token: str) -> MCPServer:
         elif kind == "constitution":
             revisions = mem._history("constitution", limit)
         else:
-            raise ToolError("kind must be persona, goals, fact or constitution")
-        return [{"at": _iso(r.at), "body": r.body} for r in revisions]
+            raise ToolError("kind must be persona, goals, fact, deleted or constitution")
+        return [
+            {"at": _iso(r.at), "revision": r.stamp, "title": r.title, "by": r.by, "body": r.body}
+            for r in revisions
+        ]
 
     if not writable:
         return mcp
@@ -186,19 +198,25 @@ def build_mcp(system: System, token: str) -> MCPServer:
     @mcp.tool()
     def write_fact(agent: str, name: str, title: str, body: str) -> str:
         """Create or replace a fact. name: lowercase [a-z0-9_.-]. The previous body is kept."""
-        mem = memory(agent)
-        mem.keep_fact_revision(checked(name))
-        mem.write_fact(name, title, body)
+        memory(agent).write_fact(checked(name), title, body)
         return f"wrote {agent}/{name}"
 
     @mcp.tool()
     def delete_fact(agent: str, name: str) -> str:
         """Delete a fact. Its body is kept as a revision (history kind=fact)."""
-        mem = memory(agent)
-        mem.keep_fact_revision(checked(name))
-        if not mem.delete_fact(name):
+        if not memory(agent).delete_fact(checked(name)):
             raise ToolError(f"{agent} has no fact {name!r}")
         return f"deleted {agent}/{name}"
+
+    @mcp.tool()
+    def restore_fact(agent: str, name: str, revision: int = 0) -> str:
+        """Put a fact back to a revision from history (the newest if 0), whether it
+        was overwritten or deleted. The body it replaces is kept too, so this can
+        be undone the same way."""
+        restored = memory(agent).restore_fact(checked(name), revision)
+        if restored is None:
+            raise ToolError(f"{agent} has no such revision of {name!r}; see history")
+        return f"restored {agent}/{name} to {_iso(restored.at)}"
 
     @mcp.tool()
     def rename_fact(agent: str, name: str, new_name: str, new_title: str = "") -> str:
@@ -211,7 +229,6 @@ def build_mcp(system: System, token: str) -> MCPServer:
         if mem.read_fact(new_name) is not None:
             raise ToolError(f"{agent} already has a fact {new_name!r}")
         mem.write_fact(new_name, new_title or fact.title, fact.body)
-        mem.keep_fact_revision(name)
         mem.delete_fact(name)
         return f"renamed {agent}/{name} -> {new_name}"
 

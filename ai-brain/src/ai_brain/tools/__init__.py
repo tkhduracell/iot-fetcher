@@ -88,6 +88,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "list_proposals",
         "read_expert",
         "read_fact",
+        "search_history",
         "system_status",
         "usage_status",
         "vm_metrics",
@@ -96,6 +97,15 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "web_search",
     }
 )
+
+
+def int_arg(args: dict, key: str, default: int, low: int, high: int) -> int:
+    """An int argument as a sane int, whatever the model actually sent."""
+    try:
+        value = int(float(args.get(key, default)))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(low, min(value, high))
 
 
 def ok(data: Any) -> str:

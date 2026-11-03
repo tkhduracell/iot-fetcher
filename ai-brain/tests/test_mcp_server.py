@@ -8,6 +8,7 @@ from ai_brain.config import load_settings
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ai_brain.mcp_server import bearer_guard, build_mcp
+from ai_brain.memory import MEMORY_SINK
 from ai_brain.supervisor import build
 
 NOW = 1_000_000.0
@@ -52,6 +53,55 @@ async def test_fact_write_delete_keeps_revisions(system):
     assert system.memories["energy"].read_fact("pool") is None
     bodies = [r.body for r in system.memories["energy"].fact_history("pool")]
     assert bodies[:2] == ["v2", "v1"]
+
+
+async def test_restore_is_a_write_tool(system):
+    assert "restore_fact" not in await tool_names(build_mcp(system, ""))
+    assert "restore_fact" in await tool_names(build_mcp(system, "t"))
+
+
+async def test_history_shows_an_agents_own_edit_and_restore_undoes_it(system):
+    """The whole path: a loop's overwrite, seen and undone from outside."""
+    mem = system.memories["energy"]
+    mem.write_fact("pool", "Pool", "the good version")
+    token = MEMORY_SINK.set(lambda *_: None)
+    try:
+        mem.write_fact("pool", "Pool", "what the agent replaced it with")
+    finally:
+        MEMORY_SINK.reset(token)
+
+    mcp = build_mcp(system, "t")
+    revisions = await call(mcp, "history", agent="energy", kind="fact", name="pool")
+    assert revisions[0]["body"] == "the good version"
+    assert revisions[0]["by"] == "agent"
+
+    await call(mcp, "restore_fact", agent="energy", name="pool", revision=revisions[0]["revision"])
+
+    assert mem.read_fact("pool").body == "the good version"
+    assert mem.fact_history("pool")[0].by == "outside"
+
+
+async def test_history_names_deleted_facts_and_restore_brings_one_back(system):
+    mem = system.memories["energy"]
+    mem.write_fact("pool", "Pool heat", "the only version")
+    mem.delete_fact("pool")
+
+    mcp = build_mcp(system, "t")
+    deleted = await call(mcp, "history", agent="energy", kind="deleted")
+    assert [(d["name"], d["title"]) for d in deleted] == [("pool", "Pool heat")]
+    assert "body" not in deleted[0]
+
+    await call(mcp, "restore_fact", agent="energy", name="pool")
+
+    assert mem.read_fact("pool").title == "Pool heat"
+    assert await call(mcp, "history", agent="energy", kind="deleted") == []
+
+
+async def test_restore_without_a_revision_is_an_error(system):
+    with pytest.raises(ToolError, match="no such revision"):
+        await build_mcp(system, "t").call_tool(
+            "restore_fact", {"agent": "energy", "name": "never-existed"}
+        )
 
 
 async def test_rename_fact_moves_body_and_title(system):
