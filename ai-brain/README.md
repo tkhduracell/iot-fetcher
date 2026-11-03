@@ -318,6 +318,20 @@ higher, and never above `CYCLE_MAX_ROUNDS_HARD_CEILING`), just enough for the
 nudge to land and for the model to get one more round to act on it. This only
 ever happens once per cycle, the same as the nudge itself.
 
+The quota clamps the cap too. A model with 11 requests a day (see
+[Quota](#quota)) cannot play a 32-round cycle, and without a clamp the nudge
+would wait for round 30 while the cycle met `ChainExhausted` at round 12 with
+nothing written down. After every round the loop asks the ledger how many
+requests the answering key has left (`Ledger.requests_left`: the daily budget,
+and the expert floor for an expert on a key the brain shares) and, when no
+*other* provider this loop may use is dialable with quota left, caps the cycle
+at `rounds + remaining`. The same nudge then fires two rounds before that
+point, and a cycle that still does not call `end_cycle` ends `max_rounds` with
+a summary naming the quota. A cycle that can fall through to another model
+(`BRAIN_MODELS=all`, say, or an expert with a `lan:` host up) is not clamped,
+and neither is an unmetered `lan:` key. The quota is a hard limit, so unlike a
+cap drop it is never rescued upward by the wrap-up floor.
+
 The rounds actually used and the cap in force are both in the journal line
 (`rounds=12/32`) and the trace/API (`cap`), so `journal.md` and Grafana both
 show whether a cycle is running out of room or ending early.

@@ -649,6 +649,11 @@ class AgentLoop:
         # have been told "N rounds left" and then get fewer. None means
         # neither has fired yet.
         floor_cap: int | None = None
+        # True when the latest round's cap was set by the quota left on the only
+        # provider that can answer, not by a rounds setting. Re-derived every
+        # round (a fallback coming back into reach lifts it), unlike
+        # budget_stopped.
+        quota_stopped = False
 
         # Paused: no provider call at all, but the cycle still closes its books
         # so the pause shows up in the journal like any other outcome. The
@@ -765,6 +770,16 @@ class AgentLoop:
                     effective_cap = max(new_cap, floor_cap)
                 else:
                     effective_cap = new_cap
+                # The quota is a limit no rescue can buy more of: a key with 11
+                # requests a day has no 12th round to grant however the cap
+                # logic above feels about it. So it clamps last, over the
+                # floor too, and the nudge below -- keyed off effective_cap --
+                # lands while the cycle can still act on it instead of the
+                # next round meeting ChainExhausted with nothing written down.
+                runway = self.chain.quota_runway(reply.key, self.priority)
+                quota_stopped = runway is not None and rounds + runway < effective_cap
+                if quota_stopped:
+                    effective_cap = rounds + runway
                 trace.cap = effective_cap
                 trace.rounds.append(
                     RoundTrace(
@@ -844,6 +859,11 @@ class AgentLoop:
                     summary = (
                         f"hit CYCLE_MAX_PROMPT_TOKENS ({self._budget_hit}) "
                         f"without end_cycle: prompt tokens reached {budget_tokens}"
+                    )
+                elif quota_stopped:
+                    summary = (
+                        f"hit the provider quota after {rounds} rounds "
+                        "without end_cycle"
                     )
                 else:
                     summary = f"hit max_rounds ({effective_cap}) without end_cycle"

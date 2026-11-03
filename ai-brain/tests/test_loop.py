@@ -838,6 +838,182 @@ def test_wrap_up_nudge_text_reports_the_real_remaining_count():
     )
 
 
+# -- the quota caps a cycle too ------------------------------------------
+
+METERED = "gemini:gemini-3.8-flash"
+
+
+@pytest.fixture
+def make_quota_loop(brain_dir, registry, wall, tmp_path: Path):
+    """A brain loop over a chain of (key, Limits, script) providers, in order."""
+
+    def _make(chain, *, priority="brain", max_rounds=32, **kwargs):
+        providers = [FakeProvider(key, script=list(script)) for key, _, script in chain]
+        ledger = Ledger({key: limits for key, limits, _ in chain}, tmp_path / "q.json", clock=wall)
+        ctx = ToolContext(
+            loop="brain",
+            memory=brain_dir,
+            memories={"brain": brain_dir},
+            settings=load_settings({}),
+            wake=lambda name: None,
+        )
+        loop = AgentLoop(
+            name="brain",
+            memory=brain_dir,
+            chain=ProviderChain(providers, ledger),
+            registry=registry,
+            ctx=ctx,
+            heartbeat_s=HEARTBEAT,
+            priority=priority,
+            constitution="be useful",
+            clock=wall,
+            pause_file=tmp_path / "PAUSE",
+            max_rounds=max_rounds,
+            **kwargs,
+        )
+        return loop, providers, ledger
+
+    return _make
+
+
+def _nudges(provider):
+    return [
+        m.content
+        for m in provider.calls[-1][0]
+        if m.role == "user" and "rounds left" in m.content
+    ]
+
+
+async def test_a_quota_shorter_than_the_cap_still_gets_a_wrap_up_nudge(make_quota_loop):
+    """11 requests a day against a 32-round cap: without the quota clamp the
+    nudge would wait for round 30 and the cycle would hit ChainExhausted at
+    round 12, losing everything it had not yet written down."""
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED) for i in range(9)]
+    script.append(
+        reply("done", call("end_cycle", "e", next_wake_minutes=30, summary="wrapped"), key=METERED)
+    )
+    loop, (provider,), _ = make_quota_loop(
+        [(METERED, Limits(rpm=100, tpm=10_000_000, rpd=11), script)]
+    )
+
+    result = await loop.run_cycle()
+
+    # After round 9 the ledger has 2 requests left, so the nudge lands there
+    # and the model still gets round 10 to call end_cycle.
+    assert result.status == "ok"
+    assert result.rounds == 10
+    assert result.cap == 11
+    assert len(_nudges(provider)) == 1
+    assert "You have 2 rounds left" in _nudges(provider)[0]
+
+
+async def test_a_cycle_that_ignores_the_nudge_ends_max_rounds_not_no_budget(make_quota_loop):
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED) for i in range(11)]
+    loop, (provider,), ledger = make_quota_loop(
+        [(METERED, Limits(rpm=100, tpm=10_000_000, rpd=11), script)]
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    assert result.rounds == 11
+    assert "quota" in _last_journal_line(loop.memory)
+    assert ledger.requests_left(METERED, "brain") == 0
+    # The provider was never asked for a 12th request that the ledger would refuse.
+    assert len(provider.calls) == 11
+
+
+async def test_quota_already_spent_today_counts(make_quota_loop):
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED) for i in range(4)]
+    loop, (provider,), ledger = make_quota_loop(
+        [(METERED, Limits(rpm=100, tpm=10_000_000, rpd=11), script)]
+    )
+    for _ in range(7):
+        ledger.record(METERED, 10, 5)
+
+    result = await loop.run_cycle()
+
+    # 4 left at the start: after the first reply 3 remain, so the cap is 1+3.
+    assert result.status == "max_rounds"
+    assert result.rounds == 4
+    assert result.cap == 4
+
+
+async def test_a_cycle_that_can_fall_through_is_not_capped_by_the_first_models_quota(
+    make_quota_loop,
+):
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED) for i in range(3)]
+    fallback = [
+        reply(f"f{i}", call("list_facts", f"f{i}"), key="gemini:flash-lite") for i in range(3)
+    ]
+    fallback.append(
+        reply("done", call("end_cycle", "e", next_wake_minutes=30, summary="s"), key="gemini:flash-lite")
+    )
+    loop, _, _ = make_quota_loop(
+        [
+            (METERED, Limits(rpm=100, tpm=10_000_000, rpd=3), script),
+            ("gemini:flash-lite", Limits(rpm=100, tpm=10_000_000, rpd=200), fallback),
+        ]
+    )
+
+    result = await loop.run_cycle()
+
+    # Round 4 is answered by the next model in the chain; at no point was the
+    # 3-request budget of the first one treated as the cycle's limit.
+    assert result.status == "ok"
+    assert result.rounds == 7
+    assert result.cap == 32
+
+
+async def test_an_unmetered_key_is_never_capped_by_quota(make_quota_loop):
+    from ai_brain.llm import UNMETERED
+
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key="lan:qwen") for i in range(4)]
+    script.append(
+        reply("done", call("end_cycle", "e", next_wake_minutes=30, summary="s"), key="lan:qwen")
+    )
+    loop, _, _ = make_quota_loop([("lan:qwen", UNMETERED, script)])
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert result.cap == 32
+
+
+async def test_a_fallback_that_is_not_dialable_does_not_count(make_quota_loop):
+    """A lan: host that has not been found is not something to fall through to."""
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key=METERED) for i in range(11)]
+    loop, (provider, lan), _ = make_quota_loop(
+        [
+            (METERED, Limits(rpm=100, tpm=10_000_000, rpd=11), script),
+            ("lan:qwen", Limits(rpm=100, tpm=10_000_000, rpd=1000), []),
+        ]
+    )
+    lan.available = lambda: False  # type: ignore[method-assign]
+
+    result = await loop.run_cycle()
+
+    assert result.status == "max_rounds"
+    assert result.cap == 11
+
+
+async def test_the_expert_floor_shortens_an_experts_runway(make_quota_loop):
+    """An expert on a key the brain also uses may only spend down to 40%."""
+    script = [reply(f"r{i}", call("list_facts", f"c{i}"), key="gemini:shared") for i in range(10)]
+    loop, (provider,), _ = make_quota_loop(
+        [("gemini:shared", Limits(rpm=100, tpm=10_000_000, rpd=10), script)],
+        priority="expert",
+    )
+
+    result = await loop.run_cycle()
+
+    # rpd 10, floor 40%: an expert is refused once 6 are spent (1 - 6/10 is
+    # not above 0.4), so the cycle can have exactly 6 rounds.
+    assert result.status == "max_rounds"
+    assert result.rounds == 6
+    assert result.cap == 6
+
+
 # -- per-cycle prompt-token budget ---------------------------------------
 
 

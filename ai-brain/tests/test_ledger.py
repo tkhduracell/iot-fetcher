@@ -97,6 +97,63 @@ def test_expert_allowed_above_40_percent(tmp_path):
     assert ledger.can_spend("gemini:a", "expert").allowed
 
 
+def test_requests_left_counts_the_daily_budget_down(tmp_path):
+    ledger, st = make(tmp_path)
+    assert ledger.requests_left("gemini:a", "brain") == 10
+    for _ in range(3):
+        st["t"] += 61
+        ledger.record("gemini:a", 1, 1)
+    assert ledger.requests_left("gemini:a", "brain") == 7
+
+
+def test_requests_left_stops_an_expert_at_the_floor(tmp_path):
+    ledger, st = make(tmp_path)
+    assert ledger.requests_left("gemini:a", "expert") == 6
+    for _ in range(5):
+        st["t"] += 61
+        ledger.record("gemini:a", 1, 1)
+    assert ledger.requests_left("gemini:a", "expert") == 1
+    assert ledger.requests_left("gemini:a", "brain") == 5
+    st["t"] += 61
+    ledger.record("gemini:a", 1, 1)
+    assert ledger.requests_left("gemini:a", "expert") == 0
+
+
+@pytest.mark.parametrize("rpd", [1, 3, 5, 7, 10, 11, 12, 100, 200])
+def test_requests_left_agrees_with_can_spend_at_the_floor(tmp_path, rpd):
+    """The count must be exactly how many more can_spend would allow."""
+    limits = {"k": Limits(rpm=10**6, tpm=10**9, rpd=rpd)}
+    ledger = Ledger(limits, tmp_path / "l.json", clock=lambda: 1_757_000_000.0)
+    spent = 0
+    while ledger.can_spend("k", "expert").allowed:
+        ledger.record("k", 1, 1)
+        spent += 1
+    fresh = Ledger(limits, tmp_path / "other.json", clock=lambda: 1_757_000_000.0)
+    assert fresh.requests_left("k", "expert") == spent
+
+
+def test_requests_left_is_zero_for_anything_that_will_not_clear_soon(tmp_path):
+    limits = {
+        "res": Limits(rpm=100, tpm=10**6, rpd=10, loops=frozenset({"expert"})),
+        "dead": Limits(rpm=100, tpm=10**6, rpd=10),
+    }
+    ledger = Ledger(limits, tmp_path / "l.json", clock=lambda: 1_757_000_000.0)
+    assert ledger.requests_left("res", "brain") == 0
+    assert ledger.requests_left("unknown", "brain") == 0
+    ledger.record_not_found("dead")
+    assert ledger.requests_left("dead", "brain") == 0
+    ledger.record_429("dead", 120)
+    assert ledger.requests_left("dead", "brain") == 0
+
+
+def test_requests_left_ignores_the_per_minute_windows(tmp_path):
+    ledger, _ = make(tmp_path)
+    for _ in range(2):  # rpm=2 is now full
+        ledger.record("gemini:a", 1, 1)
+    assert ledger.can_spend("gemini:a", "brain").reason == "rpm"
+    assert ledger.requests_left("gemini:a", "brain") == 8
+
+
 def test_rpd_exhausted_for_brain(tmp_path):
     ledger, st = make(tmp_path)
     for _ in range(10):

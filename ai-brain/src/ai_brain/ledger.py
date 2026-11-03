@@ -426,6 +426,44 @@ class Ledger:
 
         return Decision(True, None, "ok")
 
+    def requests_left(self, key: str, priority: Priority) -> int:
+        """How many more requests ``priority`` may spend on ``key`` today.
+
+        The same verdict as ``can_spend`` turned into a count: 0 for any
+        refusal that will not clear within the minute (unknown, disabled,
+        parked on 429s, reserved for the other kind of loop, a dry USD pool,
+        the daily cap or the expert floor), otherwise what is left of the
+        daily request budget -- stopping at the expert floor for an expert on
+        a key the brain also uses, since that is where ``can_spend`` starts
+        refusing it. ``rpm``/``tpm`` do not count against it: those windows
+        reopen on their own, and a cycle planning its remaining rounds should
+        not read a busy minute as an empty day. Read-only apart from the
+        day roll ``can_spend`` itself performs.
+
+        Counts requests only. A USD-pooled key is paced in dollars, which no
+        request count predicts, so its (effectively unlimited) rpd is what
+        comes back for it.
+        """
+        decision = self.can_spend(key, priority)
+        if not decision.allowed and decision.reason not in ("rpm", "tpm"):
+            return 0
+        bucket = self._buckets[key]
+        limits = bucket.limits
+        left = max(0, limits.rpd - bucket.requests_day)
+        brain_may_use = limits.loops is None or "brain" in limits.loops
+        if priority == "expert" and brain_may_use:
+            # First request count at which can_spend's floor check refuses:
+            # remaining fraction 1 - n/rpd no longer above EXPERT_FLOOR. Found
+            # with the same float expression it uses rather than by algebra,
+            # so a boundary cannot land one request off.
+            stop = int(limits.rpd * (1.0 - EXPERT_FLOOR))
+            while 1.0 - stop / limits.rpd > EXPERT_FLOOR:
+                stop += 1
+            while stop > 0 and not 1.0 - (stop - 1) / limits.rpd > EXPERT_FLOOR:
+                stop -= 1
+            left = min(left, max(0, stop - bucket.requests_day))
+        return left
+
     def limits(self, key: str) -> Limits | None:
         """The configured budget for a key, or None when it has no bucket.
 
