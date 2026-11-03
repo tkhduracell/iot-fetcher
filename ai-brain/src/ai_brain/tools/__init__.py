@@ -99,6 +99,15 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
 )
 
 
+def int_arg(args: dict, key: str, default: int, low: int, high: int) -> int:
+    """An int argument as a sane int, whatever the model actually sent."""
+    try:
+        value = int(float(args.get(key, default)))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(low, min(value, high))
+
+
 def ok(data: Any) -> str:
     payload = {"ok": True}
     if isinstance(data, dict):

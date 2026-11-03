@@ -52,7 +52,7 @@ import re
 import secrets
 import shutil
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -434,8 +434,12 @@ def read_events(path: Path) -> list[dict]:
     power cut can, so neither raises: a reader gets whatever is intact. A gap
     in the ``seq`` numbers is how it can tell the record is incomplete.
     """
+    return [event for _, event in _iter_events(path)]
+
+
+def _iter_events(path: Path) -> Iterator[tuple[int, dict]]:
+    """``read_events`` as it comes, with each event's size on disk."""
     opener: Callable[..., Any] = gzip.open if path.name.endswith(GZ_SUFFIX) else open
-    events: list[dict] = []
     try:
         with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -444,10 +448,9 @@ def read_events(path: Path) -> list[dict]:
                 except ValueError:
                     continue
                 if isinstance(event, dict):
-                    events.append(event)
+                    yield len(line), event
     except (OSError, EOFError, zlib.error):
         log.warning("[session] %s is damaged; using what was readable", path)
-    return events
 
 
 @dataclass
@@ -753,8 +756,8 @@ def recover(
     return out
 
 
-# search_history's bounds. Scanning decompresses every file it reads, on a Pi,
-# for one tool call: past this the search stops and says so.
+# search_history's bounds. Scanning decompresses and parses every file it reads, on
+# a Pi, for one tool call: past this much of that the search stops and says so.
 MAX_SEARCH_DECOMPRESSED_CHARS = 64_000_000
 SEARCH_SNIPPET_CHARS = 300
 MAX_SEARCH_LIMIT = 20
@@ -764,8 +767,8 @@ MAX_SEARCH_LIMIT = 20
 _NOT_SEARCHED_TOOLS = frozenset({"search_history", "read_cycle_events"})
 
 
-def _searchable(event: dict) -> tuple[str, str]:
-    """An event's text a search should look at, and the tool it came from.
+def _searchable(event: dict) -> str:
+    """An event's text a search should look at.
 
     Not the ``opening``: it is the constitution and the persona every time, and
     would match on every cycle regardless of what the cycle did.
@@ -780,14 +783,14 @@ def _searchable(event: dict) -> tuple[str, str]:
             ],
             ensure_ascii=False,
         )
-        return "\n".join((str(event.get("text") or ""), str(event.get("thinking") or ""), calls)), ""
+        return "\n".join((str(event.get("text") or ""), str(event.get("thinking") or ""), calls))
     if kind == "tool_result" and event.get("name") not in _NOT_SEARCHED_TOOLS:
-        return str(event.get("result") or ""), str(event.get("name") or "")
+        return str(event.get("result") or "")
     if kind == "memory":
-        return str(event.get("old") or ""), ""
+        return str(event.get("old") or "")
     if kind == "cycle_end":
-        return str(event.get("summary") or ""), ""
-    return "", ""
+        return str(event.get("summary") or "")
+    return ""
 
 
 def _snippet(text: str, at: int, length: int) -> str:
@@ -820,7 +823,6 @@ def search_sessions(
     hits: list[dict] = []
     scanned = 0
     chars = 0
-    truncated = False
     for path in reversed(session_files(directory)):
         day = _cycle_day(path.name)
         if day is None or day < cutoff:
@@ -828,13 +830,12 @@ def search_sessions(
         cycle = cycle_id_of(path)
         if cycle == exclude:
             continue
-        if chars > MAX_SEARCH_DECOMPRESSED_CHARS:
-            truncated = True
-            break
         scanned += 1
-        for event in read_events(path):
-            text, tool = _searchable(event)
-            chars += len(text)
+        for size, event in _iter_events(path):
+            chars += size
+            if chars > MAX_SEARCH_DECOMPRESSED_CHARS:
+                return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
+            text = _searchable(event)
             at = text.lower().find(needle)
             if at < 0:
                 continue
@@ -846,12 +847,12 @@ def search_sessions(
             }
             if event.get("round") is not None:
                 hit["round"] = event["round"]
-            if tool:
-                hit["tool"] = tool
+            if event.get("type") == "tool_result":
+                hit["tool"] = event.get("name")
             hits.append(hit)
             if len(hits) >= limit:
                 return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
-    return {"hits": hits, "cycles_scanned": scanned, "truncated": truncated}
+    return {"hits": hits, "cycles_scanned": scanned, "truncated": False}
 
 
 def session_files(directory: Path) -> list[Path]:

@@ -13,7 +13,7 @@ import re
 
 from ai_brain.llm import ToolSpec
 from ai_brain.sessions import MAX_SEARCH_LIMIT, SESSIONS_DIRNAME, search_sessions
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
+from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
 
 BRAIN_ONLY = frozenset({"brain"})
 
@@ -213,13 +213,6 @@ async def _close_gap(ctx: ToolContext, args: dict) -> str:
     return ok({"closed": gap_id})
 
 
-def _int_arg(args: dict, key: str, default: int, lo: int, hi: int) -> int:
-    try:
-        return max(lo, min(int(args.get(key, default)), hi))
-    except (TypeError, ValueError):
-        return default
-
-
 async def _search_history(ctx: ToolContext, args: dict) -> str:
     """Searches this loop's own sessions directory, and takes no agent name."""
     query = str(args["query"]).strip()
@@ -234,8 +227,8 @@ async def _search_history(ctx: ToolContext, args: dict) -> str:
         ctx.memory.root / SESSIONS_DIRNAME,
         query,
         now=now,
-        days=_int_arg(args, "days", _DEFAULT_SEARCH_DAYS, 1, 365),
-        limit=_int_arg(args, "limit", _DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
+        days=int_arg(args, "days", _DEFAULT_SEARCH_DAYS, 1, 365),
+        limit=int_arg(args, "limit", _DEFAULT_SEARCH_LIMIT, 1, MAX_SEARCH_LIMIT),
         exclude=session.cycle_id if session is not None else "",
     )
     for hit in found["hits"]:

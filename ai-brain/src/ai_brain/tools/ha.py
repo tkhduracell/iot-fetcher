@@ -34,7 +34,7 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from ai_brain.llm import ToolSpec
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
+from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
 from ai_brain.tools.http import stream_tail
 
 HA_LOOPS = frozenset({"brain", "house-ops"})
@@ -137,15 +137,6 @@ def _unwrap(text: str) -> str:
     return text
 
 
-def _int_arg(args: dict, key: str, default: int, low: int, high: int) -> int:
-    """An int argument as a sane int, whatever the model actually sent."""
-    try:
-        value = int(float(args.get(key, default)))
-    except (TypeError, ValueError):
-        return default
-    return max(low, min(value, high))
-
-
 def _hunks(lines: list[str], hits: list[int], context: int) -> list[str]:
     """The hit lines plus ``context`` either side, overlaps merged.
 
@@ -171,8 +162,8 @@ def _hunks(lines: list[str], hits: list[int], context: int) -> list[str]:
 
 
 async def _ha_error_log(ctx: ToolContext, args: dict) -> str:
-    wanted = _int_arg(args, "lines", DEFAULT_LOG_LINES, 1, MAX_LOG_LINES)
-    context = _int_arg(args, "context", 0, 0, MAX_LOG_CONTEXT)
+    wanted = int_arg(args, "lines", DEFAULT_LOG_LINES, 1, MAX_LOG_LINES)
+    context = int_arg(args, "context", 0, 0, MAX_LOG_CONTEXT)
     needle = str(args.get("contains") or "").lower()
     url = f"{ctx.settings.ha_url.rstrip('/')}/api/error_log"
     headers = (
