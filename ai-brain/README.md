@@ -263,16 +263,22 @@ A loop that wakes every hour and reads the same gauges will, left alone, write
   everyone to the first angle. It is explicitly a suggestion: a loop that is
   mid-investigation is told to ignore it.
 
-**What goes where in the prompt.** The system messages hold only text this
-system wrote: constitution, persona, goals, instructions, fact names, open gaps
-and the rejection summary. The journal and the inbox are in the user turn
-instead, each inside an `<external>` fence (the same one tool results use, in
-`ai_brain/fence.py`, which defuses any `<external`/`</external` in the text so
-it cannot close the fence). A note's fence names its sender
+**What goes where in the prompt.** The system messages hold only text that
+cannot carry instructions: the constitution, the persona, the cycle
+instructions and fact names (which `safe_name` limits to `[a-z0-9_.-]`). Every
+free-text thing an agent wrote is in the user turn instead, each inside its own
+`<external>` fence (the same one tool results use, in `ai_brain/fence.py`, which
+defuses any `<external`/`</external` in the text so it cannot close the fence):
+`goals` (the brain's), `gaps`, `rejections` (the "Filip has said no to"
+summary, whose targets and topics come from earlier proposals), `journal` and
+one fence per inbox note. A note's fence names its sender
 (`source="note-energy"`), taken from the note's header, so a body claiming to be
 from Filip is still labelled as whoever really sent it. The cycle instructions
-say fenced text is data, with one exception: a `note-filip` fence is Filip, and what he
-tells the brain is still ground truth. The reason is the path from the
+say fenced text is data, with two exceptions to "someone else wrote it": a
+`note-filip` fence is Filip, and what he tells the brain is still ground truth,
+and the `goals` and `gaps` fences are the agent's own agenda -- worked on, but
+unable to give orders. The brain's `identity.md` is the one self-rewritten file
+that is still in the system message (see below). The reason is the path from the
 researcher: a web page it reads can end up in a note to the brain, which holds
 `propose` and `slack_post`, and in a system message that text would carry the
 same weight as the constitution. (A `topic:` first line stays the first line
@@ -444,7 +450,11 @@ them, and the only one whose job is to reflect on what it finds:
 - **`read_expert(name, what, fact?, days?)`** — read that expert's `persona`,
   `journal` (`days` back, default 2), one named `fact`, or its `gaps`.
   Read-only: there is no tool to write into another loop's memory, brain
-  included.
+  included. Both tools fence everything an expert wrote -- persona, journal,
+  fact titles and bodies, gaps, and the brain's own findings about it -- as
+  external text (`source="journal-energy"` and so on), since an expert may have
+  copied it from a web page and the brain is the loop that can `propose` and
+  post. Fact titles come as one `fact_titles` block, gaps as one `gaps` block.
 - **`review_expert(name, verdict, findings)`** — record a verdict (`good`,
   `stale`, `wrong`, `repetitive`, `off_goal`) in the brain's own
   `reviews/<name>.jsonl` (capped at the last 50). Anything but `good` also

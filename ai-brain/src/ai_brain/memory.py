@@ -756,20 +756,48 @@ class MemoryDir:
         The stable half -- constitution and identity/persona -- changes only
         when someone rewrites it, so a provider with a prefix cache can keep
         it (and the tool list ahead of it) warm across cycles that run close
-        together. Everything that moves from cycle to cycle is in the second.
+        together. The second half is what moves between cycles: the fact names.
 
-        Only text this system wrote itself belongs here. The journal and the
-        inbox carry words from other agents -- and, by way of the researcher's
-        web reads, from strangers -- so they are in neither half; see
+        Only text that cannot carry instructions belongs here: the constitution
+        and the persona, which a person writes (the brain's identity is the one
+        exception -- it rewrites it, see below), and fact *names*, which
+        ``safe_name`` limits to ``[a-z0-9_.-]``. Free text an agent wrote --
+        goals, gaps, the journal, the inbox -- may have been copied from a web
+        page by way of the researcher, so none of it is in either half; see
         ``external_parts``.
+
+        The brain's identity stays: it is the one place the system prompt says
+        who the brain is, and it is the brain's to rewrite. That is a decision
+        for Filip rather than a bug to fix quietly here.
         """
         stable = [f"# Constitution\n{constitution}"]
         stable.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")
-        parts = []
-        if self.is_brain:
-            parts.append(f"# Goals\n{self.goals_text()}")
         facts = "\n".join(f"- {n}" for n in self.list_facts())
-        parts.append(f"# Facts available (use read_fact)\n{facts}")
+        return "\n\n".join(stable), f"# Facts available (use read_fact)\n{facts}"
+
+    def external_parts(self, notes: list[Note]) -> str:
+        """The goals, open gaps, journal and inbox, each fenced, for the user turn.
+
+        None of it is instructions. The inbox holds what other loops chose to
+        send -- an expert that has just read a web page included -- and the
+        journal, the goals and the gaps hold whatever earlier cycles wrote
+        down, which may have copied from the same place. In the system prompt
+        that text would speak with the same voice as the constitution; in a
+        fence in the user turn it is data, with where it came from named in the
+        fence's tag where the text cannot reach it. The goals and gaps are
+        still the agent's own agenda -- the cycle instructions say so -- they
+        just cannot give orders.
+
+        ``notes`` is the inbox the caller already read. A loop marks exactly
+        that list done at the end of the cycle, so re-reading the directory
+        here would render a note that then stays unread -- shown once for free,
+        and again next cycle.
+        """
+        sections = []
+        if self.is_brain:
+            goals = self.goals_text()
+            goals_block = fence("goals", goals, block=True) if goals.strip() else "(empty)"
+            sections.append(f"# Goals\n{goals_block}")
         open_gaps = self.gaps()[:MAX_CONTEXT_GAPS]
         # Silence when there is nothing unknown: an empty heading is pure
         # prompt budget, and the cap is there because a brain that opens gaps
@@ -781,29 +809,13 @@ class MemoryDir:
                 f"- [{g.id}] {g.question}" + (f" ({g.why})" if g.why else "")
                 for g in open_gaps
             )
-            parts.append(f"## Öppna luckor\n{luckor}")
-        return "\n\n".join(stable), "\n\n".join(parts)
-
-    def external_parts(self, notes: list[Note]) -> str:
-        """The journal and the inbox, each fenced, for the cycle's user turn.
-
-        Neither is instructions. The inbox holds what other loops chose to
-        send -- an expert that has just read a web page included -- and the
-        journal holds whatever earlier cycles wrote down, which may have
-        copied from the same place. In the system prompt that text would speak
-        with the same voice as the constitution; in a fence in the user turn
-        it is data, with the sender named in the fence's tag where the text
-        cannot reach it.
-
-        ``notes`` is the inbox the caller already read. A loop marks exactly
-        that list done at the end of the cycle, so re-reading the directory
-        here would render a note that then stays unread -- shown once for free,
-        and again next cycle.
-        """
+            sections.append(f"# Open gaps (Öppna luckor)\n{fence('gaps', luckor, block=True)}")
         journal = self.journal_text(2)
         journal_block = fence("journal", journal, block=True) if journal.strip() else "(empty)"
         inbox = render_inbox(notes)
-        return f"# Journal (last 2 days)\n{journal_block}\n\n# Inbox\n{inbox or '(empty)'}"
+        sections.append(f"# Journal (last 2 days)\n{journal_block}")
+        sections.append(f"# Inbox\n{inbox or '(empty)'}")
+        return "\n\n".join(sections)
 
     # -- housekeeping --------------------------------------------------
 

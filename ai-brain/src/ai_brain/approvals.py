@@ -46,6 +46,7 @@ from pathlib import Path
 
 from ai_brain.docker_api import validate_container_name
 from ai_brain.executors import Executors, QuietHours
+from ai_brain.fence import fence
 from ai_brain.memory import MemoryDir
 from ai_brain.slack_io import CHAT_TOPIC
 
@@ -488,8 +489,8 @@ def _parse(stamp: str) -> datetime:
 # thing, and a model rereading its own journal has no reason to connect a
 # vaguely-remembered no from four days ago to the payload it is about to send.
 # The functions below turn the outbox into that memory, in two places: a
-# summary injected into every brain cycle's opening context (context_parts has
-# no notion of approvals, so this lives beside Proposal instead), and a guard
+# summary injected into every brain cycle's opening context (memory has no
+# notion of approvals, so this lives beside Proposal instead), and a guard
 # in propose.py that refuses a proposal outright when its kind+target matches
 # a recent rejection.
 
@@ -591,7 +592,7 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
 
     Empty when there is nothing to say -- a heading with no rows under it
     would cost prompt budget for zero information, the same reasoning
-    ``context_parts`` uses for an empty gaps list.
+    ``MemoryDir.external_parts`` uses for an empty gaps list.
 
     The char cap drops whole trailing lines rather than cutting mid-line: a
     line sliced in half reads as a truncated, possibly misleading claim about
@@ -599,6 +600,11 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
     line dropped is simply not there, and the "…and N more" line that
     replaces it says so honestly instead of pretending the cut never
     happened.
+
+    The rows are fenced (``source="rejections"``) under a heading of ours: a
+    ``target`` or ``topic`` is whatever the model put in an earlier proposal,
+    and ``reason`` is free text, so none of it may sit in a system message. The
+    cap is judged on the text before the fence goes round it.
     """
     if not groups:
         return ""
@@ -623,4 +629,5 @@ def rejection_memory_section(groups: list[RejectionGroup]) -> str:
         lines.pop()
         dropped += 1
         text = _render(lines, dropped)
-    return text
+    heading, _, rows = text.partition("\n")
+    return f"{heading}\n{fence('rejections', rows, block=True)}"
