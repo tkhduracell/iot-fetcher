@@ -35,6 +35,11 @@ What shapes this file:
 
 Nothing here serves a reader over HTTP. The log holds full tool results, the
 API has no authentication, and its trace keeps carrying previews only.
+
+``recover`` is the other direction: an unfinished log back into the state a
+cycle needs to carry on. It is pure, so what it decides can be tested without
+running one. What it must never do is run anything: a call with no recorded
+result gets a synthetic result saying so, and the model decides what to do.
 """
 
 from __future__ import annotations
@@ -43,14 +48,17 @@ import gzip
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import zlib
 from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ai_brain.llm import Message, ToolCall
 from ai_brain.redact import MASK, SECRET_NAME, masked_under_name, redact
 
 log = logging.getLogger(__name__)
@@ -85,6 +93,42 @@ OPAQUE_FIELDS = frozenset({"thought_signature", "signature", "data"})
 _FIELD_PROBE_CHARS = 64
 
 _ID_DATE = "%Y%m%d-%H%M%S"
+
+# How a cycle ended without being finished: a ``no_budget`` stop, a restart's
+# ``cancelled``, a mid-cycle PAUSE. Anything else that reached a ``cycle_end``
+# is over: ``timeout`` and ``error`` have already archived their inbox, and
+# carrying on from them is how one bad reply becomes a cycle that never ends.
+RESUMABLE_STATUSES = frozenset({"no_budget", "cancelled", "paused"})
+
+ABANDONED = "abandoned"
+
+# Stands in for ``Message.model`` on a turn that may not be echoed as its model
+# wrote it. Being nobody's model, it makes ``is_foreign_turn`` true for every
+# provider, which replays the turn as plain text.
+UNSIGNED_MODEL = "(replayed)"
+
+# A fence a tool put around what it returned, as ``tools.wrap_external`` writes
+# it. Text inside a fence cannot forge one: ``wrap_external`` defuses the tag.
+# A tool's ``ok()`` JSON-encodes its payload, so in a logged result the quotes
+# arrive escaped.
+_EXTERNAL_FENCE = re.compile(r'<external source=\\?"([a-z0-9_.-]+)\\?">')
+
+# Their fences mark another agent's words, not text from outside this system, so
+# they are not what a cycle's record of outside reads is about.
+_AGENT_MEMORY_READS = frozenset({"read_expert", "expert_overview"})
+
+_NOT_RUN = (
+    "not run: the cycle was interrupted before this call started. "
+    "Call it again if you still need it."
+)
+_READ_INTERRUPTED = (
+    "no result: the cycle was interrupted while this read was running. "
+    "It changed nothing, so call it again if you still need it."
+)
+_OUTCOME_UNKNOWN = (
+    "outcome unknown: the process stopped while this call was running, so it may "
+    "or may not have taken effect. Check before retrying."
+)
 
 
 def new_cycle_id(at: float) -> str:
@@ -183,16 +227,30 @@ class SessionLog:
     an event leaves nothing behind.
     """
 
-    def __init__(self, path: Path, cycle_id: str, clock: Callable[[], float]) -> None:
+    def __init__(
+        self, path: Path, cycle_id: str, clock: Callable[[], float], seq: int = 0
+    ) -> None:
         self.path = path
         self.cycle_id = cycle_id
         self.clock = clock
-        self.seq = 0
+        self.seq = seq
         # Events lost to a failed write. Non-zero means the log has a hole.
         self.lost = 0
         self._fd: int | None = None
         self._bytes = 0
         self._torn = False
+        if seq:
+            self._reopen()
+
+    def _reopen(self) -> None:
+        """Pick up after an earlier process: its size, and a line it left open."""
+        try:
+            self._bytes = self.path.stat().st_size
+            with self.path.open("rb") as fh:
+                fh.seek(-1, os.SEEK_END)
+                self._torn = fh.read(1) != b"\n"
+        except OSError:
+            pass
 
     def append(self, event: str, **fields: Any) -> int | None:
         """Write one event, redacted. Returns its ``seq``, or None if it did not land."""
@@ -283,16 +341,30 @@ class SessionStore:
             return _NullSessionLog(Path(os.devnull), cycle_id, self.clock)
         return SessionLog(self.directory / f"{cycle_id}{LOG_SUFFIX}", cycle_id, self.clock)
 
-    def housekeep(self) -> None:
-        """Compress finished logs and prune old ones. Only between an agent's cycles.
+    def reopen(self, path: Path, cycle_id: str, seq: int) -> SessionLog:
+        """The log an unfinished cycle left, ready to be appended to."""
+        return SessionLog(path, cycle_id, self.clock, seq=seq)
+
+    def live_logs(self) -> list[Path]:
+        """Uncompressed logs, oldest first: anything an earlier cycle left open.
+
+        One with holes too. It will not be resumed, but it may say which of Filip's
+        notes were answered, and a fresh cycle that cannot tell would answer again.
+        """
+        if self.directory is None or not self.directory.exists():
+            return []
+        found = [*self.directory.glob(f"*{LOG_SUFFIX}"), *self.directory.glob(f"*{HOLES_SUFFIX}")]
+        return sorted(found, key=lambda path: path.name)
+
+    def housekeep(self, keep: str = "") -> None:
+        """Compress finished logs and prune old ones, keeping cycle ``keep`` live.
 
         Scans the directory rather than acting on one path, so a log a crash
         left uncompressed is picked up by the next cycle to end.
         """
-        if self.directory is None or not self.directory.exists():
-            return
-        for path in sorted(self.directory.glob(f"*{LOG_SUFFIX}")):
-            compress(path)
+        for path in self.live_logs():
+            if cycle_id_of(path) != keep:
+                compress(path)
         self.prune()
 
     def prune(self) -> int:
@@ -376,6 +448,309 @@ def read_events(path: Path) -> list[dict]:
     except (OSError, EOFError, zlib.error):
         log.warning("[session] %s is damaged; using what was readable", path)
     return events
+
+
+@dataclass
+class Recovered:
+    """What an unfinished log says about the cycle that wrote it."""
+
+    path: Path
+    cycle_id: str
+    messages: list[Message] = field(default_factory=list)
+    # Inbox files the conversation has already rendered, and the event each one
+    # was rendered by: a post answers only what had been shown before it.
+    note_seq: dict[str, int] = field(default_factory=dict)
+    started_at: float = 0.0
+    # The last thing the cycle actually did, not counting earlier resumes that
+    # got nowhere: what "how long has this been stale" is measured from.
+    last_active_at: float = 0.0
+    last_seq: int = 0
+    # A gap in ``seq``, or nothing to carry on from at all.
+    has_hole: bool = False
+    has_opening: bool = False
+    ended_status: str | None = None
+    rounds: int = 0
+    model: str = ""
+    # The key that answered last, which is what a rounds cap is looked up by.
+    chain_key: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    budget_tokens: int = 0
+    effective_cap: int | None = None
+    budget_stopped: bool = False
+    # The cap above was set by the quota left at the time, not by a setting.
+    quota_stopped: bool = False
+    floor_cap: int | None = None
+    # The budget a token-budget stop was judged against, for its summary.
+    budget_hit: int | None = None
+    nudge_sent: bool = False
+    # Resumes that never got as far as a ``cycle_end``: the process died again.
+    # A resume that stopped on ``no_budget`` or a restart proved nothing about
+    # the cycle, so it does not count -- the age cap bounds those instead.
+    deaths: int = 0
+    # The model finished in the log, but the process died before ``cycle_end``.
+    # Asking it anything else would be paying for a cycle that is over.
+    end_cycle: tuple[int, str] | None = None
+    finished: bool = False
+    # Each slack_post that may have reached Filip, as (seq, topic).
+    answers: list[tuple[int, str]] = field(default_factory=list)
+    # The last time end_cycle was refused over an owed reply; 0 for never.
+    refused_seq: int = 0
+    # Synthetic results for calls with none on record, in call order; the loop
+    # logs these, so a second resume reads them as ordinary results.
+    pending_results: list[dict] = field(default_factory=list)
+    replies: list[dict] = field(default_factory=list)
+    # Where the outside text this cycle has read came from.
+    external_sources: set[str] = field(default_factory=set)
+
+    @property
+    def resumable(self) -> bool:
+        return self.ended_status is None or self.ended_status in RESUMABLE_STATUSES
+
+    @property
+    def over(self) -> bool:
+        """The model has said its last word, whatever became of the bookkeeping."""
+        return self.finished or self.end_cycle is not None
+
+
+def _sources_in(tool: str, result: str) -> set[str]:
+    """Where outside text in one logged result came from: its fences, and the tag
+    on a fact it read, which carries what that fact's writer had read."""
+    found = set() if tool in _AGENT_MEMORY_READS else set(_EXTERNAL_FENCE.findall(result))
+    if "written_after_reading" not in result:
+        return found
+    try:
+        parsed = json.loads(result)
+    except (TypeError, ValueError):
+        return found
+    tagged = parsed.get("written_after_reading") if isinstance(parsed, dict) else None
+    if isinstance(tagged, list):
+        found.update(str(source) for source in tagged)
+    return found
+
+
+def _result_failed(result: str) -> bool:
+    try:
+        parsed = json.loads(result)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and "error" in parsed
+
+
+def _rebuilt_turn(event: dict) -> Message:
+    """A logged reply as the ``Message`` the loop appended when it landed.
+
+    A turn redaction changed no longer matches its signature, and a signature
+    that does not match is a 400 on every later call -- so it is replayed as
+    text, the same way another model's turn is, rather than resent as signed.
+    """
+    calls = tuple(
+        ToolCall(
+            id=str(raw.get("id", "")),
+            name=str(raw.get("name", "")),
+            args=raw.get("args") if isinstance(raw.get("args"), dict) else {},
+            thought_signature=str(raw.get("thought_signature") or ""),
+        )
+        for raw in event.get("tool_calls") or []
+    )
+    turn = Message(
+        "assistant",
+        str(event.get("text") or ""),
+        tool_calls=calls,
+        thought_signature=str(event.get("thought_signature") or ""),
+        model=str(event.get("model") or ""),
+        thinking=str(event.get("thinking") or ""),
+        provider_blocks=tuple(event.get("provider_blocks") or ()),
+    )
+    return unsigned_turn(turn) if event.get("redacted") else turn
+
+
+def unsigned_turn(message: Message) -> Message:
+    """An assistant turn with everything bound to the model that wrote it removed."""
+    if message.role != "assistant":
+        return message
+    return replace(
+        message,
+        tool_calls=tuple(replace(c, thought_signature="") for c in message.tool_calls),
+        thought_signature="",
+        thinking="",
+        provider_blocks=(),
+        model=UNSIGNED_MODEL if message.model else "",
+    )
+
+
+def _is_activity(event: dict) -> bool:
+    """Whether an event is the cycle working, not a resume's own bookkeeping."""
+    kind = event.get("type")
+    if kind == "message":
+        return event.get("kind") == "nudge"
+    if kind == "tool_result":
+        return not event.get("synthetic")
+    return kind not in ("resume", "cycle_end")
+
+
+def recover(
+    path: Path,
+    events: list[dict],
+    read_only: Callable[[str], bool],
+    cap_result: Callable[[str, str], str],
+) -> Recovered:
+    """Rebuild a cycle from its log. Runs nothing and writes nothing.
+
+    ``read_only`` is asked about a call that has no result; anything it does
+    not vouch for is treated as having had an effect. ``cap_result`` is the
+    loop's own cut, since the log holds what the conversation could not.
+    """
+    out = Recovered(path=path, cycle_id=cycle_id_of(path), has_hole=path.name.endswith(HOLES_SUFFIX))
+    calls: list[ToolCall] = []
+    started: set[str] = set()
+    answered: set[str] = set()
+    resume_at: int | None = None
+    resume_open = False
+
+    def fill_gaps(*, tail: bool = False) -> None:
+        for tool_call in calls:
+            if tool_call.id in answered:
+                continue
+            if tool_call.id not in started:
+                text, kind = _NOT_RUN, "not_run"
+            elif read_only(tool_call.name):
+                text, kind = _READ_INTERRUPTED, "read_interrupted"
+            else:
+                text, kind = _OUTCOME_UNKNOWN, "outcome_unknown"
+                if tool_call.name == "slack_post":
+                    # May well have reached Filip. Counting it as answered
+                    # risks a spinner the watchdog then turns red; leaving it
+                    # owed makes end_cycle push the model to post again, and a
+                    # harness that talks a model into repeating a side effect
+                    # is the one thing resume must not do.
+                    out.answers.append((out.last_seq, str(tool_call.args.get("topic", ""))))
+            result = json.dumps({"error": text})
+            answered.add(tool_call.id)
+            out.messages.append(
+                Message("tool", result, tool_call_id=tool_call.id, name=tool_call.name)
+            )
+            if tail:
+                out.pending_results.append(
+                    {
+                        "round": out.rounds,
+                        "id": tool_call.id,
+                        "name": tool_call.name,
+                        "chars": len(result),
+                        "result": result,
+                        "synthetic": kind,
+                    }
+                )
+
+    for event in events:
+        seq = event.get("seq")
+        if isinstance(seq, int):
+            if seq != out.last_seq + 1:
+                out.has_hole = True
+            out.last_seq = seq
+        kind = event.get("type")
+        at = event.get("at")
+        if isinstance(at, (int, float)) and _is_activity(event):
+            out.last_active_at = float(at)
+        if kind == "opening":
+            out.has_opening = True
+            out.started_at = float(at) if isinstance(at, (int, float)) else 0.0
+            for name in event.get("notes") or []:
+                out.note_seq[str(name)] = out.last_seq
+            out.messages = [
+                Message(m.get("role", "user"), str(m.get("content") or ""))
+                for m in event.get("messages") or []
+                if isinstance(m, dict)
+            ]
+        elif kind == "reply":
+            fill_gaps()
+            turn = _rebuilt_turn(event)
+            out.messages.append(turn)
+            calls, started, answered = list(turn.tool_calls), set(), set()
+            out.rounds += 1
+            out.model = str(event.get("model") or "")
+            out.chain_key = str(event.get("chain_key") or "")
+            out.prompt_tokens += int(event.get("prompt_tokens") or 0)
+            out.completion_tokens += int(event.get("completion_tokens") or 0)
+            out.budget_tokens += int(event.get("budget_tokens") or 0)
+            caps = event.get("caps") or {}
+            if isinstance(caps.get("effective"), int):
+                out.effective_cap = caps["effective"]
+            out.budget_stopped = bool(caps.get("budget_stopped"))
+            out.quota_stopped = bool(caps.get("quota_stopped"))
+            floor = caps.get("floor")
+            out.floor_cap = floor if isinstance(floor, int) else None
+            hit = caps.get("budget_hit")
+            out.budget_hit = hit if isinstance(hit, int) else None
+            out.finished = not turn.tool_calls
+            out.replies.append(event)
+            resume_at = None
+        elif kind == "tool_call":
+            started.add(str(event.get("id")))
+        elif kind == "tool_result":
+            name = str(event.get("name") or "")
+            call_id = str(event.get("id"))
+            result = str(event.get("result") or "")
+            answered.add(call_id)
+            out.messages.append(
+                Message("tool", cap_result(name, result), tool_call_id=call_id, name=name)
+            )
+            if out.replies:
+                out.replies[-1].setdefault("results", []).append({"name": name, "result": result})
+            out.external_sources.update(_sources_in(name, result))
+            if name not in ("slack_post", "end_cycle"):
+                continue
+            failed = _result_failed(result)
+            match = next((c for c in calls if c.id == call_id), None)
+            if name == "slack_post" and match is not None:
+                # Not on a synthetic result: that decision is fill_gaps', and
+                # a call found "not run" on an earlier resume reached nobody.
+                synthetic = event.get("synthetic")
+                if (not synthetic and not failed) or synthetic == "outcome_unknown":
+                    out.answers.append((out.last_seq, str(match.args.get("topic", ""))))
+            if name == "end_cycle" and match is not None:
+                if failed:
+                    if not event.get("synthetic"):
+                        out.refused_seq = out.last_seq
+                else:
+                    try:
+                        minutes = int(match.args.get("next_wake_minutes", 0))
+                    except (TypeError, ValueError):
+                        minutes = 0
+                    out.end_cycle = (minutes, str(match.args.get("summary", "")))
+        elif kind == "message":
+            fill_gaps()
+            content = str(event.get("content") or "")
+            subtype = event.get("kind")
+            if subtype == "nudge":
+                out.nudge_sent = True
+            if subtype == "resume":
+                # A cycle that keeps finding no budget would otherwise stack
+                # up one "you were interrupted" per retry, all but the last of
+                # them already wrong about how long it has been.
+                if resume_at is not None:
+                    del out.messages[resume_at]
+                resume_at = len(out.messages)
+            for name in event.get("notes") or []:
+                out.note_seq[str(name)] = out.last_seq
+            out.messages.append(Message("user", content))
+        elif kind == "resume":
+            if resume_open:
+                out.deaths += 1
+            resume_open = True
+            out.ended_status = None
+        elif kind == "cycle_end":
+            out.ended_status = str(event.get("status") or "")
+            resume_open = False
+            if int(event.get("lost_events") or 0):
+                out.has_hole = True
+    if resume_open:
+        out.deaths += 1
+    fill_gaps(tail=True)
+    # The resume about to happen writes its own notice, with the right time.
+    if resume_at is not None:
+        del out.messages[resume_at]
+    return out
 
 
 def session_files(directory: Path) -> list[Path]:

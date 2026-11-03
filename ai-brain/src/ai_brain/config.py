@@ -279,6 +279,8 @@ class Settings:
     rejection_memory_days: int
     session_retention_days: int
     session_max_mb: int
+    resume_max_age_s: int
+    resume_max_deaths: int
 
 
 def _csv(raw: str) -> list[str]:
@@ -488,4 +490,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # off altogether; 0 MB means age is the only limit. Per agent.
         session_retention_days=max(0, get_int("SESSION_RETENTION_DAYS", 30)),
         session_max_mb=max(0, get_int("SESSION_MAX_MB", 200)),
+        # An unfinished cycle older than this is abandoned rather than resumed.
+        # 26h: a no_budget stop waits for Google's Pacific-midnight reset, up
+        # to 25h away across a DST change, and a default shorter than that
+        # would throw away exactly the cycles resume exists to save.
+        resume_max_age_s=max(0, get_int("RESUME_MAX_AGE_H", 26)) * 3600,
+        # How many times a resumed cycle may kill the process before it is
+        # given up on. 0 turns resume off.
+        resume_max_deaths=max(0, get_int("RESUME_MAX_ATTEMPTS", 3)),
     )

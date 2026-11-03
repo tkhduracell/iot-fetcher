@@ -20,6 +20,17 @@ from ai_brain.tools.memory_tools import register_memory_tools
 from ai_brain.tools.slack_tools import register_slack_tools
 
 
+class ScriptedProvider(FakeProvider):
+    """A FakeProvider that remembers each call's messages as they were then.
+
+    The loop keeps appending to one list, so holding the list itself would show
+    every call the conversation as it ended rather than as it was sent.
+    """
+
+    async def complete(self, messages, tools, max_tokens):
+        return await super().complete(list(messages), tools, max_tokens)
+
+
 def reply(text: str = "", *calls: ToolCall, model: str = "fake:1", key: str = "fake:1") -> Reply:
     return Reply(
         text=text,
@@ -58,8 +69,8 @@ def build_loop(
     extras: dict | None = None,
     providers: list | None = None,
     **kwargs,
-) -> tuple[AgentLoop, FakeProvider]:
-    provider = FakeProvider("fake:1", script=list(script))
+) -> tuple[AgentLoop, ScriptedProvider]:
+    provider = ScriptedProvider("fake:1", script=list(script))
     chain_providers = providers if providers is not None else [provider]
     limits = {
         p.key: Limits(rpm=1000, tpm=100_000_000, rpd=100_000) for p in chain_providers

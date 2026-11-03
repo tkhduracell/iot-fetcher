@@ -270,6 +270,8 @@ def build(
             min_wake_gap_s=settings.brain_min_wake_gap_s if is_brain else 0,
             session_retention_days=settings.session_retention_days,
             session_max_mb=settings.session_max_mb,
+            resume_max_age_s=settings.resume_max_age_s,
+            resume_max_deaths=settings.resume_max_deaths,
         )
 
     return System(

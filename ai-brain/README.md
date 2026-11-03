@@ -165,6 +165,8 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `GEMINI_THINKING_BUDGET` | `-1` | Gemini thinking budget per call: `-1` dynamic, a positive number caps it, `0` sends no `thinkingConfig`. A model that rejects the field is retried once without it. |
 | `SESSION_RETENTION_DAYS` | `30` | Days a cycle's [session log](#session-log) is kept. `0` turns session logging off. |
 | `SESSION_MAX_MB` | `200` | Size cap on one agent's session logs; the oldest go first. `0` means age is the only limit. |
+| `RESUME_MAX_AGE_H` | `26` | An unfinished cycle older than this is abandoned rather than resumed. 26h because a `no_budget` stop can wait up to 25h for the Pacific-midnight reset. See [Resuming a cycle](#resuming-a-cycle). |
+| `RESUME_MAX_ATTEMPTS` | `3` | How many times a resumed cycle may kill the process before it is abandoned. `0` turns resume off. |
 | `HTTP_PORT` | `8091` | Port the read-only introspection API binds inside the container. `0` disables it. Published to the LAN only by `docker-compose.local.yml`. |
 | `REPO_SLUG` | `tkhduracell/iot-fetcher` | The public GitHub repo the `code_*` tools read (see [Reading the repo](#reading-the-repo)). |
 | `REPO_REF` | `main` | Branch or ref the snapshot tracks. |
@@ -737,12 +739,72 @@ one. In between, each cycle appends what it did to
 - **A finished log is gzipped and pruned:** by age (`SESSION_RETENTION_DAYS`) and
   then, oldest first, by size (`SESSION_MAX_MB`). A log a crash left behind is
   picked up by the next cycle to end.
+- **An unfinished log stays uncompressed** until it is resumed or abandoned.
 - **Files are `0600` and not served over HTTP.** The API has no authentication,
   so its trace keeps carrying previews; the trace's `cycle_id` names the file.
 
 ```sh
 sudo zcat volumes/ai-brain-memory/brain/sessions/20261103-101500-a1b2.jsonl.gz | jq -c '[.seq, .type, .name]'
 ```
+
+## Resuming a cycle
+
+A cycle that stops without finishing is picked back up from its log by the next
+`run_cycle` of that loop, instead of being thrown away. That covers a crash or a
+`SIGKILL` (no `cycle_end`), a restart (`cancelled`), `no_budget` and a mid-cycle
+`PAUSE`. `timeout`, `error` and `max_rounds` are over: they have archived their
+inbox, and carrying on from them is how one bad reply turns into a cycle that
+never ends. A cycle that stopped cleanly before its first reply is dropped instead,
+since a fresh one loses nothing and sees a newer inbox. One that *died* before its
+first reply is resumed, so that repeat deaths can be counted. A log marked
+`.jsonl.holes` is never resumed: it cannot be trusted to say what happened, so it is
+abandoned like any other with holes and its notes go to a fresh cycle.
+
+- **Side effects are never replayed, and neither is anything else.** The harness
+  runs no tool on resume. A call on record with no result gets a synthetic one:
+  `outcome unknown ... check before retrying` for a call that started, `no result
+  ... call it again` for a call in `READ_ONLY_TOOLS`, and `not run` for one that
+  never started. `READ_ONLY_TOOLS` is an allowlist, so a tool nobody thought about
+  counts as a write. Those results go into the log, so a second resume reads the
+  same thing.
+- **The model is told how long it has been**, in a user turn, and to re-read
+  anything it is about to rely on.
+- **State comes back from the log:** rounds, token counts, the round cap, the
+  sticky token-budget stop, whether the nudge fired, who is still owed a reply. A
+  resumed cycle gets no fresh rounds. An uncertain `slack_post` counts as
+  answered, so `end_cycle` cannot talk the model into posting it twice. The worst
+  case is the spinner the watchdog already turns red.
+- **The inbox stays exactly-once.** The notes a cycle rendered stay unread until
+  it finishes. Notes that arrive while it is down are shown in one more user turn
+  and logged, so a later resume knows about them. If no model will be asked anything
+  more, they stay unread and the loop wakes at once to read them. A post only counts
+  as answering what had been shown before it.
+- **Model changes are safe.** The chain may answer with another model on resume,
+  and another model's turns are replayed as text, as they are mid-cycle. A turn
+  redaction changed is replayed as text too, because its signature no longer
+  matches. If a provider still refuses the history with a 400 on the first call,
+  every earlier turn is replayed as text, once, before the cycle gives up.
+- **A cycle whose work was done is only closed.** If the log shows the model
+  already called `end_cycle` or stopped calling tools, no further call is made.
+- **Abandoned, with a journal line:** when the cycle is older than
+  `RESUME_MAX_AGE_H`, when its log has holes (a missing event may be a side effect
+  nobody can see), or when it has killed the process `RESUME_MAX_ATTEMPTS` more
+  times. In the first two cases its notes stay unread for the next cycle, except a
+  note from Filip the log shows was answered, which is archived so that a fresh cycle
+  does not answer it twice. Notes from other loops can be read twice. A resume that
+  merely found no budget again costs no attempt. The age cap bounds those.
+- **A death never costs a loop its notes.** A death is the whole process going, it is
+  counted against every loop that was mid-resume, and nothing on record says whose
+  fault it was. So past `RESUME_MAX_ATTEMPTS` the cycle is abandoned, with status
+  `abandoned`, and its notes stay unread. What bounds a note that really does kill the
+  process is time: no fresh cycle starts then, and the loop waits a heartbeat, across
+  restarts too. That is at most `RESUME_MAX_ATTEMPTS` + 1 deaths per heartbeat, for as
+  long as it lasts, and each one leaves a journal line. A new note that arrives while
+  the process is up still wakes the loop as usual.
+- **Filip does not sit out that wait.** A note of his that is already waiting gets one
+  fresh cycle at once instead, recorded in `_state.json` before it starts. Each note
+  gets this once, so one that really does kill the process costs one more run of
+  deaths and then waits a heartbeat like any other.
 
 ## Memory MCP
 

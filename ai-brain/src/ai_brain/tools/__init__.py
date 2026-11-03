@@ -63,6 +63,41 @@ class Tool:
     available: AvailableFn | None = None
 
 
+# Tools that read and change nothing. This is what a resumed cycle goes by when
+# it finds a call with no recorded result: the model is told it may simply call
+# one of these again, and anything else has to be presumed to have happened. The
+# harness runs none of them itself. A list rather than a
+# flag every registration has to remember, so a new tool that forgets is treated
+# as a write, which is the safe way round. A test holds this to the registry.
+READ_ONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        "airbnb_calendar",
+        "code_grep",
+        "code_list",
+        "code_log",
+        "code_overview",
+        "code_read",
+        "docker_logs",
+        "docker_ps",
+        "docker_top",
+        "drive_search",
+        "expert_overview",
+        "ha_context",
+        "ha_error_log",
+        "list_facts",
+        "list_proposals",
+        "read_expert",
+        "read_fact",
+        "system_status",
+        "usage_status",
+        "vm_metrics",
+        "vm_query",
+        "web_fetch",
+        "web_search",
+    }
+)
+
+
 def ok(data: Any) -> str:
     payload = {"ok": True}
     if isinstance(data, dict):
