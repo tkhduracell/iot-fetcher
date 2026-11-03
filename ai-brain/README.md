@@ -801,6 +801,10 @@ notes go to a fresh cycle.
   restarts too. That is at most `RESUME_MAX_ATTEMPTS` + 1 deaths per heartbeat, for as
   long as it lasts, and each one leaves a journal line. A new note that arrives while
   the process is up still wakes the loop as usual.
+- **Filip does not sit out that wait.** A note of his that is already waiting gets one
+  fresh cycle at once instead, recorded in `_state.json` before it starts. Each note
+  gets this once, so one that really does kill the process costs one more run of
+  deaths and then waits a heartbeat like any other.
 
 ## Memory MCP
 

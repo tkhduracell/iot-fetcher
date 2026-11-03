@@ -64,8 +64,9 @@ class Tool:
 
 
 # Tools that read and change nothing. This is what a resumed cycle goes by when
-# it finds a call with no recorded result: one of these is safe to run again,
-# and anything else has to be presumed to have happened. A list rather than a
+# it finds a call with no recorded result: the model is told it may simply call
+# one of these again, and anything else has to be presumed to have happened. The
+# harness runs none of them itself. A list rather than a
 # flag every registration has to remember, so a new tool that forgets is treated
 # as a write, which is the safe way round. A test holds this to the registry.
 READ_ONLY_TOOLS: frozenset[str] = frozenset(

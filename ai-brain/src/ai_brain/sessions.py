@@ -357,9 +357,7 @@ class SessionStore:
         Scans the directory rather than acting on one path, so a log a crash
         left uncompressed is picked up by the next cycle to end.
         """
-        if self.directory is None or not self.directory.exists():
-            return
-        for path in sorted(self.directory.glob(f"*{LOG_SUFFIX}")):
+        for path in self.live_logs():
             if path.name != f"{keep}{LOG_SUFFIX}":
                 compress(path)
         self.prune()
@@ -456,7 +454,6 @@ class Recovered:
     messages: list[Message] = field(default_factory=list)
     # Inbox files the conversation has already rendered, and the event each one
     # was rendered by: a post answers only what had been shown before it.
-    notes: list[str] = field(default_factory=list)
     note_seq: dict[str, int] = field(default_factory=dict)
     started_at: float = 0.0
     # The last thing the cycle actually did, not counting earlier resumes that
@@ -505,11 +502,18 @@ class Recovered:
     def resumable(self) -> bool:
         return self.ended_status is None or self.ended_status in RESUMABLE_STATUSES
 
+    @property
+    def over(self) -> bool:
+        """The model has said its last word, whatever became of the bookkeeping."""
+        return self.finished or self.end_cycle is not None
+
 
 def _sources_in(tool: str, result: str) -> set[str]:
     """Where outside text in one logged result came from: its fences, and the tag
     on a fact it read, which carries what that fact's writer had read."""
     found = set() if tool in _AGENT_MEMORY_READS else set(_EXTERNAL_FENCE.findall(result))
+    if "written_after_reading" not in result:
+        return found
     try:
         parsed = json.loads(result)
     except (TypeError, ValueError):
@@ -592,8 +596,7 @@ def recover(
     not vouch for is treated as having had an effect. ``cap_result`` is the
     loop's own cut, since the log holds what the conversation could not.
     """
-    cycle_id = path.name.removesuffix(GZ_SUFFIX).removesuffix(LOG_SUFFIX)
-    out = Recovered(path=path, cycle_id=cycle_id)
+    out = Recovered(path=path, cycle_id=cycle_id_of(path))
     calls: list[ToolCall] = []
     started: set[str] = set()
     answered: set[str] = set()
@@ -648,7 +651,6 @@ def recover(
             out.has_opening = True
             out.started_at = float(at) if isinstance(at, (int, float)) else 0.0
             for name in event.get("notes") or []:
-                out.notes.append(str(name))
                 out.note_seq[str(name)] = out.last_seq
             out.messages = [
                 Message(m.get("role", "user"), str(m.get("content") or ""))
@@ -689,6 +691,8 @@ def recover(
                 Message("tool", cap_result(name, result), tool_call_id=call_id, name=name)
             )
             out.external_sources.update(_sources_in(name, result))
+            if name not in ("slack_post", "end_cycle"):
+                continue
             failed = _result_failed(result)
             match = next((c for c in calls if c.id == call_id), None)
             if name == "slack_post" and match is not None:
@@ -721,7 +725,6 @@ def recover(
                     del out.messages[resume_at]
                 resume_at = len(out.messages)
             for name in event.get("notes") or []:
-                out.notes.append(str(name))
                 out.note_seq[str(name)] = out.last_seq
             out.messages.append(Message("user", content))
         elif kind == "resume":

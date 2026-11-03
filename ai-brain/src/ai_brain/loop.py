@@ -68,7 +68,7 @@ from ai_brain.sessions import (
 )
 from ai_brain.tools import READ_ONLY_TOOLS, ToolContext, ToolRegistry
 from ai_brain.slack_io import CHAT_TOPIC
-from ai_brain.tools.slack_tools import ANY_TOPIC, owed_replies
+from ai_brain.tools.slack_tools import ANY_TOPIC, owed_replies, tick_off
 
 log = logging.getLogger(__name__)
 
@@ -556,11 +556,11 @@ def _owed_after(state: Recovered, notes: list[Note]) -> set[str]:
     owed: set[str] = set()
     for note in notes:
         shown_at = state.note_seq.get(note.path.name, 0)
-        later = {topic for seq, topic in state.answers if seq > shown_at}
-        for topic in owed_replies([note]):
-            # The same rule slack_post applies: a bare DM's answer can be any post.
-            if (topic == ANY_TOPIC and not later) or (topic != ANY_TOPIC and topic not in later):
-                owed.add(topic)
+        waiting = owed_replies([note])
+        for seq, topic in state.answers:
+            if seq > shown_at:
+                tick_off(waiting, topic)
+        owed |= waiting
     return owed
 
 
@@ -598,11 +598,7 @@ def _log_reply(
     round_: int,
     reply: Reply,
     duration_s: float,
-    effective_cap: int,
-    budget_stopped: bool,
-    floor_cap: int | None,
-    budget_hit: int,
-    quota_stopped: bool,
+    caps: dict,
 ) -> None:
     """Everything needed to rebuild this turn as a ``Message``.
 
@@ -636,13 +632,7 @@ def _log_reply(
         thought_signature=reply.thought_signature,
         provider_blocks=blocks,
         redacted=redacted,
-        caps={
-            "effective": effective_cap,
-            "budget_stopped": budget_stopped,
-            "floor": floor_cap,
-            "budget_hit": budget_hit,
-            "quota_stopped": quota_stopped,
-        },
+        caps=caps,
         duration_s=round(duration_s, 1),
         budget_tokens=reply.usage.budget_tokens,
         **asdict(reply.usage),
@@ -749,6 +739,8 @@ class AgentLoop:
             session_max_mb,
         )
         self._session: SessionLog | None = None
+        # Filip's notes that have had their one fresh cycle; see _owner_retry.
+        self._owner_retried: set[str] = set()
         self.resume_max_age_s = resume_max_age_s
         self.resume_max_deaths = resume_max_deaths
         # memory is None only in tests that do not exercise a real cycle
@@ -806,6 +798,10 @@ class AgentLoop:
                 if status in _STATUSES and isinstance(n, (int, float))
             }
 
+        retried = raw.get("owner_retried")
+        if isinstance(retried, list):
+            self._owner_retried = {str(name) for name in retried}
+
     def _save_state(self, summary: str = "") -> None:
         if self._state_path is None:
             return
@@ -830,6 +826,7 @@ class AgentLoop:
             ),
             "last_cycle_at": self.last_cycle_at,
             "cycle_counts": dict(self.cycle_counts),
+            "owner_retried": sorted(self._owner_retried),
         }
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -908,6 +905,9 @@ class AgentLoop:
             )
 
         recovered, cooling = await self._wake_cycle()
+        if cooling and self._owner_retry():
+            self._journal_abandon(cooling)
+            cooling = ""
         if cooling:
             # The process keeps dying with this cycle open. Its notes stay unread,
             # so what stops this repeating at the speed of the restart policy is
@@ -954,12 +954,15 @@ class AgentLoop:
                 # next reply sets it again from what is left now. Restoring it as
                 # it stands would close a cycle whose quota has since come back.
                 if recovered.quota_stopped and not recovered.budget_stopped:
-                    recovered.effective_cap = max(
+                    effective_cap = max(
                         self._rounds_cap(recovered.chain_key, recovered.model),
                         recovered.floor_cap or 0,
                     )
+                elif recovered.effective_cap is not None:
+                    effective_cap = recovered.effective_cap
+                trace.cap = effective_cap
                 messages, notes = self._resume_messages(
-                    recovered, session, notes, trace, recovered.effective_cap or effective_cap
+                    recovered, session, notes, trace, effective_cap
                 )
                 rounds = recovered.rounds
                 model = recovered.model
@@ -967,9 +970,6 @@ class AgentLoop:
                 budget_stopped = recovered.budget_stopped
                 floor_cap = recovered.floor_cap
                 nudge_sent = recovered.nudge_sent
-                if recovered.effective_cap is not None:
-                    effective_cap = recovered.effective_cap
-                    trace.cap = effective_cap
                 if recovered.budget_hit is not None:
                     self._budget_hit = recovered.budget_hit
                 unsigned_retry_left = True
@@ -977,9 +977,7 @@ class AgentLoop:
             # The model already said its last word in the log, and only the
             # bookkeeping after it was lost. Close the books without another
             # call, however much budget a call would cost.
-            already_over = recovered is not None and (
-                recovered.finished or recovered.end_cycle is not None
-            )
+            already_over = recovered is not None and recovered.over
             while not already_over and rounds < effective_cap:
                 # A tool can drop the PAUSE file mid-cycle, and a pause that
                 # only takes effect at the next cycle boundary is no pause at
@@ -1152,11 +1150,13 @@ class AgentLoop:
                     rounds,
                     reply,
                     call_duration,
-                    effective_cap,
-                    budget_stopped,
-                    floor_cap,
-                    self._budget_hit,
-                    quota_stopped,
+                    {
+                        "effective": effective_cap,
+                        "budget_stopped": budget_stopped,
+                        "floor": floor_cap,
+                        "budget_hit": self._budget_hit,
+                        "quota_stopped": quota_stopped,
+                    },
                 )
                 if self.events is not None and not trace.rounds[-1].tool_calls:
                     # A round with no tool calls is already complete the
@@ -1303,28 +1303,53 @@ class AgentLoop:
         logs = self.sessions.live_logs()
         for index, path in enumerate(logs):
             try:
-                state = recover(path, read_events(path), self._is_read_only, self._cap_tool_result)
+                # On a thread: a log can be 64 MB, and every loop shares this event
+                # loop, which after a restart is when all of them are doing this.
+                state = await asyncio.to_thread(self._recover, path)
                 if not state.resumable or not state.has_opening:
-                    compress(path)
+                    await asyncio.to_thread(compress, path)
                 elif state.rounds == 0 and state.ended_status is not None:
                     # Stopped cleanly with nothing done, so a fresh cycle loses
                     # nothing and reads a newer inbox and journal. No journal
                     # line: there is no outcome to report.
-                    self._close_session(state, "no reply yet")
+                    await self._close_session(state, "no reply yet")
                 elif index < len(logs) - 1:
-                    self._journal_abandon(self._abandon(state, "a newer cycle replaced it"))
+                    self._journal_abandon(await self._abandon(state, "a newer cycle replaced it"))
                 else:
                     why_not, keeps_dying = self._resume_verdict(state)
                     if not why_not:
                         return state, ""
-                    line = self._abandon(state, why_not)
+                    line = await self._abandon(state, why_not)
                     if keeps_dying:
                         return None, line
                     self._journal_abandon(line)
             except Exception:  # a bad log must not stop the loop thinking
                 log.exception("[%s] could not recover %s; starting fresh", self.name, path)
-                compress(path)
+                await asyncio.to_thread(compress, path)
         return None, ""
+
+    def _recover(self, path: Path) -> Recovered:
+        return recover(path, read_events(path), self._is_read_only, self._cap_tool_result)
+
+    def _owner_retry(self) -> bool:
+        """Whether the hold after a run of deaths gives way to a fresh cycle now.
+
+        It does for a note from Filip that has not had that yet, since up to a
+        heartbeat of silence is what the hold costs him, and it is the one wait on
+        this system a person is sitting through. Each such note gets it once, on
+        record before the cycle starts, so a note that really is what kills the
+        process costs one more run of deaths and then waits like any other. Filip
+        writes a finite number of notes, and no other loop can write one as him.
+        """
+        waiting = self._waiting_owner_notes()
+        untried = waiting - self._owner_retried
+        self._owner_retried = waiting
+        if untried:
+            self._save_state(f"giving Filip's {len(untried)} waiting note(s) one fresh cycle")
+        return bool(untried)
+
+    def _waiting_owner_notes(self) -> set[str]:
+        return {n.path.name for n in self.memory.unread_notes() if n.sender == OWNER_SENDER}
 
     def _resume_verdict(self, state: Recovered) -> tuple[str, bool]:
         """Why this cycle should not be resumed (empty if it should), and
@@ -1345,13 +1370,13 @@ class AgentLoop:
     def _is_read_only(self, tool: str) -> bool:
         return tool in READ_ONLY_TOOLS
 
-    def _close_session(self, state: Recovered, reason: str) -> None:
+    async def _close_session(self, state: Recovered, reason: str) -> None:
         session = self.sessions.reopen(state.path, state.cycle_id, state.last_seq)
         session.append("cycle_end", status=ABANDONED, rounds=state.rounds, summary=reason)
         session.close()
-        compress(state.path)
+        await asyncio.to_thread(compress, state.path)
 
-    def _abandon(self, state: Recovered, reason: str) -> str:
+    async def _abandon(self, state: Recovered, reason: str) -> str:
         """Give up on an unfinished cycle. Returns the line to report it with.
 
         Its notes stay unread for the next cycle, which is the point of the inbox,
@@ -1365,13 +1390,14 @@ class AgentLoop:
         stays even if it was acted on: reading it twice costs little, and losing
         it costs the finding.
         """
-        self._close_session(state, reason)
+        await self._close_session(state, reason)
         line = f"cycle {state.cycle_id} rounds={state.rounds}: not resumed, {reason}"
-        known = set(state.notes)
         answered = [
             n
             for n in self.memory.unread_notes()
-            if n.path.name in known and n.sender == OWNER_SENDER and not _owed_after(state, [n])
+            if n.path.name in state.note_seq
+            and n.sender == OWNER_SENDER
+            and not _owed_after(state, [n])
         ]
         if answered:
             self.memory.mark_done(answered)
@@ -1416,10 +1442,9 @@ class AgentLoop:
         for result in state.pending_results:
             session.append("tool_result", **result)
 
-        known = set(state.notes)
-        shown = [n for n in unread if n.path.name in known]
-        new_notes = [n for n in unread if n.path.name not in known]
-        no_more_calls = state.finished or state.end_cycle is not None or state.rounds >= cap
+        shown = [n for n in unread if n.path.name in state.note_seq]
+        new_notes = [n for n in unread if n.path.name not in state.note_seq]
+        no_more_calls = state.over or state.rounds >= cap
         owed = _owed_after(state, shown)
         if no_more_calls:
             if new_notes:
@@ -1494,9 +1519,14 @@ class AgentLoop:
             # ``min_wake_gap_s`` -- a restart is not a way round that gate. Nor
             # round the wait after giving up on a cycle the process kept dying
             # with: those notes were in it, and may be why. A note that arrives
-            # while the process is up still rings as usual.
+            # while the process is up still rings as usual, and so does one from
+            # Filip that has not had its fresh cycle (see ``_owner_retry``).
             cooling = self.last_cycle is not None and self.last_cycle.status == ABANDONED
-            if self.memory is not None and self.memory.unread_notes() and not cooling:
+            if self.memory is not None and (
+                self._waiting_owner_notes() - self._owner_retried
+                if cooling
+                else self.memory.unread_notes()
+            ):
                 self.wake.set()
             await self._sleep(delay)
         while True:

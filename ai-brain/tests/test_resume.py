@@ -1644,12 +1644,13 @@ async def test_whole_process_deaths_cost_no_loop_its_unread_notes(
         loop, provider = build_loop(memory, tmp_path, wall, [reply("", end()), reply("", end("x", "e2"))], memories=memories)
         result = await loop.run_cycle()
 
-        assert result.status == "abandoned"
-        assert provider.calls == []
-        assert list(memory.done_dir.glob("*.md")) == []
-        assert [text in n.body for n in memory.unread_notes()] == [True]
-
-        await loop.run_cycle()
+        # The brain's note is Filip's, which skips the hold; the expert's waits.
+        if memory is expert_dir:
+            assert result.status == "abandoned"
+            assert provider.calls == []
+            assert list(memory.done_dir.glob("*.md")) == []
+            assert [text in n.body for n in memory.unread_notes()] == [True]
+            await loop.run_cycle()
         assert text in "\n".join(m.content for m in provider.calls[0][0])
 
 
@@ -1658,7 +1659,7 @@ async def test_giving_up_holds_off_across_a_restart_even_with_notes_unread(
 ):
     """Unread notes normally end a restart's wait, but these were in the cycle
     that kept dying, or a crash loop would run at the speed of the restart."""
-    brain_dir.drop_note("filip", "topic: pool\nmaybe the cause")
+    brain_dir.drop_note("energy", "maybe the cause")
     for _ in range(4):
         await _crash_mid_cycle(brain_dir, tmp_path, wall, [reply("", call("die", "b"))])
     gave_up, _ = build_loop(brain_dir, tmp_path, wall, [])
@@ -1680,6 +1681,93 @@ async def test_giving_up_holds_off_across_a_restart_even_with_notes_unread(
     for _ in range(50):
         await asyncio.sleep(0)
     task.cancel()
+    assert provider.calls
+
+
+async def test_a_waiting_filip_note_skips_the_hold_once(brain_dir, tmp_path, wall):
+    """Up to 4h of silence is what the hold costs him, so his note gets one fresh
+    cycle straight away, even though it was in the cycle that kept dying."""
+    brain_dir.drop_note("filip", "topic: pool\nare you there")
+    for _ in range(4):
+        await _die_in_the_first_call(brain_dir, tmp_path, wall)
+
+    loop, provider = build_loop(
+        brain_dir, tmp_path, wall, [reply("", end()), reply("", end("x", "e2"))]
+    )
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert "are you there" in "\n".join(m.content for m in provider.calls[0][0])
+    assert "[abandoned]" in brain_dir.journal_text(1)
+    assert loop.cycle_counts["abandoned"] == 1
+
+
+async def test_a_filip_note_that_keeps_killing_waits_after_its_one_retry(
+    brain_dir, tmp_path, wall
+):
+    brain_dir.drop_note("filip", "topic: pool\nthis one kills the process")
+    results = []
+    calls = []
+
+    async def _round() -> None:
+        for _ in range(4):
+            await _die_in_the_first_call(brain_dir, tmp_path, wall)
+
+    await _round()
+    # The retry, on record before its cycle runs, so a new process knows it was spent.
+    await _die_in_the_first_call(brain_dir, tmp_path, wall)
+    for _ in range(3):
+        await _die_in_the_first_call(brain_dir, tmp_path, wall)
+    for _ in range(2):
+        loop, provider = build_loop(brain_dir, tmp_path, wall, [])
+        results.append((await loop.run_cycle()).status)
+        calls.append(provider.calls)
+        await _round()
+
+    assert results == ["abandoned", "abandoned"]
+    assert calls == [[], []]
+    assert len(brain_dir.unread_notes()) == 1
+
+
+async def test_a_retried_note_waits_across_a_restart_but_a_new_one_rings(
+    brain_dir, tmp_path, wall
+):
+    brain_dir.drop_note("filip", "topic: pool\nfirst")
+    for _ in range(8):
+        await _die_in_the_first_call(brain_dir, tmp_path, wall)
+    gave_up, _ = build_loop(brain_dir, tmp_path, wall, [])
+    assert (await gave_up.run_cycle()).status == "abandoned"
+
+    restarted, provider = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+    task = asyncio.create_task(restarted.run_forever())
+    await asyncio.sleep(0.05)
+    assert provider.calls == []
+    task.cancel()
+
+    brain_dir.drop_note("filip", "topic: pool\nsecond, while the process was down")
+    restarted, provider = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+    task = asyncio.create_task(restarted.run_forever())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    assert provider.calls
+
+
+async def test_state_without_retried_notes_loads(brain_dir, tmp_path, wall):
+    """What a Pi's existing _state.json looks like on the first boot of this image."""
+    (brain_dir.root / "_state.json").write_text(
+        json.dumps(
+            {
+                "last_cycle": {"status": "ok", "model": "m", "rounds": 1, "cap": 16, "next_wake_s": 60},
+                "last_cycle_at": wall(),
+                "cycle_counts": {"ok": 1},
+            }
+        )
+    )
+    loop, provider = build_loop(brain_dir, tmp_path, wall, [reply("", end())])
+
+    assert loop.last_cycle.status == "ok"
+    assert loop._owner_retried == set()
+    assert (await loop.run_cycle()).status == "ok"
     assert provider.calls
 
 
