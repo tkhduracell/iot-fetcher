@@ -28,7 +28,8 @@ the containers this system runs in (`docker_ps`, `docker_top`, `docker_logs`)
 -- everyone else's tool surface stops at the house. A container name is
 checked against Docker's own name rule before any request is built (in the
 tools, in `propose` and again in the executor), since it is model-supplied and
-lands in a URL path. They cannot act on the
+lands in a URL path. In the read tools a bad name comes back as an ordinary
+error for the model to read, not a logged tool crash. They cannot act on the
 house and they cannot talk to Slack.
 Everything those reads return is fenced as external text — the log included,
 since it carries whatever an integration decided to print.

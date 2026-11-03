@@ -38,6 +38,22 @@ def _int_arg(args: dict, key: str, default: int, low: int, high: int) -> int:
     return max(low, min(value, high))
 
 
+def _target_url(ctx: ToolContext, args: dict, action: str) -> tuple[str, str | None]:
+    """(url, problem) for ``action`` on the container the model named.
+
+    A name outside Docker's rule is ordinary bad input, so it comes back as a
+    problem the model can read rather than as the ``ValueError`` it is raised
+    as: left to propagate, ``ToolRegistry.dispatch`` would log it as a tool
+    crash, traceback and all, for something that was refused before any request
+    existed. ``dispatch`` stays ignorant of Docker; the tool that knows which
+    exception means "bad name" is the one that turns it into an error.
+    """
+    try:
+        return container_url(ctx.settings.docker_proxy_url, args["container"], action), None
+    except ValueError as exc:
+        return "", str(exc)
+
+
 async def _docker_ps(ctx: ToolContext, _args: dict) -> str:
     base = ctx.settings.docker_proxy_url.rstrip("/")
     url = f"{base}/containers/json"
@@ -78,7 +94,9 @@ async def _docker_ps(ctx: ToolContext, _args: dict) -> str:
 
 
 async def _docker_top(ctx: ToolContext, args: dict) -> str:
-    url = container_url(ctx.settings.docker_proxy_url, args["container"], "top")
+    url, problem = _target_url(ctx, args, "top")
+    if problem is not None:
+        return err(problem)
     response, problem = await request(ctx, "GET", url, label="docker_top")
     if problem is not None:
         return err(problem)
@@ -100,7 +118,9 @@ async def _docker_top(ctx: ToolContext, args: dict) -> str:
 
 
 async def _docker_logs(ctx: ToolContext, args: dict) -> str:
-    url = container_url(ctx.settings.docker_proxy_url, args["container"], "logs")
+    url, problem = _target_url(ctx, args, "logs")
+    if problem is not None:
+        return err(problem)
     wanted = _int_arg(args, "lines", DEFAULT_LOG_LINES, 1, MAX_LOG_LINES)
 
     _, body, truncated, problem = await stream_tail(
