@@ -34,12 +34,13 @@ def note_read(sources: Iterable[str]) -> None:
 
 def carry_tag(result: dict, provenance: Iterable[str]) -> dict:
     """A tool's ``result`` for a fact with this tag on it. What the fact was written
-    after reading now reaches this cycle by way of it."""
+    after reading now reaches this cycle by way of it. The tag goes first: the loop
+    cuts a long result from the end, and a long fact must not lose it that way."""
     tag = list(provenance)
-    if tag:
-        note_read(tag)
-        result[WRITTEN_AFTER_READING] = tag
-    return result
+    if not tag:
+        return result
+    note_read(tag)
+    return {WRITTEN_AFTER_READING: tag, **result}
 
 
 def read_so_far() -> tuple[str, ...]:

@@ -217,9 +217,11 @@ class Approvals:
             raise RuntimeError("slack not configured")
 
         summary = (
+            # First, because _fit_section cuts a long card from the end, and a long
+            # reason or payload must not be what takes the warning off it.
+            f"{_provenance_line(proposal)}"
             f"{_proposal_line(proposal)}\n\n"
             f"```{json.dumps(payload)}```\n"
-            f"{_provenance_line(proposal)}"
             "React ✅ to approve, ❌ to reject, or use the buttons below."
         )
         try:

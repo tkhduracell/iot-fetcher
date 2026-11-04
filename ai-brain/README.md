@@ -480,7 +480,8 @@ words. So a cycle tracks what outside text it has read, and what it writes after
 says so.
 
 - **What counts:** anything a tool returned through `wrap_external` (`web`,
-  `google-drive`, `home-assistant`, `docker`), and a tag it picks up by reading a tagged
+  `google-drive`, `home-assistant`, `docker`, and `session-history` for a hit from a
+  loop's past cycles, whose logs hold what those cycles read), and a tag it picks up by reading a tagged
   note or fact, so the tag follows a claim from one loop to the next. Filip's own notes
   and MCP edits carry none.
 - **Where it shows:** a fact keeps it in `facts/_meta.json`, and `read_fact` and
@@ -490,6 +491,7 @@ says so.
   proposal keeps it in its file and shows it on the Slack card, above the buttons.
 - **A rewrite replaces the tag.** A cycle that reads a tagged fact is carrying the tag
   already, so it only goes away when a rewrite happened with no outside text in view.
+  A rename or a restore is not a rewrite: the words keep the tag they had.
 - **Advisory only.** Nothing is ever refused because of it. It says the writer had read
   this, not that what it wrote came from it.
 

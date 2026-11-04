@@ -198,6 +198,8 @@ class Revision:
     title: str = ""
     # Who replaced it: "agent" for a loop's own cycle, "outside" for the MCP.
     by: str = ""
+    # The fact's tag at the time, since this body is what it was about. See provenance.py.
+    provenance: tuple[str, ...] = ()
 
     @property
     def at(self) -> float:
@@ -363,6 +365,7 @@ class MemoryDir:
         """
         entry = self._read_fact_meta().get(name)
         title = entry.get("title") if isinstance(entry, dict) else None
+        tag = _provenance_of(entry)
         try:
             self._keep_revision(
                 _fact_kind(name),
@@ -371,6 +374,7 @@ class MemoryDir:
                 {
                     "title": title if isinstance(title, str) else "",
                     "by": "agent" if MEMORY_SINK.get() is not None else "outside",
+                    **({"provenance": list(tag)} if tag else {}),
                 },
             )
         except ValueError:
@@ -409,7 +413,7 @@ class MemoryDir:
             return None
         current = self.read_fact(name)
         title = wanted.title or (current.title if current else "") or _fallback_title(wanted.body)
-        self.write_fact(name, title, wanted.body)
+        self.write_fact(name, title, wanted.body, carried=wanted.provenance)
         return wanted
 
     def deleted_facts(self) -> list[tuple[str, Revision]]:
@@ -456,7 +460,7 @@ class MemoryDir:
         return self._history("goals", limit)
 
     def _keep_revision(
-        self, kind: str, path: Path, body: str, meta: dict[str, str] | None = None
+        self, kind: str, path: Path, body: str, meta: dict[str, object] | None = None
     ) -> None:
         """Park the body that is about to be overwritten.
 
@@ -546,7 +550,12 @@ class MemoryDir:
 
     # -- facts ---------------------------------------------------------
 
-    def write_fact(self, name: str, title: str, body: str) -> None:
+    def write_fact(
+        self, name: str, title: str, body: str, *, carried: tuple[str, ...] = ()
+    ) -> None:
+        """``carried`` is a tag this body already had: a rename or a restore moves the
+        words without rewriting them, so it must not clear what they were written after.
+        """
         # Same belt-and-braces reasoning as append_journal: a fact is the
         # most durable thing this system writes -- it survives compaction,
         # gets read back into every future cycle's prompt, and (this repo
@@ -558,7 +567,8 @@ class MemoryDir:
         self._record_mutation("write_fact", name, path)
         self._keep_fact_revision(name, path, clean_body)
         _atomic_write(path, clean_body)
-        self._bump_fact_meta(name, _fit_title(redact(title)), read_so_far())
+        sources = tuple(sorted({*carried, *read_so_far()}))
+        self._bump_fact_meta(name, _fit_title(redact(title)), sources)
 
     def read_fact(self, name: str) -> Fact | None:
         path = self.facts_dir / f"{safe_name(name)}.md"
@@ -1027,9 +1037,7 @@ class MemoryDir:
                 except ValueError:
                     pass
             elif line.startswith("provenance: "):
-                provenance = tuple(
-                    s for s in line[len("provenance: ") :].strip().split(",") if SAFE_NAME.match(s)
-                )
+                provenance = _valid_sources(line[len("provenance: ") :].strip().split(","))
         if not sender:
             return None
         return Note(path=path, sender=sender, body=body, created=created, provenance=provenance)
@@ -1100,7 +1108,13 @@ def _provenance_of(entry: object) -> tuple[str, ...]:
     """A fact's tag from its sidecar. The sidecar is advisory, so anything odd in
     it is treated as no tag rather than raising."""
     raw = entry.get("provenance") if isinstance(entry, dict) else None
-    return tuple(str(s) for s in raw) if isinstance(raw, list) else ()
+    return _valid_sources(raw) if isinstance(raw, list) else ()
+
+
+def _valid_sources(names: list) -> tuple[str, ...]:
+    """The names fit to be a tag. One rule for a note's header and a fact's sidecar,
+    since a fact's tag ends up in the header of a note its reader goes on to write."""
+    return tuple(s for s in names if isinstance(s, str) and SAFE_NAME.fullmatch(s))
 
 
 def _label(sender: str) -> str:
@@ -1137,7 +1151,7 @@ def _safe_kind(kind: str) -> str:
     return kind
 
 
-def _revision_meta(path: Path) -> dict[str, str]:
+def _revision_meta(path: Path) -> dict[str, object]:
     """A revision's sidecar, as ``Revision`` fields; nothing if absent or broken."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -1145,7 +1159,13 @@ def _revision_meta(path: Path) -> dict[str, str]:
         return {}
     if not isinstance(raw, dict):
         return {}
-    return {key: raw[key] for key in ("title", "by") if isinstance(raw.get(key), str)}
+    fields: dict[str, object] = {
+        key: raw[key] for key in ("title", "by") if isinstance(raw.get(key), str)
+    }
+    tag = _provenance_of(raw)
+    if tag:
+        fields["provenance"] = tag
+    return fields
 
 
 def _stamps(directory: Path) -> list[int]:

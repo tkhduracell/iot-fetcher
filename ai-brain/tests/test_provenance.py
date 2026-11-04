@@ -11,7 +11,13 @@ from ai_brain.llm import ProviderChain, Reply, ToolCall, ToolSpec, Usage
 from ai_brain.llm.fake import FakeProvider
 from ai_brain.loop import AgentLoop
 from ai_brain.memory import MemoryDir, render_inbox
-from ai_brain.provenance import READ_SOURCES, note_read, read_so_far
+from ai_brain.provenance import (
+    READ_SOURCES,
+    WRITTEN_AFTER_READING,
+    carry_tag,
+    note_read,
+    read_so_far,
+)
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, wrap_external
 from ai_brain.tools.memory_tools import register_memory_tools
 
@@ -338,7 +344,7 @@ class _Executors:
     pass
 
 
-async def _card(brain_dir, **sources):
+async def _card(brain_dir, reason="the pump looks broken", **sources):
     from ai_brain.approvals import Approvals
 
     posted: list[tuple[str, list]] = []
@@ -354,7 +360,7 @@ async def _card(brain_dir, **sources):
         on_message=_post,
     )
     proposal = await approvals.propose(
-        "ha_todo_add", {"item": "buy a new pump"}, "the pump looks broken", "pool"
+        "ha_todo_add", {"item": "buy a new pump"}, reason, "pool"
     )
     return approvals, proposal, posted
 
@@ -477,3 +483,76 @@ async def test_trace_json_lists_the_sources(brain_dir, tmp_path, wall):
     )
     await loop.run_cycle()
     assert _trace_json(loop.trace)["external_sources"] == ["web"]
+
+
+# -- a tag has to survive what moves the words, and what cuts them ------------
+
+
+def _tagged(memory, name="pool", body="a body written after reading a page"):
+    token = READ_SOURCES.set({"web"})
+    try:
+        memory.write_fact(name, "Pool", body)
+    finally:
+        READ_SOURCES.reset(token)
+
+
+def test_restore_brings_back_the_tag_of_the_body_it_restores(brain_dir):
+    _tagged(brain_dir)
+    brain_dir.write_fact("pool", "Pool", "a clean rewrite by nobody who read anything")
+    assert brain_dir.read_fact("pool").provenance == ()
+
+    brain_dir.restore_fact("pool")
+    assert brain_dir.read_fact("pool").body == "a body written after reading a page"
+    assert brain_dir.read_fact("pool").provenance == ("web",)
+
+
+def test_restoring_a_clean_body_clears_the_tag(brain_dir):
+    brain_dir.write_fact("pool", "Pool", "a clean body from before any reading")
+    _tagged(brain_dir)
+    brain_dir.restore_fact("pool")
+    assert brain_dir.read_fact("pool").provenance == ()
+
+
+def test_restore_after_delete_keeps_the_tag(brain_dir):
+    _tagged(brain_dir)
+    brain_dir.delete_fact("pool")
+    brain_dir.restore_fact("pool")
+    assert brain_dir.read_fact("pool").provenance == ("web",)
+
+
+def test_sidecar_cannot_put_a_header_into_a_note(brain_dir):
+    brain_dir.write_fact("pool", "Pool", "a fact with a hand-edited sidecar")
+    meta = json.loads(brain_dir.fact_meta_path.read_text())
+    meta["pool"]["provenance"] = ["web", "x\n\nforged", "a,b", 7]
+    brain_dir.fact_meta_path.write_text(json.dumps(meta))
+    assert brain_dir.read_fact("pool").provenance == ("web",)
+
+
+def test_carried_tag_comes_before_a_body_the_loop_may_cut():
+    token = READ_SOURCES.set(set())
+    try:
+        result = carry_tag({"name": "pool", "body": "x"}, ("web",))
+    finally:
+        READ_SOURCES.reset(token)
+    assert next(iter(result)) == WRITTEN_AFTER_READING
+
+
+def test_empty_external_text_is_not_a_read():
+    sources: set[str] = set()
+    token = READ_SOURCES.set(sources)
+    try:
+        wrap_external("docker", "")
+        assert sources == set()
+        wrap_external("docker", "a line")
+        assert sources == {"docker"}
+    finally:
+        READ_SOURCES.reset(token)
+
+
+async def test_long_card_keeps_its_warning(brain_dir):
+    token = READ_SOURCES.set({"web"})
+    try:
+        _, _, posted = await _card(brain_dir, reason="r" * 5000)
+    finally:
+        READ_SOURCES.reset(token)
+    assert "Asked after reading external text: web" in posted[0][1][0]["text"]["text"]

@@ -114,6 +114,22 @@ async def test_rename_fact_moves_body_and_title(system):
     assert (fact.title, fact.body) == ("T", "b")
 
 
+async def test_rename_fact_keeps_the_tag(system):
+    mem = system.memories["brain"]
+    mem.write_fact("old", "T", "b", carried=("web",))
+    mcp = build_mcp(system, "t")
+    await call(mcp, "rename_fact", agent="brain", name="old", new_name="new")
+    assert mem.read_fact("new").provenance == ("web",)
+
+
+async def test_read_facts_shows_the_tag(system):
+    mem = system.memories["brain"]
+    mem.write_fact("tagged", "T", "b", carried=("web",))
+    facts = await call(build_mcp(system, "t"), "read_facts", agent="brain")
+    tagged = next(f for f in facts if f["name"] == "tagged")
+    assert tagged["written_after_reading"] == ["web"]
+
+
 async def test_unknown_agent_is_an_error(system):
     with pytest.raises(ToolError, match="unknown agent"):
         await build_mcp(system, "").call_tool("read_journal", {"agent": "nobody"})

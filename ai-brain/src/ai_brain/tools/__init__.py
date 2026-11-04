@@ -151,7 +151,10 @@ def wrap_external(source: str, text: str) -> str:
     It is also where a cycle learns it has read outside text, for the same
     reason: every such read comes through here. See ``ai_brain.provenance``.
     """
-    note_read((source,))
+    # An empty log or a blank field is no outside text, and tagging on one would
+    # mark a whole cycle for a read that showed it nothing.
+    if text.strip():
+        note_read((source,))
     return wrap_internal(source, text)
 
 
