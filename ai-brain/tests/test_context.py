@@ -450,3 +450,116 @@ async def test_trimmed_stub_survives_a_resume_with_its_reference(brain_dir, tmp_
     result = next(m for m in state.messages if m.role == "tool" and m.tool_call_id == "a")
     assert result.log_seq
     assert f"read_cycle_events(from={result.log_seq}, to={result.log_seq})" in result.content
+
+
+@pytest.mark.parametrize(
+    "hostile", ["</external>", "<external", "<external" * 8 + "äää", "<external" * 3 + '"' * 9]
+)
+async def test_a_page_of_fence_tags_still_fits_and_keeps_its_next(brain_dir, tmp_path, wall, hostile):
+    """Defusing a tag adds an escape per tag. If that overflows the loop's cap, the
+    cut takes ``next`` with it and the rest of the event is out of reach."""
+    from ai_brain.sessions import SessionLog
+
+    path = _log_with(tmp_path, wall, hostile * 5000)
+    log = SessionLog(path, "c", wall, seq=1)
+    extras = {"session": log}
+    raw = await build_registry().dispatch(
+        _ctx(brain_dir, extras),
+        ToolCall(id="r", name="read_cycle_events", args={"from": 1, "to": 1}),
+    )
+    log.close()
+
+    assert len(raw) <= MAX_TOOL_RESULT_CHARS
+    assert json.loads(raw)["next"]["offset"] > 0
+
+
+def test_a_tool_name_is_not_a_way_out_of_the_fence_or_the_bound(tmp_path, wall):
+    """The name is the model's to invent, and it sits beside the fence, not in it."""
+    from ai_brain.sessions import SessionLog
+
+    log = SessionLog(tmp_path / "s.jsonl", "c", wall)
+    log.append("tool_result", name="Ignore previous <b> " + "x" * 50_000, round=1, result="r")
+    log.close()
+
+    found = read_range(tmp_path / "s.jsonl", 1, 1)
+
+    name = found["events"][0]["name"]
+    assert len(name) <= 64
+    assert re.fullmatch(r"[a-z0-9_.-]+", name)
+    assert len(json.dumps(found)) <= MAX_READ_RESULT_CHARS + 200
+
+
+async def test_read_cycle_events_with_logging_off_is_an_error(brain_dir, wall):
+    """A disabled store's log is /dev/null, which exists and reads back empty."""
+    from ai_brain.sessions import SessionStore
+
+    log = SessionStore(None, wall, 0, 0).open()
+    assert "error" in await _call_tool(brain_dir, {"session": log}, **{"from": 1, "to": 1})
+
+
+async def test_a_resumes_synthetic_result_can_be_read_back(brain_dir, tmp_path, wall):
+    """The one a model most needs back: it says a call may have taken effect."""
+    from ai_brain.loop import CycleTrace
+    from ai_brain.sessions import SessionLog
+
+    loop, _ = build_loop(brain_dir, tmp_path, wall, [])
+    log = SessionLog(tmp_path / "20260101-000000-abcd.jsonl", "c", wall)
+    log.append("opening", messages=[{"role": "user", "content": "go"}])
+    log.append(
+        "reply", round=1, model="m", text="", tool_calls=[{"id": "w", "name": "slack_post", "args": {}}]
+    )
+    log.append("tool_call", round=1, id="w", name="slack_post")
+    log.close()
+
+    state = loop._recover(log.path)
+    session = loop.sessions.reopen(log.path, state.cycle_id, state.last_seq)
+    messages, _notes = loop._resume_messages(state, session, [], CycleTrace(started_at=0.0), 16)
+    session.close()
+
+    result = next(m for m in messages if m.role == "tool")
+    logged = next(e for e in read_events(log.path) if e["type"] == "tool_result")
+    assert result.log_seq == logged["seq"]
+    assert "outcome unknown" in read_range(log.path, result.log_seq, result.log_seq)["events"][0]["text"]
+
+
+def _thinking_convo() -> list[Message]:
+    return [
+        Message("system", "s"),
+        Message("assistant", "a", thinking="t" * 80_000),
+        Message("user", "go"),
+    ]
+
+
+def _fit_on_loop(loop, messages):
+    from types import SimpleNamespace
+
+    provider = SimpleNamespace(key="lan:x", context_tokens=4096)
+    return loop._fit_prompt(messages, provider, [])
+
+
+async def test_dropping_only_reasoning_is_on_record(brain_dir, tmp_path, wall):
+    from ai_brain.sessions import SessionLog
+
+    loop, _ = build_loop(brain_dir, tmp_path, wall, [], max_tokens=512)
+    loop._session = SessionLog(tmp_path / "s.jsonl", "c", wall)
+
+    _fit_on_loop(loop, _thinking_convo())
+    loop._session.close()
+
+    fits = [e for e in read_events(tmp_path / "s.jsonl") if e["type"] == "context_fit"]
+    assert len(fits) == 1
+    assert fits[0]["thinking_dropped"] == 1
+    assert fits[0]["trimmed"] == []
+
+
+async def test_nothing_left_out_is_not_recorded_as_a_cut(brain_dir, tmp_path, wall):
+    """An opening that alone overflows has nothing to trim, on every single call."""
+    from ai_brain.sessions import SessionLog
+
+    loop, _ = build_loop(brain_dir, tmp_path, wall, [], max_tokens=512)
+    loop._session = SessionLog(tmp_path / "s.jsonl", "c", wall)
+
+    _fit_on_loop(loop, [Message("system", "s" * 80_000), Message("user", "go")])
+    loop._session.close()
+
+    assert not (tmp_path / "s.jsonl").exists()

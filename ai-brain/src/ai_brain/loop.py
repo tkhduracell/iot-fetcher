@@ -33,7 +33,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -1484,8 +1484,14 @@ class AgentLoop:
         # Full tool results, and this object lives as long as the cycle does.
         state.replies = []
         session.append("resume", after_s=round(idle_s, 1), deaths=state.deaths)
-        for result in state.pending_results:
-            session.append("tool_result", **result)
+        messages = list(state.messages)
+        # ``recover`` fills these in last, so they are the conversation's tail. It
+        # could not know their events yet, and a trimmed one must still point at
+        # its own: "outcome unknown" is what stops a side effect being repeated.
+        first = len(messages) - len(state.pending_results)
+        for index, result in enumerate(state.pending_results, first):
+            logged_at = session.append("tool_result", **result)
+            messages[index] = replace(messages[index], log_seq=logged_at or 0)
             trace.rounds[-1].tool_results.append(_result_trace(result["name"], result["result"]))
 
         shown = [n for n in unread if n.path.name in state.note_seq]
@@ -1506,7 +1512,6 @@ class AgentLoop:
         if state.end_cycle is not None:
             self.ctx.extras["end_cycle"] = state.end_cycle
 
-        messages = list(state.messages)
         notes = shown + new_notes
         if no_more_calls:
             return messages, notes
@@ -1714,17 +1719,32 @@ class AgentLoop:
                 for was, now in zip(messages, fitted, strict=True)
                 if was.role == "tool" and was is not now
             ]
+            thinking_dropped = sum(
+                1
+                for was, now in zip(messages, fitted, strict=True)
+                if was.role == "assistant" and was is not now
+            )
+            # Over budget with nothing left to cut is not a cut. fit_context warns
+            # about that itself, and it would otherwise recur on every call.
+            if not trimmed and not thinking_dropped:
+                return fitted
             log.info(
-                "[%s] trimmed %d tool result(s) from context for %s",
+                "[%s] trimmed %d tool result(s) and %d turn(s) of reasoning from context for %s",
                 self.name,
                 len(trimmed),
+                thinking_dropped,
                 provider.key,
             )
             # The record of what a model did not see: a judgement it made
             # without some earlier result is otherwise impossible to spot.
             session = self._session
             if session is not None:
-                session.append("context_fit", chain_key=provider.key, trimmed=trimmed)
+                session.append(
+                    "context_fit",
+                    chain_key=provider.key,
+                    trimmed=trimmed,
+                    thinking_dropped=thinking_dropped,
+                )
         return fitted
 
     def _cap_tool_result(self, tool: str, result: str, logged_at: int | None = None) -> str:

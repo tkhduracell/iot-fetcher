@@ -250,7 +250,9 @@ async def _read_cycle_events(ctx: ToolContext, args: dict) -> str:
     """The current cycle's own log, and only that: it takes no cycle id, so there
     is nothing to point at another cycle, or another loop's."""
     session = ctx.extras.get("session")
-    if session is None or not session.path.exists():
+    # is_file, not exists: with logging off the path is /dev/null, which reads
+    # back as an empty success.
+    if session is None or not session.path.is_file():
         return err("this cycle has no session log to read")
     try:
         start, end = int(args["from"]), int(args["to"])

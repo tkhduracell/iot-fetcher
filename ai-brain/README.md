@@ -723,7 +723,7 @@ one. In between, each cycle appends what it did to
 | `tool_result` | What the tool returned, before the loop's `MAX_TOOL_RESULT_CHARS` cut. |
 | `memory` | A write to a fact, goals, identity or a gap, with the body it replaced. |
 | `message` | A turn the loop itself added, such as the wrap-up nudge. |
-| `context_fit` | A call's prompt was trimmed: for which model, and which results. |
+| `context_fit` | A call's prompt was trimmed: for which model, which results, and how many turns lost their reasoning. |
 | `cycle_end` | Status, rounds, cap, summary, token totals, and how many events failed to land. |
 
 - **It never breaks a cycle.** A failed write is logged once and forgotten. Each
@@ -778,7 +778,9 @@ That tool reads the current cycle's own log and nothing else (it takes no cycle 
 pages through a long result with `next`, and fences what it returns as external.
 
 Providers keep one last-resort guard against Ollama silently cutting the *front* off
-a prompt, which is where the persona lives. On the loop's path it never fires.
+a prompt, which is where the persona lives. On the loop's path it fires only when
+the policy could not get the prompt under budget, as when the opening turns alone
+overflow a small window.
 
 ## Resuming a cycle
 

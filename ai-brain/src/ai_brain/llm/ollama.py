@@ -262,12 +262,11 @@ def _guard_front_truncation(
     from the *front* -- which is exactly backwards for this chain's messages,
     since the front holds the persona/system turn every reply depends on.
 
-    Deciding what the model sees is the harness's job (``ai_brain.context``),
-    and on the loop's path this never fires: that policy counts more than this
-    does and trims first. It is here for a caller with no policy, or a prompt
-    the policy could not get under budget, and it trims blind: no reference
-    back to the original, oldest tool results first. A warning here means
-    something upstream did not do its job.
+    Deciding what the model sees is the harness's job (``ai_brain.context``):
+    that policy counts more than this does and trims first, so a prompt it got
+    under budget never fires this. It is here for a caller with no policy, or a
+    prompt the policy could not get under budget, and it trims blind: no
+    reference back to the original, oldest tool results first.
     """
     # Clamped rather than let go negative: a num_ctx so small that reserving
     # max_tokens + overhead alone would exhaust it is already a

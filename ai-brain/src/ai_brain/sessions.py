@@ -58,7 +58,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ai_brain.fence import safe_source
+from ai_brain.fence import escape_fence, safe_source
 from ai_brain.llm import Message, ToolCall
 from ai_brain.redact import MASK, SECRET_NAME, masked_under_name, redact
 
@@ -952,11 +952,13 @@ def read_range(path: Path, start: int, end: int, offset: int = 0) -> dict:
         left -= _READ_EVENT_OVERHEAD_CHARS
         chunk = _fit_encoded(text[skip:], left)
         entry = {"seq": seq, "type": event.get("type"), "text": chunk}
-        for key in ("name", "round"):
-            if event.get(key) is not None:
-                entry[key] = event[key]
+        if event.get("name") is not None:
+            # The model's to invent, and it sits beside the fence rather than in it.
+            entry["name"] = safe_source(str(event["name"]))[:_MAX_HIT_TOOL_CHARS]
+        if event.get("round") is not None:
+            entry["round"] = event["round"]
         out.append(entry)
-        left -= len(json.dumps(chunk))
+        left -= _encoded_chars(chunk)
         if skip + len(chunk) < len(text):
             entry["chars_total"] = len(text)
             next_args = {"from": seq, "to": end, "offset": skip + len(chunk)}
@@ -964,14 +966,23 @@ def read_range(path: Path, start: int, end: int, offset: int = 0) -> dict:
     return {"events": out, "next": next_args}
 
 
+def _encoded_chars(text: str) -> int:
+    """What ``text`` costs in the tool result, once fenced and JSON-encoded. Escaping
+    counts, since quotes can double it, and so does the fence: each tag it defuses
+    gains a zero-width space, which JSON writes as six characters."""
+    return len(json.dumps(escape_fence(text)))
+
+
 def _fit_encoded(text: str, budget: int) -> str:
-    """The longest prefix whose JSON encoding fits ``budget``. A tool result is
-    JSON, so escaping counts, and a result full of quotes can double in size."""
-    budget = max(budget, 0)
-    chunk = text[:budget]
-    while chunk and len(json.dumps(chunk)) > budget:
-        chunk = chunk[: len(chunk) * 3 // 4]
-    return chunk
+    """The longest prefix of ``text`` that costs no more than ``budget``."""
+    low, high = 0, min(len(text), max(budget, 0))
+    while low < high:
+        mid = (low + high + 1) // 2
+        if _encoded_chars(text[:mid]) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
 
 
 def session_files(directory: Path) -> list[Path]:
