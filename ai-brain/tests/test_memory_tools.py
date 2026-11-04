@@ -254,11 +254,18 @@ async def test_rewrite_goals_from_expert_is_a_policy_error(registry, make_ctx, b
     assert brain_dir.goals_text() == ""
 
 
-async def test_rewrite_goals_and_identity_from_brain(registry, make_ctx, brain_dir):
+async def test_rewrite_goals_writes_and_rewrite_identity_only_asks(registry, make_ctx, brain_dir):
+    """Goals are still the brain's own to write. Identity is not: with nothing to
+    ask (no approvals in this context) the tool says so and the file is untouched.
+    The approval path is covered in test_identity_approval.py."""
     ctx = make_ctx("brain")
     assert (await call(registry, ctx, "rewrite_goals", body="# Goals\n- rest"))["ok"] is True
     assert brain_dir.goals_text() == "# Goals\n- rest"
-    assert (await call(registry, ctx, "rewrite_identity", body="I am the brain"))["ok"] is True
+    brain_dir.persona_path.write_text("I am the brain", encoding="utf-8")
+
+    out = await call(registry, ctx, "rewrite_identity", body="I am someone else" * 20, reason="r")
+
+    assert "approvals are not configured" in out["error"]
     assert brain_dir.persona_text() == "I am the brain"
 
 

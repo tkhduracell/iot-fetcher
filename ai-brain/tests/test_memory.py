@@ -318,6 +318,47 @@ def test_seed_from_backfills_frontmatter_onto_an_already_live_persona(tmp_path, 
     assert expert_dir.persona_text() == "I am the energy expert, already live."
 
 
+def test_rewrite_identity_keeps_the_files_frontmatter(brain_dir):
+    """What the brain reads and writes is the body, so an approved rewrite must not
+    drop the emoji that sits in front of it until the next boot puts it back."""
+    brain_dir.persona_path.write_text("---\nemoji: 🧠\n---\nold body\n", encoding="utf-8")
+
+    brain_dir.rewrite_identity("new body\n")
+
+    assert brain_dir.persona_path.read_text(encoding="utf-8") == "---\nemoji: 🧠\n---\nnew body\n"
+    assert brain_dir.persona_meta() == {"emoji": "🧠"}
+    assert brain_dir.persona_text() == "new body"
+    assert [r.body for r in brain_dir.identity_history()] == ["---\nemoji: 🧠\n---\nold body\n"]
+
+
+def test_rewrite_identity_with_no_frontmatter_anywhere_writes_the_body_as_is(brain_dir):
+    brain_dir.persona_path.write_text("old body", encoding="utf-8")
+    brain_dir.rewrite_identity("new body")
+    assert brain_dir.persona_path.read_text(encoding="utf-8") == "new body"
+
+
+def test_rewrite_identity_given_its_own_frontmatter_writes_it_as_is(brain_dir):
+    brain_dir.persona_path.write_text("---\nemoji: 🧠\n---\nold body\n", encoding="utf-8")
+    brain_dir.rewrite_identity("---\nemoji: 🐙\n---\nnew body\n")
+    assert brain_dir.persona_meta() == {"emoji": "🐙"}
+
+
+def test_persona_digest_covers_the_whole_file(brain_dir):
+    brain_dir.persona_path.write_text("---\nemoji: 🧠\n---\nbody\n", encoding="utf-8")
+    first = brain_dir.persona_digest()
+    assert first.startswith("sha256:")
+    assert brain_dir.persona_digest() == first
+    brain_dir.persona_path.write_text("---\nemoji: 🐙\n---\nbody\n", encoding="utf-8")
+    assert brain_dir.persona_digest() != first
+
+
+def test_rewrite_persona_from_outside_stays_direct_and_whole_file(brain_dir):
+    """Filip's MCP edit replaces the file as given, frontmatter and all."""
+    brain_dir.persona_path.write_text("---\nemoji: 🧠\n---\nold\n", encoding="utf-8")
+    brain_dir.rewrite_persona("just this")
+    assert brain_dir.persona_path.read_text(encoding="utf-8") == "just this"
+
+
 def test_seed_from_backfill_is_idempotent(tmp_path, expert_dir):
     seed = tmp_path / "seed"
     (seed / "personas").mkdir(parents=True)

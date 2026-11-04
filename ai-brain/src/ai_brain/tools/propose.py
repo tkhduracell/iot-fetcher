@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
+from ai_brain import identity
 from ai_brain.approvals import KINDS, PENDING, proposal_target, rejected_groups
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok
@@ -220,7 +221,33 @@ def junk_proposal_reason(kind: str, payload: dict, topic: str) -> str | None:
     return None
 
 
-def _rejection_guard(ctx: ToolContext, kind: str, payload: dict) -> str | None:
+# The shortest prompt fragment that counts as the model's scaffolding if it turns
+# up word for word inside a long text. Shorter than this, a run of words is as
+# likely to be ordinary speech ("a quiet day is a quiet day") as a paste.
+_MIN_PASTED_WORDS = 8
+
+
+def identity_junk_reason(body: str) -> str | None:
+    """None if ``body`` is not the model's own prompt pasted in as an identity.
+
+    The echo check ``junk_proposal_reason`` runs on short requests does not fit a
+    page of text: a long body shares most of the words of any one prompt sentence
+    by chance. What does fit is the same failure in its long form -- a weak
+    fallback model asked to write who it is and answering with its instructions --
+    which shows up as whole prompt sentences, verbatim.
+    """
+    squashed = " ".join(body.lower().split())
+    for sentence in _prompt_sentences():
+        flat = " ".join(sentence.lower().split())
+        if len(flat.split()) >= _MIN_PASTED_WORDS and flat in squashed:
+            return (
+                f"this contains your own instructions word for word ({sentence.strip()!r}) -- "
+                "an identity says who you are, in your own words, not what you were told to do"
+            )
+    return None
+
+
+def rejection_guard(ctx: ToolContext, kind: str, payload: dict) -> str | None:
     """A one-line refusal if ``kind``+``payload`` matches a recent rejection.
 
     Kept separate from ``_propose`` on purpose: a settled "no" from Filip is a
@@ -262,11 +289,15 @@ async def _propose(ctx: ToolContext, args: dict) -> str:
         return err(f"payload must be an object, got {type(payload).__name__}")
 
     kind = str(args["kind"])
+    if kind == identity.KIND:
+        # It has a tool of its own, with the guards a page of text needs: the
+        # generic ones here are written for a sentence.
+        return err("use the rewrite_identity tool for that, not propose")
     junk_reason = junk_proposal_reason(kind, payload, str(args["topic"]))
     if junk_reason is not None:
         return err(f"refused: {junk_reason}")
 
-    blocked = _rejection_guard(ctx, kind, payload)
+    blocked = rejection_guard(ctx, kind, payload)
     if blocked is not None:
         return err(blocked)
 
@@ -304,10 +335,16 @@ async def _list_proposals(ctx: ToolContext, args: dict) -> str:
     terminal = [p for p in all_proposals if p.status != PENDING][-RECENT_TERMINAL_LIMIT:]
 
     def _brief(p) -> dict:
+        payload = p.payload
+        if p.kind == identity.KIND:
+            # Not the text: it is up to thousands of characters, twenty of them
+            # would be the whole result, and the brain wrote it a moment ago.
+            body = str(payload.get("body", ""))
+            payload = {"body_hash": identity.digest(body), "chars": len(body.strip())}
         return {
             "id": p.id,
             "kind": p.kind,
-            "payload": p.payload,
+            "payload": payload,
             "reason": p.reason,
             "status": p.status,
             "created": p.created,
@@ -353,7 +390,7 @@ def register_propose_tool(registry: ToolRegistry) -> None:
                 parameters={
                     "type": "object",
                     "properties": {
-                        "kind": {"type": "string", "enum": sorted(KINDS)},
+                        "kind": {"type": "string", "enum": sorted(k for k in KINDS if k != identity.KIND)},
                         "payload": {"type": "object"},
                         "reason": {
                             "type": "string",

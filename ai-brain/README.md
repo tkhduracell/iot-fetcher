@@ -58,9 +58,13 @@ review, the same way any other cross-loop message travels.
 
 **Emergent goals.** Nothing hard-codes what the agents should care about. The
 constitution (`seed/constitution.md`, copied to the volume on first boot and
-then owned by you) is the only fixed text; `goals.md` and the brain's own
-`identity.md` are rewritten by the brain over time (`rewrite_goals` and
-`rewrite_identity`, both brain-only). An expert's persona is not rewritten by
+then owned by you) is the only fixed text; the brain rewrites `goals.md` over
+time itself (`rewrite_goals`, brain-only) and proposes changes to its own
+`identity.md` (`rewrite_identity`, brain-only), which take effect only when you
+approve them in Slack (see [Approvals](#approvals)). Identity is the exception
+because it is the one text the model writes that loads into the system prompt of
+every later cycle, where injected text would carry the weight of the constitution.
+An expert's persona is not rewritten by
 anything at runtime — an expert has no tool for it, and the brain corrects an
 expert through a review note, never by editing its persona file. Deleting the
 volume resets it to the seed; editing `constitution.md` on the volume is how
@@ -88,7 +92,7 @@ Everything lives on the `/memory` volume (`ai-brain-memory`, bind-mounted to
 ├── PAUSE                      if this file exists, every loop skips its cycle
 ├── _ledger.json               quota state, rewritten atomically
 ├── brain/
-│   ├── identity.md            the brain's persona; it rewrites this
+│   ├── identity.md            the brain's persona; it proposes changes, you approve
 │   ├── goals.md               emergent goals; it rewrites this too
 │   ├── journal/YYYY-MM-DD.md  one line per cycle outcome
 │   ├── facts/<name>.md        long-lived notes (max 40 before compaction)
@@ -295,11 +299,11 @@ from Filip is still labelled as whoever really sent it. The cycle instructions
 say fenced text is data, with two exceptions to "someone else wrote it": a
 `note-filip` fence is Filip, and what he tells the brain is still ground truth,
 and the `goals` and `gaps` fences are the agent's own agenda -- worked on, but
-unable to give orders. The brain's `identity.md` is the one self-rewritten file
-that is still in the system message (see below). The reason is the path from the
-researcher: a web page it reads can end up in a note to the brain, which holds
-`propose` and `slack_post`, and in a system message that text would carry the
-same weight as the constitution. (A `topic:` first line stays the first line
+unable to give orders. The brain's `identity.md` is the one brain-written file
+that is still in the system message (see below), and a change to it needs your
+approval. The reason is the path from the researcher: a web page it reads can end
+up in a note to the brain, which holds `propose` and `slack_post`, and in a system
+message that text would carry the same weight as the constitution. (A `topic:` first line stays the first line
 inside the fence, so thread routing and the owed-reply check are unaffected.)
 The inbox is held to about 12,000 characters of full notes, each charged for its
 heading and fence as well as its body (the fence is resent every round); older
@@ -323,8 +327,9 @@ A quiet day stays quiet.
 > ```
 >
 > It backs up every file it replaces, and the next cycle picks the new text up
-> without a restart. The agent rewrites `identity.md` and `goals.md` itself over
-> time, so what you overwrite may be its own words rather than yours.
+> without a restart. The agent rewrites `goals.md` itself over time, and
+> `identity.md` changes when you approve a proposal, so what you overwrite may be
+> its own words rather than yours.
 
 ## Effort and per-model rounds
 
@@ -431,6 +436,45 @@ DM. You react on that message:
   `ha_service` (one Home Assistant service call on one entity).
 - ❌ (`:x:`) — rejected, nothing happens.
 - No reaction for 24 hours — expired.
+
+**Identity rewrites.** `rewrite_identity` is brain-only and writes nothing: it
+files a proposal of kind `rewrite_identity` holding the whole proposed text, posts a
+card to Slack and returns "pending approval" with the proposal id. ✅ applies it
+through `MemoryDir.rewrite_identity`, so the previous text is kept in the revision
+history (`history kind=persona` on the MCP) and the file's emoji frontmatter stays.
+❌ and expiry leave the file untouched, and the outcome reaches the brain's inbox
+like any other. Your own edits through the MCP's `write_persona` stay direct, and
+`rewrite_goals` is unchanged. The `propose` tool does not offer this kind.
+
+- **The card shows what you approve.** After the provenance warning (first, as on
+  every card) comes a diff against the current identity, in code blocks, then the
+  instructions to react. The proposed text is escaped (`& < >`, so a `<!channel>`
+  is inert) and its backticks cannot close the code block, so it cannot pose as the
+  card's own wording. The brain's one-line reason is quoted. A body is refused if
+  it holds invisible or control characters, since the card could not show them.
+  If the diff does not fit Slack's limits (five 3,000-character blocks, which a
+  complete rewrite of a maximum-size identity fits in), the card says so, with how
+  many lines of how many it shows, and that the full text is in
+  `brain/outbox/<id>.json` under `payload.body`. After you answer, the card
+  becomes the verdict plus the text's hash and size.
+- **Bounds.** 200 to 6,000 characters, no empty body, no `---` frontmatter block,
+  no whole sentences of the cycle instructions pasted in, and secret-shaped text is
+  masked before it is hashed, shown or stored. One identity request waits at a
+  time. Your MCP edits have no limit.
+- **A stale proposal is not applied.** The proposal records the hash of the
+  identity file it was based on. If the file changed before you approved, it ends
+  `failed` with a note saying so and the newer text is untouched; the brain can
+  propose again against it.
+- **Rejection memory** keys on a hash of the proposed text, not on "identity": the
+  same text stays refused for `REJECTION_MEMORY_DAYS`, different text may be asked.
+  In "Filip has said no to" it shows as `identity sha256:… (N chars)`, never the
+  text.
+- **Restarts.** A restart between ✅ and the write is not "outcome unknown" for
+  this kind: the write is one atomic replace, so startup checks whether the file
+  holds the proposed text and records `executed` or `failed` accordingly. A resumed
+  cycle never calls the tool again on its own account: it is not in
+  `READ_ONLY_TOOLS`, so a call without a result is reported as "outcome unknown".
+  `DRY_RUN=1` writes nothing, like the other executors.
 
 If Slack is unreachable when the brain proposes, the request is recorded
 `failed` rather than left pending: a queued message has no `ts` for a reaction
@@ -766,7 +810,7 @@ one. In between, each cycle appends what it did to
 | `reply` | One model turn, with what is needed to rebuild it: text, thinking, tool calls, signatures, provider blocks, the model and chain key, token counts. |
 | `tool_call` | A tool is about to run. Its arguments are in the `reply` above it. |
 | `tool_result` | What the tool returned, before the loop's `MAX_TOOL_RESULT_CHARS` cut. |
-| `memory` | A write to a fact, goals, identity or a gap, with the body it replaced. |
+| `memory` | A write to a fact, goals or a gap, with the body it replaced. (An approved identity rewrite happens in the Slack handler, not in a cycle, so it is not here; the revision trail has it.) |
 | `message` | A turn the loop itself added, such as the wrap-up nudge. |
 | `context_fit` | A call's prompt was trimmed: for which model, which results, and how many turns lost their reasoning. |
 | `cycle_end` | Status, rounds, cap, summary, token totals, and how many events failed to land. |

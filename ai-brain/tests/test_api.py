@@ -18,6 +18,7 @@ from conftest import env, fake_chain
 from ai_brain.api import build_app, start_api, stop_api
 from ai_brain.config import load_settings
 from ai_brain.loop import CycleResult, CycleTrace, RoundTrace
+from ai_brain.memory import split_frontmatter
 from ai_brain.supervisor import build
 
 STARTED_AT = 1_000_000.0
@@ -397,7 +398,9 @@ async def test_agent_detail_shows_identity_and_goals_drift_newest_first(client, 
 
     # Newest first, and the seeded persona the first rewrite replaced is the
     # oldest revision of all -- nothing is dropped just because it was seeded.
-    assert [rev["body"] for rev in body["identity_history"]][:2] == [
+    # A revision is the whole file, and a rewrite keeps the file's frontmatter
+    # (the emoji), so each one starts with it.
+    assert [split_frontmatter(rev["body"])[1] for rev in body["identity_history"]][:2] == [
         "second identity",
         "first identity",
     ]
