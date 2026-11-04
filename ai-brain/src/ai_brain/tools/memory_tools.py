@@ -13,9 +13,11 @@ import re
 
 from ai_brain.llm import ToolSpec
 from ai_brain.sessions import (
+    MAX_READ_EVENTS,
     MAX_SEARCH_LIMIT,
     MAX_SEARCH_QUERY_CHARS,
     SESSIONS_DIRNAME,
+    read_range,
     search_sessions,
 )
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
@@ -61,6 +63,7 @@ _DEFAULT_SEARCH_LIMIT = 10
 # returned, web pages and logs included, so an old result is no more trusted now
 # than when it arrived -- and on top of that, it is stale.
 _HISTORY_SOURCE = "session-history"
+_LOG_SOURCE = "session-log"
 
 
 def _normalise(text: str) -> str:
@@ -243,6 +246,27 @@ async def _search_history(ctx: ToolContext, args: dict) -> str:
     return ok(found)
 
 
+async def _read_cycle_events(ctx: ToolContext, args: dict) -> str:
+    """The current cycle's own log, and only that: it takes no cycle id, so there
+    is nothing to point at another cycle, or another loop's."""
+    session = ctx.extras.get("session")
+    # is_file, not exists: with logging off the path is /dev/null, which reads
+    # back as an empty success.
+    if session is None or not session.path.is_file():
+        return err("this cycle has no session log to read")
+    try:
+        start, end = int(args["from"]), int(args["to"])
+        offset = max(0, int(args.get("offset") or 0))
+    except (TypeError, ValueError, OverflowError):
+        return err("from, to and offset must be integers")
+    if end < start:
+        return err("to must not be before from")
+    found = await asyncio.to_thread(read_range, session.path, start, end, offset)
+    for event in found["events"]:
+        event["text"] = wrap_external(_LOG_SOURCE, event["text"])
+    return ok(found)
+
+
 async def _rewrite_goals(ctx: ToolContext, args: dict) -> str:
     ctx.memory.rewrite_goals(str(args["body"]))
     return ok({"rewritten": "goals"})
@@ -358,6 +382,33 @@ def register_memory_tools(registry: ToolRegistry) -> None:
                 ),
             ),
             _search_history,
+            None,
+        ),
+        (
+            ToolSpec(
+                name="read_cycle_events",
+                description=(
+                    "Read back part of this cycle's own log, by event number. Use it when a "
+                    "tool result was cut short or trimmed and the marker in it names the "
+                    "numbers to ask for. The full original is still there, including what "
+                    f"never fit in the conversation. Up to {MAX_READ_EVENTS} events and a page "
+                    "of text per call; a longer read comes back with 'next', the arguments "
+                    "of the next call. Only this cycle, not earlier ones (search_history "
+                    "is for those)."
+                ),
+                parameters=_schema(
+                    {
+                        "from": {"type": "integer"},
+                        "to": {"type": "integer"},
+                        "offset": {
+                            "type": "integer",
+                            "description": "Characters into the first event to start from.",
+                        },
+                    },
+                    ["from", "to"],
+                ),
+            ),
+            _read_cycle_events,
             None,
         ),
         (

@@ -243,7 +243,7 @@ async def test_read_gets_a_call_again_result_not_outcome_unknown(brain_dir, tmp_
             {"type": "tool_call", "round": 1, "id": "r", "name": "vm_query"},
         ],
     )
-    state = recover(path, read_events(path), lambda n: n in READ_ONLY_TOOLS, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda n: n in READ_ONLY_TOOLS, lambda _n, r, _s: r)
 
     text = _tool_messages(state.messages)["r"]
     assert "call it again" in text
@@ -260,7 +260,7 @@ async def test_unknown_tool_with_no_result_counts_as_a_write(brain_dir, tmp_path
             {"type": "tool_call", "round": 1, "id": "w", "name": "brand_new_tool"},
         ],
     )
-    state = recover(path, read_events(path), lambda n: n in READ_ONLY_TOOLS, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda n: n in READ_ONLY_TOOLS, lambda _n, r, _s: r)
     assert "outcome unknown" in _tool_messages(state.messages)["w"]
 
 
@@ -274,7 +274,7 @@ async def test_calls_that_never_started_are_reported_as_not_run(brain_dir, tmp_p
             {"type": "tool_result", "round": 1, "id": "a", "name": "list_facts", "result": "[]"},
         ],
     )
-    state = recover(path, read_events(path), lambda _n: False, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda _n: False, lambda _n, r, _s: r)
     assert _tool_messages(state.messages) == {
         "a": "[]",
         "b": _tool_messages(state.messages)["b"],
@@ -412,7 +412,7 @@ async def test_token_budget_stop_survives_a_crash(brain_dir, tmp_path, wall):
             {"type": "tool_result", "round": 1, "id": "a", "name": "list_facts", "result": "[]"},
         ],
     )
-    state = recover(path, read_events(path), lambda _n: False, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda _n: False, lambda _n, r, _s: r)
     assert state.budget_stopped is True
     assert state.floor_cap == 3
     assert state.effective_cap == 3
@@ -532,7 +532,7 @@ async def test_owed_refusal_is_not_granted_twice(brain_dir, tmp_path):
             },
         ],
     )
-    state = recover(path, read_events(path), lambda _n: False, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda _n: False, lambda _n, r, _s: r)
     assert state.refused_seq == 4
     assert state.end_cycle is None
 
@@ -1143,7 +1143,7 @@ async def test_external_sources_come_back_from_the_log(brain_dir, tmp_path, wall
             },
         ],
     )
-    state = recover(path, read_events(path), lambda _n: True, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda _n: True, lambda _n, r, _s: r)
     assert state.external_sources == {"web"}
 
 
@@ -1174,7 +1174,7 @@ def test_an_agents_memory_is_not_an_outside_read_but_its_tag_is(brain_dir):
             },
         ],
     )
-    state = recover(path, read_events(path), lambda _n: True, lambda _n, r: r)
+    state = recover(path, read_events(path), lambda _n: True, lambda _n, r, _s: r)
     assert state.external_sources == {"web", "docker"}
 
 

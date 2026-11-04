@@ -115,6 +115,10 @@ class Message:
     # everything but that provider, which only echoes them when ``model`` is
     # its own.
     provider_blocks: tuple[dict, ...] = ()
+    # This turn's event in the cycle's session log, for a tool result the
+    # context policy may have to trim: the stub says where the original is.
+    # Providers ignore it. 0 means it is not in a log.
+    log_seq: int = 0
 
 
 # Where a streaming-capable provider sends its reply as it is generated:
@@ -255,6 +259,9 @@ class Provider(ABC):
     # like a cloud API's SLA -- so the lan: provider overrides this rather than
     # making every provider in the chain wait as long as the slowest one.
     call_timeout_s: float | None = None
+    # The prompt window this provider asks its server for, if it asks for one.
+    # None means the API's own window, which is not ours to manage.
+    context_tokens: int | None = None
 
     @abstractmethod
     async def complete(
@@ -496,7 +503,14 @@ class ProviderChain:
         max_tokens: int,
         priority: Priority,
         agent: str = "",
+        fit: Callable[[list[Message], Provider], list[Message]] | None = None,
     ) -> Reply:
+        """Ask the first provider that can answer.
+
+        ``fit`` is the caller's context policy. It is asked per provider because
+        only this walk knows who ends up answering, and a fallback's window can
+        be a fraction of the size of the first choice's.
+        """
         earliest: float | None = None
         # Purely for the log line below: one chain is shared across every
         # AgentLoop (brain and each expert), so nothing here otherwise says
@@ -530,7 +544,8 @@ class ProviderChain:
             # next refusal is heard even if it is the same reason as before.
             self._skipped.pop(key, None)
 
-            reply = await self._try(provider, messages, tools, max_tokens, priority, remember)
+            prompt = fit(messages, provider) if fit is not None else messages
+            reply = await self._try(provider, prompt, tools, max_tokens, priority, remember)
             if reply is not None:
                 usage = reply.usage
                 log.info(

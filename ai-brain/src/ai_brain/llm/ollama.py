@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from ai_brain.context import CHARS_PER_TOKEN, STUB_PREFIX, TEMPLATE_OVERHEAD_TOKENS
 from ai_brain.llm import (
     STREAM_SINK,
     ErrorKind,
@@ -66,18 +67,6 @@ DEFAULT_NUM_CTX = 16384
 # asks the model to think; a non-thinking request keeps the plain 0.7.
 THINKING_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0}
 
-# Rough tokens-per-character used only to decide whether to warn/trim before
-# sending -- Ollama does the real tokenization server-side. English averages
-# ~4 chars/token; this errs low (over-counts tokens) so the warning fires
-# before the server's own truncation would, not after.
-_CHARS_PER_TOKEN = 4
-
-# Chat-template overhead (role markers, per-message framing, tool schemas)
-# that _estimate_tokens does not see since it only sums message content.
-# Fixed and conservative rather than computed from the tool list -- this is a
-# trim decision, not a token bill.
-_TEMPLATE_OVERHEAD_TOKENS = 512
-
 
 class OllamaProvider(Provider):
     call_timeout_s = CALL_TIMEOUT_S
@@ -97,6 +86,7 @@ class OllamaProvider(Provider):
         self._timeout_s = timeout_s
         self._client = client
         self._num_ctx = num_ctx
+        self.context_tokens = num_ctx
         self._think = think
         # A client we were handed belongs to the caller; only one we made
         # ourselves is ours to close.
@@ -118,7 +108,7 @@ class OllamaProvider(Provider):
     async def complete(
         self, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> Reply:
-        messages = _fit_to_context(messages, self._num_ctx, max_tokens, self.key)
+        messages = _guard_front_truncation(messages, self._num_ctx, max_tokens, self.key)
         payload = build_request(
             self.model, messages, tools, max_tokens, num_ctx=self._num_ctx, think=self._think
         )
@@ -259,38 +249,30 @@ def _safe_sink(sink: Callable[[str, str], None], kind: str, delta: str) -> None:
 
 
 def _estimate_tokens(messages: list[Message]) -> int:
-    """A cheap upper-bound token estimate, good enough to decide whether to warn/trim.
-
-    Ollama does the real tokenization server-side; this only needs to be in
-    the right ballpark, and erring high (undercounting chars/token) is the
-    safe direction -- it means we trim a little early rather than a little
-    late.
-    """
     chars = sum(len(m.content) for m in messages)
-    return chars // _CHARS_PER_TOKEN
+    return chars // CHARS_PER_TOKEN
 
 
-def _fit_to_context(
+def _guard_front_truncation(
     messages: list[Message], num_ctx: int, max_tokens: int, key: str
 ) -> list[Message]:
-    """Warn, and drop oldest tool-result turns, when the prompt won't fit.
+    """The last resort: never let the server cut the front off a prompt.
 
     Ollama's own behaviour on overflow is to silently truncate the prompt
     from the *front* -- which is exactly backwards for this chain's messages,
     since the front holds the persona/system turn every reply depends on.
-    Trimming from the middle (oldest tool results first, working forward)
-    keeps that system turn and the most recent turns, which matter far more
-    to answer quality than a mid-conversation tool result.
 
-    Budget is ``num_ctx`` minus room for the reply (``max_tokens``) and a
-    fixed slack for chat-template overhead (role markers, tool schemas),
-    since the estimate only counts message content.
+    Deciding what the model sees is the harness's job (``ai_brain.context``):
+    that policy counts more than this does and trims first, so a prompt it got
+    under budget never fires this. It is here for a caller with no policy, or a
+    prompt the policy could not get under budget, and it trims blind: no
+    reference back to the original, oldest tool results first.
     """
     # Clamped rather than let go negative: a num_ctx so small that reserving
     # max_tokens + overhead alone would exhaust it is already a
     # misconfiguration, but the prompt still needs *some* budget to trim
     # against instead of skipping the warning because the math went negative.
-    budget = max(num_ctx - max_tokens - _TEMPLATE_OVERHEAD_TOKENS, 1)
+    budget = max(num_ctx - max_tokens - TEMPLATE_OVERHEAD_TOKENS, 1)
     estimated = _estimate_tokens(messages)
     if estimated <= budget:
         return messages
@@ -319,6 +301,10 @@ def _fit_to_context(
     for i in droppable:
         if _estimate_tokens(trimmed) <= budget:
             break
+        # A stub the context policy left says how to get the original back, and
+        # replacing it with this one would save a few tokens and lose that.
+        if trimmed[i].content.startswith(STUB_PREFIX):
+            continue
         trimmed[i] = Message(
             role="tool",
             content="[trimmed: prompt exceeded num_ctx]",

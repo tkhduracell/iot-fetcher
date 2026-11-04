@@ -58,7 +58,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ai_brain.fence import safe_source
+from ai_brain.fence import escape_fence, safe_source
 from ai_brain.llm import Message, ToolCall
 from ai_brain.redact import MASK, SECRET_NAME, masked_under_name, redact
 
@@ -590,14 +590,14 @@ def _is_activity(event: dict) -> bool:
         return event.get("kind") == "nudge"
     if kind == "tool_result":
         return not event.get("synthetic")
-    return kind not in ("resume", "cycle_end")
+    return kind not in ("resume", "cycle_end", "context_fit")
 
 
 def recover(
     path: Path,
     events: list[dict],
     read_only: Callable[[str], bool],
-    cap_result: Callable[[str, str], str],
+    cap_result: Callable[[str, str, int | None], str],
 ) -> Recovered:
     """Rebuild a cycle from its log. Runs nothing and writes nothing.
 
@@ -696,8 +696,15 @@ def recover(
             call_id = str(event.get("id"))
             result = str(event.get("result") or "")
             answered.add(call_id)
+            logged_at = seq if isinstance(seq, int) else None
             out.messages.append(
-                Message("tool", cap_result(name, result), tool_call_id=call_id, name=name)
+                Message(
+                    "tool",
+                    cap_result(name, result, logged_at),
+                    tool_call_id=call_id,
+                    name=name,
+                    log_seq=logged_at or 0,
+                )
             )
             if out.replies:
                 out.replies[-1].setdefault("results", []).append({"name": name, "result": result})
@@ -767,9 +774,9 @@ MAX_SEARCH_QUERY_CHARS = 200
 # A tool name is the model's to invent, and a hit carries it outside the fence.
 _MAX_HIT_TOOL_CHARS = 64
 
-# Its results are this log's own text coming back, and its arguments the words
+# Their results are this log's own text coming back, and their arguments the words
 # searched for. Searching either would make every search find the last one.
-_NOT_SEARCHED_TOOLS = frozenset({"search_history"})
+_NOT_SEARCHED_TOOLS = frozenset({"search_history", "read_cycle_events"})
 
 # ``json.dumps`` writes non-ASCII as an escape, which is what ``tools.ok`` does to
 # every result: a logged one holds the six characters of an escape where the tool
@@ -882,6 +889,100 @@ def search_sessions(
             if len(hits) >= limit:
                 return {"hits": hits, "cycles_scanned": scanned, "truncated": True}
     return {"hits": hits, "cycles_scanned": scanned, "truncated": False}
+
+
+# read_cycle_events' bounds, held under the loop's MAX_TOOL_RESULT_CHARS so that
+# fetching a truncated result does not itself get truncated.
+MAX_READ_RESULT_CHARS = 12_000
+MAX_READ_EVENTS = 50
+# What each event costs on top of its text: its other fields, and the fence.
+_READ_EVENT_OVERHEAD_CHARS = 160
+
+
+def event_text(event: dict) -> str:
+    """One event's text, as a person reading the log would want it."""
+    kind = event.get("type")
+    if kind == "tool_result":
+        return _unescaped(str(event.get("result") or ""))
+    if kind == "reply":
+        parts = [str(event.get("text") or ""), str(event.get("thinking") or "")]
+        parts += [
+            f"called {c.get('name')}({json.dumps(c.get('args'), ensure_ascii=False)})"
+            for c in event.get("tool_calls") or []
+            if isinstance(c, dict)
+        ]
+        return "\n".join(part for part in parts if part)
+    if kind == "memory":
+        old = _unescaped(str(event.get("old") or ""))
+        return f"{event.get('op')} {event.get('name')}, replacing:\n{old}"
+    if kind == "message":
+        return str(event.get("content") or "")
+    if kind == "opening":
+        return "\n\n".join(
+            f"[{m.get('role')}] {m.get('content')}"
+            for m in event.get("messages") or []
+            if isinstance(m, dict)
+        )
+    if kind == "cycle_end":
+        return str(event.get("summary") or "")
+    return ""
+
+
+def read_range(path: Path, start: int, end: int, offset: int = 0) -> dict:
+    """Events ``start``..``end`` of one log, cut to ``MAX_READ_RESULT_CHARS``.
+
+    ``offset`` is how far into the first event to begin, so one event longer
+    than a page can be read in pieces. A cut comes back as ``next``, the exact
+    arguments of the following call, so the model does not have to work it out.
+    """
+    out: list[dict] = []
+    left = MAX_READ_RESULT_CHARS
+    next_args: dict | None = None
+    for _, event in _iter_events(path):
+        seq = event.get("seq")
+        if not isinstance(seq, int) or seq < start:
+            continue
+        if seq > end:
+            break
+        if len(out) == MAX_READ_EVENTS or left <= 0:
+            next_args = {"from": seq, "to": end, "offset": 0}
+            break
+        text = event_text(event)
+        skip = offset if not out else 0
+        left -= _READ_EVENT_OVERHEAD_CHARS
+        chunk = _fit_encoded(text[skip:], left)
+        entry = {"seq": seq, "type": event.get("type"), "text": chunk}
+        if event.get("name") is not None:
+            # The model's to invent, and it sits beside the fence rather than in it.
+            entry["name"] = safe_source(str(event["name"]))[:_MAX_HIT_TOOL_CHARS]
+        if event.get("round") is not None:
+            entry["round"] = event["round"]
+        out.append(entry)
+        left -= _encoded_chars(chunk)
+        if skip + len(chunk) < len(text):
+            entry["chars_total"] = len(text)
+            next_args = {"from": seq, "to": end, "offset": skip + len(chunk)}
+            break
+    return {"events": out, "next": next_args}
+
+
+def _encoded_chars(text: str) -> int:
+    """What ``text`` costs in the tool result, once fenced and JSON-encoded. Escaping
+    counts, since quotes can double it, and so does the fence: each tag it defuses
+    gains a zero-width space, which JSON writes as six characters."""
+    return len(json.dumps(escape_fence(text)))
+
+
+def _fit_encoded(text: str, budget: int) -> str:
+    """The longest prefix of ``text`` that costs no more than ``budget``."""
+    low, high = 0, min(len(text), max(budget, 0))
+    while low < high:
+        mid = (low + high + 1) // 2
+        if _encoded_chars(text[:mid]) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low]
 
 
 def session_files(directory: Path) -> list[Path]:
