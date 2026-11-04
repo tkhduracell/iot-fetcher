@@ -590,7 +590,7 @@ def _is_activity(event: dict) -> bool:
         return event.get("kind") == "nudge"
     if kind == "tool_result":
         return not event.get("synthetic")
-    return kind not in ("resume", "cycle_end")
+    return kind not in ("resume", "cycle_end", "context_fit")
 
 
 def recover(
@@ -903,7 +903,7 @@ def event_text(event: dict) -> str:
     """One event's text, as a person reading the log would want it."""
     kind = event.get("type")
     if kind == "tool_result":
-        return str(event.get("result") or "")
+        return _unescaped(str(event.get("result") or ""))
     if kind == "reply":
         parts = [str(event.get("text") or ""), str(event.get("thinking") or "")]
         parts += [
@@ -913,7 +913,8 @@ def event_text(event: dict) -> str:
         ]
         return "\n".join(part for part in parts if part)
     if kind == "memory":
-        return f"{event.get('op')} {event.get('name')}, replacing:\n{event.get('old') or ''}"
+        old = _unescaped(str(event.get("old") or ""))
+        return f"{event.get('op')} {event.get('name')}, replacing:\n{old}"
     if kind == "message":
         return str(event.get("content") or "")
     if kind == "opening":
@@ -934,35 +935,32 @@ def read_range(path: Path, start: int, end: int, offset: int = 0) -> dict:
     than a page can be read in pieces. A cut comes back as ``next``, the exact
     arguments of the following call, so the model does not have to work it out.
     """
-    wanted = [
-        e for e in read_events(path) if isinstance(e.get("seq"), int) and start <= e["seq"] <= end
-    ]
     out: list[dict] = []
     left = MAX_READ_RESULT_CHARS
     next_args: dict | None = None
-    for event in wanted[:MAX_READ_EVENTS]:
+    for _, event in _iter_events(path):
+        seq = event.get("seq")
+        if not isinstance(seq, int) or seq < start:
+            continue
+        if seq > end:
+            break
+        if len(out) == MAX_READ_EVENTS or left <= 0:
+            next_args = {"from": seq, "to": end, "offset": 0}
+            break
         text = event_text(event)
         skip = offset if not out else 0
         left -= _READ_EVENT_OVERHEAD_CHARS
         chunk = _fit_encoded(text[skip:], left)
-        entry = {"seq": event["seq"], "type": event.get("type"), "text": chunk}
+        entry = {"seq": seq, "type": event.get("type"), "text": chunk}
         for key in ("name", "round"):
             if event.get(key) is not None:
                 entry[key] = event[key]
-        if skip + len(chunk) < len(text):
-            entry["chars_total"] = len(text)
-            next_args = {"from": event["seq"], "to": end, "offset": skip + len(chunk)}
         out.append(entry)
         left -= len(json.dumps(chunk))
-        if next_args is not None:
+        if skip + len(chunk) < len(text):
+            entry["chars_total"] = len(text)
+            next_args = {"from": seq, "to": end, "offset": skip + len(chunk)}
             break
-        if left <= 0:
-            following = event["seq"] + 1
-            if following <= end:
-                next_args = {"from": following, "to": end, "offset": 0}
-            break
-    if next_args is None and len(wanted) > MAX_READ_EVENTS:
-        next_args = {"from": wanted[MAX_READ_EVENTS]["seq"], "to": end, "offset": 0}
     return {"events": out, "next": next_args}
 
 

@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from ai_brain.context import CHARS_PER_TOKEN, STUB_PREFIX, TEMPLATE_OVERHEAD_TOKENS
 from ai_brain.llm import (
     STREAM_SINK,
     ErrorKind,
@@ -65,11 +66,6 @@ DEFAULT_NUM_CTX = 16384
 # Qwen3.8's model card sampling for thinking mode. Used whenever a request
 # asks the model to think; a non-thinking request keeps the plain 0.7.
 THINKING_SAMPLING = {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0}
-
-# The guard's rough sums. See ai_brain.context, which does the actual trimming
-# and counts more than this does, so it acts first.
-_CHARS_PER_TOKEN = 4
-_TEMPLATE_OVERHEAD_TOKENS = 512
 
 
 class OllamaProvider(Provider):
@@ -254,7 +250,7 @@ def _safe_sink(sink: Callable[[str, str], None], kind: str, delta: str) -> None:
 
 def _estimate_tokens(messages: list[Message]) -> int:
     chars = sum(len(m.content) for m in messages)
-    return chars // _CHARS_PER_TOKEN
+    return chars // CHARS_PER_TOKEN
 
 
 def _guard_front_truncation(
@@ -277,7 +273,7 @@ def _guard_front_truncation(
     # max_tokens + overhead alone would exhaust it is already a
     # misconfiguration, but the prompt still needs *some* budget to trim
     # against instead of skipping the warning because the math went negative.
-    budget = max(num_ctx - max_tokens - _TEMPLATE_OVERHEAD_TOKENS, 1)
+    budget = max(num_ctx - max_tokens - TEMPLATE_OVERHEAD_TOKENS, 1)
     estimated = _estimate_tokens(messages)
     if estimated <= budget:
         return messages
@@ -308,7 +304,7 @@ def _guard_front_truncation(
             break
         # A stub the context policy left says how to get the original back, and
         # replacing it with this one would save a few tokens and lose that.
-        if trimmed[i].content.startswith("[trimmed"):
+        if trimmed[i].content.startswith(STUB_PREFIX):
             continue
         trimmed[i] = Message(
             role="tool",

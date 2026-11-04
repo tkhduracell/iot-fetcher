@@ -35,6 +35,14 @@ CHARS_PER_TOKEN = 4
 # contains. Fixed and conservative, since this is a trim decision and not a bill.
 TEMPLATE_OVERHEAD_TOKENS = 512
 
+# What a turn the policy cut down starts with, so the provider's guard can leave it be.
+STUB_PREFIX = "[trimmed"
+
+
+def read_back(seq: int) -> str:
+    """The call that fetches one logged event back."""
+    return f"read_cycle_events(from={seq}, to={seq})"
+
 
 def estimate_tokens(messages: Iterable[Message]) -> int:
     """A cheap estimate of everything these turns put on the wire.
@@ -62,9 +70,8 @@ def estimate_tool_tokens(tools: Iterable[ToolSpec]) -> int:
 def _stub(message: Message) -> str:
     size = len(message.content)
     if message.log_seq:
-        seq = message.log_seq
-        return f"[trimmed from context: {size} chars; read_cycle_events(from={seq}, to={seq}) has it]"
-    return f"[trimmed from context: {size} chars]"
+        return f"{STUB_PREFIX} from context: {size} chars; {read_back(message.log_seq)} has it]"
+    return f"{STUB_PREFIX} from context: {size} chars]"
 
 
 def fit_context(

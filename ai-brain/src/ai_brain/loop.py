@@ -41,7 +41,7 @@ from typing import Any, Literal
 from ai_brain.approvals import NOTE_SENDER as APPROVALS_SENDER
 from ai_brain.approvals import rejected_groups, rejection_memory_section
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
-from ai_brain.context import estimate_tool_tokens, fit_context
+from ai_brain.context import estimate_tool_tokens, fit_context, read_back
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
 from ai_brain.llm import (
@@ -1701,6 +1701,8 @@ class AgentLoop:
         self, messages: list[Message], provider: Provider, tools: list[ToolSpec]
     ) -> list[Message]:
         """This cycle's conversation as ``provider`` should see it this call."""
+        if provider.context_tokens is None:
+            return messages
         fitted = fit_context(
             messages,
             ModelProfile(provider.key, provider.context_tokens),
@@ -1744,9 +1746,7 @@ class AgentLoop:
             len(result),
             MAX_TOOL_RESULT_CHARS,
         )
-        where = (
-            f"\n…[rest: read_cycle_events(from={logged_at}, to={logged_at})]" if logged_at else ""
-        )
+        where = f"\n…[rest: {read_back(logged_at)}]" if logged_at else ""
         return (
             result[:MAX_TOOL_RESULT_CHARS] + where + f"\n…[truncated by loop: {dropped} more chars]"
         )

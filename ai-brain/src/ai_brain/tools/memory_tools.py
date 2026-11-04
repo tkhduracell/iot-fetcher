@@ -255,7 +255,7 @@ async def _read_cycle_events(ctx: ToolContext, args: dict) -> str:
     try:
         start, end = int(args["from"]), int(args["to"])
         offset = max(0, int(args.get("offset") or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return err("from, to and offset must be integers")
     if end < start:
         return err("to must not be before from")
