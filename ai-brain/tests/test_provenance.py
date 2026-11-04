@@ -137,25 +137,10 @@ async def test_cycle_tracks_what_it_read_and_forgets_it_after(brain_dir, tmp_pat
 
     assert loop.trace.external_sources == {"web"}
     assert read_so_far() == ()
-    assert "external_sources" not in loop.ctx.extras
 
     second, _ = _loop(brain_dir, {"brain": brain_dir}, tmp_path, wall, [_reply(_end())])
     await second.run_cycle()
     assert second.trace.external_sources == set()
-
-
-async def test_starting_point_can_be_handed_in(brain_dir, tmp_path, wall):
-    """What a resumed cycle needs: to start out knowing what it read earlier."""
-    loop, _ = _loop(
-        brain_dir,
-        {"brain": brain_dir},
-        tmp_path,
-        wall,
-        [_reply(_end())],
-        extras={"external_sources": {"web"}},
-    )
-    await loop.run_cycle()
-    assert loop.trace.external_sources == {"web"}
 
 
 # -- facts -----------------------------------------------------------------

@@ -933,11 +933,8 @@ class AgentLoop:
         # has no session, and everything from this line on ends in the finally
         # below, which is what resets it.
         memory_sink = MEMORY_SINK.set(session.record_mutation)
-        # Shared by reference with what a tool's wrap_external adds to. In extras
-        # so that a cycle's starting point can come from somewhere other than an
-        # empty set.
-        sources = self.ctx.extras.setdefault("external_sources", set())
-        trace.external_sources = sources
+        # Shared by reference with what a tool's wrap_external adds to.
+        sources = trace.external_sources
         read_sources = READ_SOURCES.set(sources)
         try:
             # Read the inbox once. Reading it again inside external_parts would
@@ -1157,6 +1154,9 @@ class AgentLoop:
                         name=call.name,
                         chars=len(result),
                         result=result,
+                        # What this cycle has read by now, since a resumed one has
+                        # to start out knowing. Only the live cycle can say.
+                        sources=sorted(sources),
                     )
                     # Stats are computed from the tool's own full result,
                     # before either truncation -- the loop's MAX_TOOL_RESULT_CHARS
@@ -1438,8 +1438,7 @@ class AgentLoop:
         latest_note = max(state.note_seq.values(), default=0)
         if state.refused_seq > latest_note and not new_notes:
             self.ctx.extras["owed_refused"] = True
-        if state.external_sources:
-            self.ctx.extras.setdefault("external_sources", set()).update(state.external_sources)
+        trace.external_sources.update(state.external_sources)
         if state.end_cycle is not None:
             self.ctx.extras["end_cycle"] = state.end_cycle
 
@@ -1804,7 +1803,6 @@ class AgentLoop:
         self.ctx.extras.pop("session", None)
         self.ctx.extras.pop("end_cycle", None)
         self.ctx.extras.pop("owed_refused", None)
-        self.ctx.extras.pop("external_sources", None)
         owed = self.ctx.extras.pop("owed_replies", None) or set()
         slack_out = self.ctx.extras.get("slack_out")
         if consumed and slack_out is not None:

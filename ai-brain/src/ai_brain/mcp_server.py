@@ -32,6 +32,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ai_brain.memory import OWNER_SENDER, MemoryDir, safe_name
+from ai_brain.provenance import WRITTEN_AFTER_READING
 
 if TYPE_CHECKING:
     from ai_brain.supervisor import System
@@ -105,7 +106,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
                     "title": f.title,
                     "written_at": _iso(f.written_at),
                     "writes": f.writes,
-                    "written_after_reading": list(f.provenance),
+                    **({WRITTEN_AFTER_READING: list(f.provenance)} if f.provenance else {}),
                 }
                 for f in mem.fact_stats()
             ],
@@ -123,7 +124,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
             "name": fact.name,
             "title": fact.title,
             "body": fact.body,
-            "written_after_reading": list(fact.provenance),
+            WRITTEN_AFTER_READING: list(fact.provenance),
         }
 
     @mcp.tool()

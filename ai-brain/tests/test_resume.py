@@ -28,13 +28,12 @@ from ai_brain.llm.gemini import build_request as gemini_request
 from ai_brain.loop import MAX_TOOL_RESULT_CHARS
 from ai_brain.sessions import (
     UNSIGNED_MODEL,
-    _sources_in,
     read_events,
     recover,
     session_files,
 )
 from ai_brain.supervisor import build
-from ai_brain.tools import READ_ONLY_TOOLS, Tool, ok, wrap_external
+from ai_brain.tools import READ_ONLY_TOOLS, Tool
 
 SECRET = "AIza" + "x" * 35
 
@@ -1140,43 +1139,13 @@ async def test_external_sources_come_back_from_the_log(brain_dir, tmp_path, wall
                 "round": 1,
                 "id": "w",
                 "name": "web_fetch",
-                "result": json.dumps({"text": '<external source="web">hello</external>'}),
+                "result": "{}",
+                "sources": ["web"],
             },
         ],
     )
     state = recover(path, read_events(path), lambda _n: True, lambda _n, r, _s: r)
     assert state.external_sources == {"web"}
-
-
-def test_an_agents_memory_is_not_an_outside_read_but_its_tag_is(brain_dir):
-    path = _crashed_session(
-        brain_dir,
-        [
-            _opening(),
-            _reply_event(("a", "read_expert", {}), ("b", "read_fact", {})),
-            {
-                "type": "tool_result",
-                "round": 1,
-                "id": "a",
-                "name": "read_expert",
-                "result": json.dumps(
-                    {
-                        "body": '<external source="fact-energy">x</external>',
-                        "written_after_reading": ["web"],
-                    }
-                ),
-            },
-            {
-                "type": "tool_result",
-                "round": 1,
-                "id": "b",
-                "name": "read_fact",
-                "result": json.dumps({"body": "y", "written_after_reading": ["docker"]}),
-            },
-        ],
-    )
-    state = recover(path, read_events(path), lambda _n: True, lambda _n, r, _s: r)
-    assert state.external_sources == {"web", "docker"}
 
 
 def test_real_sigkill_inside_a_tool_resumes_without_rerunning_it(brain_dir, tmp_path, wall):
@@ -1945,14 +1914,13 @@ async def test_resumed_trace_keeps_earlier_tool_results(brain_dir, tmp_path, wal
 async def test_a_resumed_cycle_keeps_its_tag_on_a_fact_it_then_writes(brain_dir, tmp_path, wall):
     """The set of sources lives only in the running cycle, so what a cycle read before
     it died has to come back from the log, or what it writes next looks like its own."""
-    page = wrap_external("web", "the pump is broken")
     _crashed_session(
         brain_dir,
         [
             _opening(),
             _reply_event(("a", "web_fetch", {"url": "https://example.com"})),
             {"type": "tool_call", "round": 1, "id": "a", "name": "web_fetch"},
-            {"type": "tool_result", "round": 1, "id": "a", "name": "web_fetch", "result": ok({"body": page})},
+            {"type": "tool_result", "round": 1, "id": "a", "name": "web_fetch", "result": "{}", "sources": ["web"]},
         ],
     )
     registry = build_registry()
@@ -1978,14 +1946,20 @@ async def test_a_resumed_cycle_keeps_its_tag_on_a_fact_it_then_writes(brain_dir,
 
 
 async def test_a_note_sent_from_a_resumed_cycle_carries_the_tag(brain_dir, expert_dir, tmp_path, wall):
-    page = wrap_external("google-drive", "from a document")
     _crashed_session(
         expert_dir,
         [
             _opening(),
             _reply_event(("a", "drive_search", {"query": "x"})),
             {"type": "tool_call", "round": 1, "id": "a", "name": "drive_search"},
-            {"type": "tool_result", "round": 1, "id": "a", "name": "drive_search", "result": ok({"body": page})},
+            {
+                "type": "tool_result",
+                "round": 1,
+                "id": "a",
+                "name": "drive_search",
+                "result": "{}",
+                "sources": ["google-drive"],
+            },
         ],
     )
     loop, _ = build_loop(
@@ -2003,7 +1977,6 @@ async def test_a_note_sent_from_a_resumed_cycle_carries_the_tag(brain_dir, exper
 
 
 async def test_reading_the_cycles_own_log_is_not_reading_outside_text(brain_dir, tmp_path, wall):
-    """A resume reading it back from the log has to agree with the live cycle."""
     loop, _ = build_loop(
         brain_dir,
         tmp_path,
@@ -2019,4 +1992,5 @@ async def test_reading_the_cycles_own_log_is_not_reading_outside_text(brain_dir,
     await loop.run_cycle()
 
     assert brain_dir.read_fact("own").provenance == ()
-    assert _sources_in("read_cycle_events", wrap_external("session-log", "x", note_as_read=False)) == set()
+    results = [e for e in read_events(session_files(brain_dir.root / "sessions")[0]) if e["type"] == "tool_result"]
+    assert [e["sources"] for e in results] == [[], [], []]

@@ -12,7 +12,7 @@ import asyncio
 import re
 
 from ai_brain.llm import ToolSpec
-from ai_brain.provenance import note_read
+from ai_brain.provenance import carry_tag
 from ai_brain.sessions import (
     MAX_READ_EVENTS,
     MAX_SEARCH_LIMIT,
@@ -21,7 +21,16 @@ from ai_brain.sessions import (
     read_range,
     search_sessions,
 )
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
+from ai_brain.tools import (
+    Tool,
+    ToolContext,
+    ToolRegistry,
+    err,
+    int_arg,
+    ok,
+    wrap_external,
+    wrap_internal,
+)
 
 BRAIN_ONLY = frozenset({"brain"})
 
@@ -156,12 +165,7 @@ async def _read_fact(ctx: ToolContext, args: dict) -> str:
     fact = ctx.memory.read_fact(str(args["name"]))
     if fact is None:
         return ok(None)
-    result: dict = {"name": fact.name, "title": fact.title, "body": fact.body}
-    if fact.provenance:
-        # What it was written after reading now reaches this cycle by way of it.
-        note_read(fact.provenance)
-        result["written_after_reading"] = list(fact.provenance)
-    return ok(result)
+    return ok(carry_tag({"name": fact.name, "title": fact.title, "body": fact.body}, fact.provenance))
 
 
 async def _delete_fact(ctx: ToolContext, args: dict) -> str:
@@ -271,7 +275,7 @@ async def _read_cycle_events(ctx: ToolContext, args: dict) -> str:
     for event in found["events"]:
         # Not a read of outside text in itself: whatever this cycle's own log holds
         # from outside, the cycle already counted when it first read it.
-        event["text"] = wrap_external(_LOG_SOURCE, event["text"], note_as_read=False)
+        event["text"] = wrap_internal(_LOG_SOURCE, event["text"])
     return ok(found)
 
 

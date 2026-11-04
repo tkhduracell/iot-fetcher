@@ -37,12 +37,12 @@ from ai_brain.introspection import proposal_loops, token_rows, usefulness_rows
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ToolSpec
 from ai_brain.memory import MemoryDir
-from ai_brain.provenance import note_read
+from ai_brain.provenance import carry_tag
 from ai_brain.redact import redact
 from ai_brain.regex_safety import check_pattern
 from ai_brain.repo import RepoSnapshot
 from ai_brain.sensitive import is_sensitive
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_external
+from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, ok, wrap_internal
 
 log = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ def _fenced(kind: str, memory: MemoryDir, text: str) -> str:
     # Fenced because another agent wrote it, but not a read of outside text in
     # itself: reviewing the experts is the brain's whole job, and counting it would
     # tag everything the brain ever wrote. A fact that is tagged says so on its own.
-    return wrap_external(f"{kind}-{safe_source(memory.name.lower())}", text, note_as_read=False)
+    return wrap_internal(f"{kind}-{safe_source(memory.name.lower())}", text)
 
 
 def _persona_preview(memory: MemoryDir) -> str:
@@ -369,15 +369,16 @@ async def _read_expert(ctx: ToolContext, args: dict) -> str:
         if found is None:
             known = ", ".join(memory.list_facts())
             return err(f"unknown fact: {fact_name} (known: {known})")
-        result = {
-            "name": found.name,
-            "title": _fenced("fact", memory, found.title),
-            "body": _fenced("fact", memory, found.body),
-        }
-        if found.provenance:
-            note_read(found.provenance)
-            result["written_after_reading"] = list(found.provenance)
-        return ok(result)
+        return ok(
+            carry_tag(
+                {
+                    "name": found.name,
+                    "title": _fenced("fact", memory, found.title),
+                    "body": _fenced("fact", memory, found.body),
+                },
+                found.provenance,
+            )
+        )
     return err(f"read_expert: unknown what={what!r} (one of {', '.join(_READ_WHATS)})")
 
 

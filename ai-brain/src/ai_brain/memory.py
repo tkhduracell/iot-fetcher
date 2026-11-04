@@ -659,7 +659,7 @@ class MemoryDir:
         self.facts_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.fact_meta_path, json.dumps(meta, indent=2, sort_keys=True))
 
-    def _bump_fact_meta(self, name: str, title: str, sources: tuple[str, ...] = ()) -> None:
+    def _bump_fact_meta(self, name: str, title: str, sources: tuple[str, ...]) -> None:
         meta = self._read_fact_meta()
         entry = meta.get(name)
         now = self.clock().timestamp()
@@ -1065,7 +1065,7 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
     left = budget
     for note in reversed(notes):
         label = _label(note.sender)
-        head = f"from: {label} ({_iso(note.created)}){provenance_tag(note.provenance)}"
+        head = f"from: {label} ({_iso(note.created)}){_provenance_tag(note.provenance)}"
         source = f"note-{label}"
         owner = note.sender == OWNER_SENDER
         full = f"## {head}\n{fence(source, note.body, block=True)}"
@@ -1091,8 +1091,8 @@ def _block_or_empty(source: str, text: str) -> str:
     return fence(source, text, block=True) if text.strip() else "(empty)"
 
 
-def provenance_tag(sources: tuple[str, ...]) -> str:
-    """How a note or fact says what its writer had read. Empty when nothing."""
+def _provenance_tag(sources: tuple[str, ...]) -> str:
+    """How a note says what its writer had read. Empty when nothing."""
     return f", after reading external text ({', '.join(sources)})" if sources else ""
 
 

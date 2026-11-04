@@ -108,17 +108,6 @@ ABANDONED = "abandoned"
 # provider, which replays the turn as plain text.
 UNSIGNED_MODEL = "(replayed)"
 
-# A fence a tool put around what it returned, as ``tools.wrap_external`` writes
-# it. Text inside a fence cannot forge one: ``wrap_external`` defuses the tag.
-# A tool's ``ok()`` JSON-encodes its payload, so in a logged result the quotes
-# arrive escaped.
-_EXTERNAL_FENCE = re.compile(r'<external source=\\?"([a-z0-9_.-]+)\\?">')
-
-# Their fences mark another agent's words, or this cycle's own log, not text from
-# outside this system. The tools say so to ``wrap_external`` with ``note_as_read``,
-# and a resume has to reach the same answer from the log.
-_NOT_OUTSIDE_READS = frozenset({"read_expert", "expert_overview", "read_cycle_events"})
-
 _NOT_RUN = (
     "not run: the cycle was interrupted before this call started. "
     "Call it again if you still need it."
@@ -518,22 +507,6 @@ class Recovered:
         return self.finished or self.end_cycle is not None
 
 
-def _sources_in(tool: str, result: str) -> set[str]:
-    """Where outside text in one logged result came from: its fences, and the tag
-    on a fact it read, which carries what that fact's writer had read."""
-    found = set() if tool in _NOT_OUTSIDE_READS else set(_EXTERNAL_FENCE.findall(result))
-    if "written_after_reading" not in result:
-        return found
-    try:
-        parsed = json.loads(result)
-    except (TypeError, ValueError):
-        return found
-    tagged = parsed.get("written_after_reading") if isinstance(parsed, dict) else None
-    if isinstance(tagged, list):
-        found.update(str(source) for source in tagged)
-    return found
-
-
 def result_error(result: str) -> str | None:
     """The error in a logged tool result, or None if it did not fail."""
     try:
@@ -712,7 +685,7 @@ def recover(
             )
             if out.replies:
                 out.replies[-1].setdefault("results", []).append({"name": name, "result": result})
-            out.external_sources.update(_sources_in(name, result))
+            out.external_sources.update(str(source) for source in event.get("sources") or [])
             if name not in ("slack_post", "end_cycle"):
                 continue
             failed = result_error(result) is not None

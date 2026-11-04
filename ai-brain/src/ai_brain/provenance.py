@@ -21,12 +21,25 @@ from contextvars import ContextVar
 
 READ_SOURCES: ContextVar[set[str] | None] = ContextVar("READ_SOURCES", default=None)
 
+# What a fact's tag is called wherever it is handed out.
+WRITTEN_AFTER_READING = "written_after_reading"
+
 
 def note_read(sources: Iterable[str]) -> None:
     """The running cycle has read text from these sources."""
     current = READ_SOURCES.get()
     if current is not None:
         current.update(sources)
+
+
+def carry_tag(result: dict, provenance: Iterable[str]) -> dict:
+    """A tool's ``result`` for a fact with this tag on it. What the fact was written
+    after reading now reaches this cycle by way of it."""
+    tag = list(provenance)
+    if tag:
+        note_read(tag)
+        result[WRITTEN_AFTER_READING] = tag
+    return result
 
 
 def read_so_far() -> tuple[str, ...]:

@@ -123,7 +123,14 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
-def wrap_external(source: str, text: str, *, note_as_read: bool = True) -> str:
+def wrap_internal(source: str, text: str) -> str:
+    """Fence and redact text this system wrote but a model must not take orders
+    from: another agent's memory, or a cycle's own log. Unlike ``wrap_external``, it
+    is not a read of outside text."""
+    return fence(source, redact(text))
+
+
+def wrap_external(source: str, text: str) -> str:
     """Fence text that came from outside this system.
 
     A metric name is ours; a Drive document, a web page and a friendly name a
@@ -143,12 +150,9 @@ def wrap_external(source: str, text: str, *, note_as_read: bool = True) -> str:
 
     It is also where a cycle learns it has read outside text, for the same
     reason: every such read comes through here. See ``ai_brain.provenance``.
-    ``note_as_read`` is for text that wants the fence without being outside.
     """
-    fenced = fence(source, redact(text))
-    if note_as_read:
-        note_read((source,))
-    return fenced
+    note_read((source,))
+    return wrap_internal(source, text)
 
 
 class ToolRegistry:
