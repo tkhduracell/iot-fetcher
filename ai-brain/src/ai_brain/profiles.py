@@ -13,7 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING, match_by_model
+from ai_brain.config import (
+    CYCLE_MAX_ROUNDS_HARD_CEILING,
+    DEFAULT_MAX_PROMPT_TOKENS,
+    DEFAULT_MAX_ROUNDS,
+    match_by_model,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ai_brain.config import Settings
@@ -53,9 +58,6 @@ KEY_RPD_OVERRIDES: dict[str, int] = {
     "gemini:gemini-3.8-flash": 11,
 }
 
-_DEFAULT_MAX_ROUNDS = 16
-_DEFAULT_MAX_PROMPT_TOKENS = 400_000
-
 
 @dataclass(frozen=True)
 class ModelProfile:
@@ -66,9 +68,9 @@ class ModelProfile:
     # A THINK_BY_MODEL level, as written. None means the model's own default.
     think: str | None = None
     # Never above CYCLE_MAX_ROUNDS_HARD_CEILING.
-    max_rounds: int = _DEFAULT_MAX_ROUNDS
+    max_rounds: int = DEFAULT_MAX_ROUNDS
     # 0 means no budget for this model.
-    max_prompt_tokens: int = _DEFAULT_MAX_PROMPT_TOKENS
+    max_prompt_tokens: int = DEFAULT_MAX_PROMPT_TOKENS
     # A measured requests-per-day ceiling, where one exists. None means the
     # env-configured tier applies.
     rpd: int | None = None
@@ -87,9 +89,9 @@ class ModelProfiles:
         *,
         num_ctx_by_model: list[tuple[str, int]] | None = None,
         think_by_model: list[tuple[str, str]] | None = None,
-        max_rounds: int = _DEFAULT_MAX_ROUNDS,
+        max_rounds: int = DEFAULT_MAX_ROUNDS,
         max_rounds_by_model: list[tuple[str, int]] | None = None,
-        max_prompt_tokens: int = _DEFAULT_MAX_PROMPT_TOKENS,
+        max_prompt_tokens: int = DEFAULT_MAX_PROMPT_TOKENS,
         max_prompt_tokens_by_model: list[tuple[str, int]] | None = None,
     ) -> None:
         self.num_ctx_by_model = list(num_ctx_by_model or [])

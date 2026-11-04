@@ -46,6 +46,15 @@ class CapState:
     quota_stopped: bool = False
 
 
+def _capped(new_cap: int, floor_cap: int | None, budget_stopped: bool) -> int:
+    """A model's limit with what has fired so far. A budget stop is exact, so no
+    per-model cap, however generous, may push the cycle past its floor. A cap-drop
+    rescue only ever raises the cap up to its floor."""
+    if floor_cap is None:
+        return new_cap
+    return floor_cap if budget_stopped else max(new_cap, floor_cap)
+
+
 def after_reply(
     state: CapState,
     *,
@@ -78,21 +87,35 @@ def after_reply(
         budget_stopped or (not nudge_sent and new_cap <= rounds + WRAP_UP_ROUNDS_BEFORE_CAP)
     ):
         floor_cap = min(rounds + WRAP_UP_ROUNDS_BEFORE_CAP, CYCLE_MAX_ROUNDS_HARD_CEILING)
-    if budget_stopped:
-        # The budget stop is exact, not a floor: once tripped, no per-model cap
-        # -- however generous -- may push the cycle past floor_cap (set on the
-        # same round budget_stopped first became True, and frozen from then on
-        # -- so it is never None here), unlike the cap-drop rescue below which
-        # only ever raises the cap up to its floor.
-        effective_cap = floor_cap if floor_cap is not None else new_cap
-    elif floor_cap is not None:
-        effective_cap = max(new_cap, floor_cap)
-    else:
-        effective_cap = new_cap
+    effective_cap = _capped(new_cap, floor_cap, budget_stopped)
     quota_stopped = runway is not None and rounds + runway < effective_cap
     if quota_stopped:
         effective_cap = rounds + runway
     return CapState(effective_cap, floor_cap, budget_stopped, quota_stopped)
+
+
+def restored(
+    default_cap: int,
+    *,
+    logged_cap: int | None,
+    rounds_cap: int,
+    floor_cap: int | None,
+    budget_stopped: bool,
+    quota_stopped: bool,
+) -> CapState:
+    """The cap state of a resumed cycle, from what its last reply logged.
+
+    A cap the quota set was about what was left back then, and the next reply sets
+    it again from what is left now. Restoring it as it stands would close a cycle
+    whose quota has since come back, so that one goes back to what the rounds
+    setting (``rounds_cap``) and the floor make it. ``default_cap`` is for a log
+    with no cap on record.
+    """
+    if quota_stopped:
+        cap = _capped(rounds_cap, floor_cap, budget_stopped)
+    else:
+        cap = logged_cap if logged_cap is not None else default_cap
+    return CapState(cap, floor_cap, budget_stopped)
 
 
 def nudge_due(state: CapState, *, rounds: int, nudge_sent: bool) -> bool:

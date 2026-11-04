@@ -4,7 +4,7 @@ import json
 import pytest
 from sessions_helpers import build_loop, call, end, reply
 
-from ai_brain.caps import WRAP_UP_ROUNDS_BEFORE_CAP, CapState, after_reply, nudge_due
+from ai_brain.caps import WRAP_UP_ROUNDS_BEFORE_CAP, CapState, after_reply, nudge_due, restored
 from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING, load_settings
 from ai_brain.ledger import Ledger
 from ai_brain.llm import ProviderChain, limits_from_settings
@@ -24,7 +24,7 @@ from ai_brain.report import (
     render,
     summarize,
 )
-from ai_brain.sessions import read_events, session_files
+from ai_brain.sessions import cycle_logs, read_events, session_files
 
 
 @pytest.fixture
@@ -501,3 +501,42 @@ async def test_caps_on_the_log_match_what_the_cycle_ran_with(brain_dir, tmp_path
         "budget_hit": 400_000,
         "quota_stopped": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("logged", "floor", "budget_stopped", "quota_stopped", "cap"),
+    [
+        # As it stood, whatever set it.
+        (9, None, False, False, 9),
+        (3, 3, True, False, 3),
+        # Nothing logged, an older log.
+        (None, None, False, False, 16),
+        # The quota's clamp is about back then: the rounds setting again.
+        (5, None, False, True, 32),
+        # With the floor it would have had, which a budget stop holds it to.
+        (1, 40, False, True, 40),
+        (1, 3, True, True, 3),
+    ],
+)
+def test_restored_cap(logged, floor, budget_stopped, quota_stopped, cap):
+    state = restored(
+        16,
+        logged_cap=logged,
+        rounds_cap=32,
+        floor_cap=floor,
+        budget_stopped=budget_stopped,
+        quota_stopped=quota_stopped,
+    )
+    assert state == CapState(cap, floor, budget_stopped)
+
+
+def test_cycle_logs_reads_each_cycle_once_and_skips_temp_files(tmp_path):
+    (tmp_path / "20270101-000000-aaaa.jsonl").write_text("")
+    (tmp_path / "20270101-000000-aaaa.jsonl.gz").write_bytes(gzip.compress(b""))
+    (tmp_path / "20270102-000000-bbbb.jsonl.gz.tmp").write_text("junk")
+    (tmp_path / "20270103-000000-cccc.jsonl.holes").write_text("")
+
+    assert [p.name for p in cycle_logs(tmp_path)] == [
+        "20270101-000000-aaaa.jsonl.gz",
+        "20270103-000000-cccc.jsonl.holes",
+    ]

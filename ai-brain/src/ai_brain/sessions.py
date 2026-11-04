@@ -533,12 +533,15 @@ def _sources_in(tool: str, result: str) -> set[str]:
     return found
 
 
-def _result_failed(result: str) -> bool:
+def result_error(result: str) -> str | None:
+    """The error in a logged tool result, or None if it did not fail."""
     try:
         parsed = json.loads(result)
     except (TypeError, ValueError):
-        return False
-    return isinstance(parsed, dict) and "error" in parsed
+        return None
+    if isinstance(parsed, dict) and "error" in parsed:
+        return str(parsed["error"])
+    return None
 
 
 def _rebuilt_turn(event: dict) -> Message:
@@ -711,7 +714,7 @@ def recover(
             out.external_sources.update(_sources_in(name, result))
             if name not in ("slack_post", "end_cycle"):
                 continue
-            failed = _result_failed(result)
+            failed = result_error(result) is not None
             match = next((c for c in calls if c.id == call_id), None)
             if name == "slack_post" and match is not None:
                 # Not on a synthetic result: that decision is fill_gaps', and
@@ -848,19 +851,10 @@ def search_sessions(
     hits: list[dict] = []
     scanned = 0
     chars = 0
-    seen: set[str] = set()
-    for path in reversed(session_files(directory)):
-        day = _cycle_day(path.name)
-        if day is None or day < cutoff:
-            break
-        # Not a compress's leftover temp file, and not a cycle twice: a power cut
-        # during ``compress`` leaves both copies, and the .gz sorts first here.
-        if not path.name.endswith((LOG_SUFFIX, HOLES_SUFFIX, GZ_SUFFIX)):
-            continue
+    for path in reversed(cycle_logs(directory, since=cutoff)):
         cycle = cycle_id_of(path)
-        if cycle == exclude or cycle in seen:
+        if cycle == exclude:
             continue
-        seen.add(cycle)
         scanned += 1
         for size, event in _iter_events(path):
             chars += size
@@ -983,6 +977,21 @@ def _fit_encoded(text: str, budget: int) -> str:
         else:
             high = mid - 1
     return text[:low]
+
+
+def cycle_logs(directory: Path, since: datetime | None = None) -> list[Path]:
+    """One file per cycle, oldest first, for anything reading what cycles did.
+
+    Not a compress's leftover temp file, and not a cycle twice: a power cut during
+    ``compress`` leaves both copies, and the later name, the .gz, is the one kept.
+    """
+    logs: dict[str, Path] = {}
+    for path in session_files(directory):
+        day = _cycle_day(path.name)
+        fresh = since is None or (day is not None and day >= since)
+        if fresh and path.name.endswith((LOG_SUFFIX, HOLES_SUFFIX, GZ_SUFFIX)):
+            logs[cycle_id_of(path)] = path
+    return list(logs.values())
 
 
 def session_files(directory: Path) -> list[Path]:

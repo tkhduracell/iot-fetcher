@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ai_brain.sessions import SESSIONS_DIRNAME, read_events, session_files
+from ai_brain.sessions import SESSIONS_DIRNAME, cycle_logs, read_events, result_error
 
 # Angle (by the start of its text) -> a tool call that shows it was followed.
 # None: following it leaves no tool signature of its own. A name after a colon
@@ -83,7 +83,6 @@ class CycleSummary:
 def summarize(agent: str, events: Iterable[dict]) -> CycleSummary:
     """One session's events as what the report wants to know about it."""
     out = CycleSummary(agent=agent)
-    args_by_id: dict[str, dict] = {}
     model = ""
     for event in events:
         kind = event.get("type")
@@ -98,18 +97,18 @@ def summarize(agent: str, events: Iterable[dict]) -> CycleSummary:
                 if not isinstance(call, dict):
                     continue
                 args = call.get("args") if isinstance(call.get("args"), dict) else {}
-                args_by_id[str(call.get("id"))] = args
                 name = str(call.get("name") or "")
                 out.tools.add(name)
                 if "name" in args:
                     out.tools.add(f"{name}:{args['name']}")
         elif kind == "tool_result":
             name = str(event.get("name") or "")
-            result = str(event.get("result") or "")
-            failed = _error_of(result)
-            if name == "write_fact" and failed.startswith("refused:"):
+            if name not in ("write_fact", "end_cycle"):
+                continue
+            failed = result_error(str(event.get("result") or ""))
+            if name == "write_fact" and failed and failed.startswith("refused:"):
                 out.junk_refusals[model] += 1
-            if name == "end_cycle" and not event.get("synthetic") and not failed:
+            if name == "end_cycle" and not event.get("synthetic") and failed is None:
                 out.ended = True
                 out.ended_after_nudge = out.nudged
         elif kind == "message" and event.get("kind") == "nudge":
@@ -122,16 +121,6 @@ def summarize(agent: str, events: Iterable[dict]) -> CycleSummary:
             out.status = str(event.get("status") or "unknown")
             out.cap = int(event.get("cap") or 0)
     return out
-
-
-def _error_of(result: str) -> str:
-    try:
-        parsed = json.loads(result)
-    except (TypeError, ValueError):
-        return ""
-    if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
-        return parsed["error"]
-    return ""
 
 
 def _signal_for(angle: str) -> tuple[str, frozenset[str] | None]:
@@ -154,15 +143,13 @@ def agent_session_dirs(memory_root: Path) -> dict[str, Path]:
 def load_cycles(
     memory_root: Path, *, days: int | None = None, now: float | None = None
 ) -> list[CycleSummary]:
-    cutoff = None
+    since = None
     if days is not None:
         at = datetime.fromtimestamp(now, UTC) if now is not None else datetime.now(UTC)
-        cutoff = (at - timedelta(days=days)).strftime("%Y%m%d")
+        since = at - timedelta(days=days)
     cycles = []
     for agent, directory in agent_session_dirs(memory_root).items():
-        for path in session_files(directory):
-            if cutoff is not None and path.name[:8] < cutoff:
-                continue
+        for path in cycle_logs(directory, since=since):
             events = read_events(path)
             if events:
                 cycles.append(summarize(agent, events))

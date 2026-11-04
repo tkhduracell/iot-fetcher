@@ -39,8 +39,12 @@ from typing import Any, Literal
 
 from ai_brain.approvals import NOTE_SENDER as APPROVALS_SENDER
 from ai_brain.approvals import rejected_groups, rejection_memory_section
-from ai_brain.caps import CapState, after_reply, nudge_due
-from ai_brain.config import CYCLE_MAX_ROUNDS_HARD_CEILING
+from ai_brain.caps import CapState, after_reply, nudge_due, restored
+from ai_brain.config import (
+    CYCLE_MAX_ROUNDS_HARD_CEILING,
+    DEFAULT_MAX_PROMPT_TOKENS,
+    DEFAULT_MAX_ROUNDS,
+)
 from ai_brain.context import estimate_tool_tokens, fit_context, read_back
 from ai_brain.events import EventBus
 from ai_brain.ledger import Priority
@@ -55,7 +59,7 @@ from ai_brain.llm import (
     ToolSpec,
 )
 from ai_brain.memory import MEMORY_SINK, OWNER_SENDER, MemoryDir, Note, render_inbox
-from ai_brain.profiles import ModelProfiles
+from ai_brain.profiles import ModelProfile, ModelProfiles
 from ai_brain.sessions import (
     ABANDONED,
     RESUMABLE_STATUSES,
@@ -83,11 +87,6 @@ log = logging.getLogger(__name__)
 MAX_TOKENS = 8000
 MIN_BACKOFF_S = 60
 MAX_WAKE_S = 12 * 3600
-
-# Mirrors config.py's own default for CYCLE_MAX_PROMPT_TOKENS -- used only as
-# this constructor's fallback for callers (mostly tests) that build an
-# AgentLoop without going through Settings.
-CYCLE_MAX_PROMPT_TOKENS = 400_000
 
 # CYCLE_MAX_ROUNDS_HARD_CEILING lives in config.py (it is validated there,
 # against _parse_max_rounds_by_model's own N range) and is imported rather
@@ -688,10 +687,10 @@ class AgentLoop:
         constitution: str,
         clock: Callable[[], float],
         pause_file: Path,
-        max_rounds: int = 16,
+        max_rounds: int = DEFAULT_MAX_ROUNDS,
         max_rounds_by_model: list[tuple[str, int]] | None = None,
         max_tokens: int = MAX_TOKENS,
-        max_prompt_tokens: int = CYCLE_MAX_PROMPT_TOKENS,
+        max_prompt_tokens: int = DEFAULT_MAX_PROMPT_TOKENS,
         max_prompt_tokens_by_model: list[tuple[str, int]] | None = None,
         call_timeout_s: int = 60,
         events: EventBus | None = None,
@@ -718,8 +717,9 @@ class AgentLoop:
         self.max_rounds = max_rounds
         self.max_tokens = max_tokens
         self.max_prompt_tokens = max_prompt_tokens
-        # Only the two per-round settings: the chain was built from the same
-        # environment and already holds the window and thinking level it asks for.
+        # Only the two per-round settings, so its num_ctx and think answers are
+        # not the real ones: the chain was built from the same environment and
+        # holds the window and thinking level it asks for.
         self.profiles = ModelProfiles(
             max_rounds=max_rounds,
             max_rounds_by_model=max_rounds_by_model,
@@ -948,31 +948,22 @@ class AgentLoop:
                     messages=[{"role": m.role, "content": m.content} for m in messages],
                 )
             else:
-                # A cap the quota set was about what was left back then, and the
-                # next reply sets it again from what is left now. Restoring it as
-                # it stands would close a cycle whose quota has since come back.
-                # Without the quota the cap is what the rounds settings and the
-                # floor made it: the floor alone once the token budget has stopped.
-                restored_cap = caps.effective_cap
-                if recovered.quota_stopped:
-                    restored_cap = self._rounds_cap(recovered.chain_key, recovered.model)
-                    if recovered.floor_cap is not None:
-                        restored_cap = (
-                            recovered.floor_cap
-                            if recovered.budget_stopped
-                            else max(restored_cap, recovered.floor_cap)
-                        )
-                elif recovered.effective_cap is not None:
-                    restored_cap = recovered.effective_cap
-                trace.cap = restored_cap
+                caps = restored(
+                    caps.effective_cap,
+                    logged_cap=recovered.effective_cap,
+                    rounds_cap=self._rounds_cap(recovered.chain_key, recovered.model),
+                    floor_cap=recovered.floor_cap,
+                    budget_stopped=recovered.budget_stopped,
+                    quota_stopped=recovered.quota_stopped,
+                )
+                trace.cap = caps.effective_cap
                 messages, notes = self._resume_messages(
-                    recovered, session, notes, trace, restored_cap
+                    recovered, session, notes, trace, caps.effective_cap
                 )
                 rounds = recovered.rounds
                 model = recovered.model
                 budget_tokens = recovered.budget_tokens
                 nudge_sent = recovered.nudge_sent
-                caps = CapState(restored_cap, recovered.floor_cap, recovered.budget_stopped)
                 if recovered.budget_hit is not None:
                     self._budget_hit = recovered.budget_hit
                 unsigned_retry_left = True
@@ -1627,7 +1618,7 @@ class AgentLoop:
             return messages
         fitted = fit_context(
             messages,
-            replace(self.profiles.for_key(provider.key), num_ctx=provider.context_tokens),
+            ModelProfile(provider.key, provider.context_tokens),
             reserve_tokens=self.max_tokens + estimate_tool_tokens(tools),
         )
         if fitted is not messages:
