@@ -269,7 +269,9 @@ async def _read_cycle_events(ctx: ToolContext, args: dict) -> str:
         return err("to must not be before from")
     found = await asyncio.to_thread(read_range, session.path, start, end, offset)
     for event in found["events"]:
-        event["text"] = wrap_external(_LOG_SOURCE, event["text"])
+        # Not a read of outside text in itself: whatever this cycle's own log holds
+        # from outside, the cycle already counted when it first read it.
+        event["text"] = wrap_external(_LOG_SOURCE, event["text"], note_as_read=False)
     return ok(found)
 
 

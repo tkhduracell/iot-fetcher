@@ -114,9 +114,10 @@ UNSIGNED_MODEL = "(replayed)"
 # arrive escaped.
 _EXTERNAL_FENCE = re.compile(r'<external source=\\?"([a-z0-9_.-]+)\\?">')
 
-# Their fences mark another agent's words, not text from outside this system, so
-# they are not what a cycle's record of outside reads is about.
-_AGENT_MEMORY_READS = frozenset({"read_expert", "expert_overview"})
+# Their fences mark another agent's words, or this cycle's own log, not text from
+# outside this system. The tools say so to ``wrap_external`` with ``note_as_read``,
+# and a resume has to reach the same answer from the log.
+_NOT_OUTSIDE_READS = frozenset({"read_expert", "expert_overview", "read_cycle_events"})
 
 _NOT_RUN = (
     "not run: the cycle was interrupted before this call started. "
@@ -520,7 +521,7 @@ class Recovered:
 def _sources_in(tool: str, result: str) -> set[str]:
     """Where outside text in one logged result came from: its fences, and the tag
     on a fact it read, which carries what that fact's writer had read."""
-    found = set() if tool in _AGENT_MEMORY_READS else set(_EXTERNAL_FENCE.findall(result))
+    found = set() if tool in _NOT_OUTSIDE_READS else set(_EXTERNAL_FENCE.findall(result))
     if "written_after_reading" not in result:
         return found
     try:
