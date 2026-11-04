@@ -148,6 +148,7 @@ def _trace_json(trace: CycleTrace | None) -> dict | None:
     return {
         "cycle_id": trace.cycle_id,
         "resumed_after_s": trace.resumed_after_s,
+        "external_sources": sorted(trace.external_sources),
         "started_at": trace.started_at,
         "finished_at": trace.finished_at,
         "in_progress": trace.in_progress,
@@ -215,6 +216,7 @@ def _fact_stat_json(stat) -> dict:
         "written_at": stat.written_at,
         "first_written_at": stat.first_written_at,
         "writes": stat.writes,
+        "provenance": list(stat.provenance),
     }
 
 
@@ -405,6 +407,7 @@ def build_app(
                     {
                         "sender": note.sender,
                         "body": note.body,
+                        "provenance": list(note.provenance),
                         "created": note.created.isoformat(),
                         # A basename, never the path: the path says where the
                         # volume is mounted, which is nobody's business here.
@@ -480,7 +483,15 @@ def build_app(
         found = memory.read_fact(fact)
         if found is None:
             return _json({"error": f"unknown fact: {fact}"}, status=404)
-        return _json({"agent": name, "name": found.name, "title": found.title, "body": found.body})
+        return _json(
+            {
+                "agent": name,
+                "name": found.name,
+                "title": found.title,
+                "body": found.body,
+                "provenance": list(found.provenance),
+            }
+        )
 
     async def proposals(_request: web.Request) -> web.Response:
         everything = system.approvals.all()
@@ -497,6 +508,7 @@ def build_app(
                         "created": p.created,
                         "status": p.status,
                         "result": p.result,
+                        "provenance": p.provenance,
                     }
                     for p in newest_first
                 ],

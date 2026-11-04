@@ -25,6 +25,7 @@ from ai_brain.errors import BadInput
 from ai_brain.fence import fence
 from ai_brain.llm import ToolCall, ToolSpec
 from ai_brain.memory import MemoryDir
+from ai_brain.provenance import note_read
 from ai_brain.redact import redact
 
 log = logging.getLogger(__name__)
@@ -122,6 +123,13 @@ def err(msg: str) -> str:
     return json.dumps({"error": msg})
 
 
+def wrap_internal(source: str, text: str) -> str:
+    """Fence and redact text this system wrote but a model must not take orders
+    from: another agent's memory, or a cycle's own log. Unlike ``wrap_external``, it
+    is not a read of outside text."""
+    return fence(source, redact(text))
+
+
 def wrap_external(source: str, text: str) -> str:
     """Fence text that came from outside this system.
 
@@ -139,8 +147,15 @@ def wrap_external(source: str, text: str) -> str:
     or header, and once the model has read it, it can end up copied verbatim
     into a memory fact. Masking happens before fencing so a secret cannot
     hide the fence's own sentinel handling from itself.
+
+    It is also where a cycle learns it has read outside text, for the same
+    reason: every such read comes through here. See ``ai_brain.provenance``.
     """
-    return fence(source, redact(text))
+    # An empty log or a blank field is no outside text, and tagging on one would
+    # mark a whole cycle for a read that showed it nothing.
+    if text.strip():
+        note_read((source,))
+    return wrap_internal(source, text)
 
 
 class ToolRegistry:

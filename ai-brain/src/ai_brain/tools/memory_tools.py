@@ -12,6 +12,7 @@ import asyncio
 import re
 
 from ai_brain.llm import ToolSpec
+from ai_brain.provenance import carry_tag
 from ai_brain.sessions import (
     MAX_READ_EVENTS,
     MAX_SEARCH_LIMIT,
@@ -20,7 +21,16 @@ from ai_brain.sessions import (
     read_range,
     search_sessions,
 )
-from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
+from ai_brain.tools import (
+    Tool,
+    ToolContext,
+    ToolRegistry,
+    err,
+    int_arg,
+    ok,
+    wrap_external,
+    wrap_internal,
+)
 
 BRAIN_ONLY = frozenset({"brain"})
 
@@ -155,7 +165,7 @@ async def _read_fact(ctx: ToolContext, args: dict) -> str:
     fact = ctx.memory.read_fact(str(args["name"]))
     if fact is None:
         return ok(None)
-    return ok({"name": fact.name, "title": fact.title, "body": fact.body})
+    return ok(carry_tag({"name": fact.name, "title": fact.title, "body": fact.body}, fact.provenance))
 
 
 async def _delete_fact(ctx: ToolContext, args: dict) -> str:
@@ -263,7 +273,9 @@ async def _read_cycle_events(ctx: ToolContext, args: dict) -> str:
         return err("to must not be before from")
     found = await asyncio.to_thread(read_range, session.path, start, end, offset)
     for event in found["events"]:
-        event["text"] = wrap_external(_LOG_SOURCE, event["text"])
+        # Not a read of outside text in itself: whatever this cycle's own log holds
+        # from outside, the cycle already counted when it first read it.
+        event["text"] = wrap_internal(_LOG_SOURCE, event["text"])
     return ok(found)
 
 

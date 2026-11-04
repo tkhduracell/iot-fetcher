@@ -40,7 +40,7 @@ import json
 import logging
 import secrets
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -48,6 +48,7 @@ from ai_brain.docker_api import validate_container_name
 from ai_brain.executors import Executors, QuietHours
 from ai_brain.fence import fence
 from ai_brain.memory import MemoryDir
+from ai_brain.provenance import read_so_far
 from ai_brain.slack_io import CHAT_TOPIC
 
 log = logging.getLogger(__name__)
@@ -147,6 +148,8 @@ class Proposal:
     status: str
     slack_ts: str = ""
     result: str = ""
+    # Outside text the proposing cycle had read by then. See provenance.py.
+    provenance: list[str] = field(default_factory=list)
 
 
 class Approvals:
@@ -203,6 +206,7 @@ class Approvals:
             topic=topic,
             created=_iso(now),
             status=PENDING,
+            provenance=list(read_so_far()),
         )
         # No Slack at all is the same situation as a Slack that would not take
         # the message: there is no ✅ for anyone to press, so storing this as
@@ -213,6 +217,9 @@ class Approvals:
             raise RuntimeError("slack not configured")
 
         summary = (
+            # First, because _fit_section cuts a long card from the end, and a long
+            # reason or payload must not be what takes the warning off it.
+            f"{_provenance_line(proposal)}"
             f"{_proposal_line(proposal)}\n\n"
             f"```{json.dumps(payload)}```\n"
             "React ✅ to approve, ❌ to reject, or use the buttons below."
@@ -393,6 +400,18 @@ def _proposal_line(proposal: Proposal) -> str:
     """"Proposal <id> (<kind>): <reason>" -- shared by the initial post and
     the resolved edit, so the two never drift apart."""
     return f"Proposal {proposal.id} ({proposal.kind}): {proposal.reason}"
+
+
+def _provenance_line(proposal: Proposal) -> str:
+    """What the card says when the ask came after reading outside text.
+
+    Advisory, and on the card rather than in the journal, because this is the
+    moment it can change anything: a person is about to approve an action whose
+    reason may have been shaped by a web page.
+    """
+    if not proposal.provenance:
+        return ""
+    return f"⚠️ Asked after reading external text: {', '.join(proposal.provenance)}\n"
 
 
 #: One line per terminal status, appended to the resolved message. Deliberately

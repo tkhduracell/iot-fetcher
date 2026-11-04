@@ -652,6 +652,7 @@ async def test_a_fact_is_returned_by_name(client, system):
         "name": "pool",
         "title": "Pool status",
         "body": "the pool is cold",
+        "provenance": [],
     }
 
 

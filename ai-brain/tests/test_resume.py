@@ -1139,43 +1139,13 @@ async def test_external_sources_come_back_from_the_log(brain_dir, tmp_path, wall
                 "round": 1,
                 "id": "w",
                 "name": "web_fetch",
-                "result": json.dumps({"text": '<external source="web">hello</external>'}),
+                "result": "{}",
+                "sources": ["web"],
             },
         ],
     )
     state = recover(path, read_events(path), lambda _n: True, lambda _n, r, _s: r)
     assert state.external_sources == {"web"}
-
-
-def test_an_agents_memory_is_not_an_outside_read_but_its_tag_is(brain_dir):
-    path = _crashed_session(
-        brain_dir,
-        [
-            _opening(),
-            _reply_event(("a", "read_expert", {}), ("b", "read_fact", {})),
-            {
-                "type": "tool_result",
-                "round": 1,
-                "id": "a",
-                "name": "read_expert",
-                "result": json.dumps(
-                    {
-                        "body": '<external source="fact-energy">x</external>',
-                        "written_after_reading": ["web"],
-                    }
-                ),
-            },
-            {
-                "type": "tool_result",
-                "round": 1,
-                "id": "b",
-                "name": "read_fact",
-                "result": json.dumps({"body": "y", "written_after_reading": ["docker"]}),
-            },
-        ],
-    )
-    state = recover(path, read_events(path), lambda _n: True, lambda _n, r, _s: r)
-    assert state.external_sources == {"web", "docker"}
 
 
 def test_real_sigkill_inside_a_tool_resumes_without_rerunning_it(brain_dir, tmp_path, wall):
@@ -1936,3 +1906,91 @@ async def test_resumed_trace_keeps_earlier_tool_results(brain_dir, tmp_path, wal
 
     assert loop.trace.rounds[0].tool_results[0]["name"] == "list_facts"
     assert "outcome unknown" in loop.trace.rounds[1].tool_results[0]["result_preview"]
+
+
+# -- with provenance ---------------------------------------------------------
+
+
+async def test_a_resumed_cycle_keeps_its_tag_on_a_fact_it_then_writes(brain_dir, tmp_path, wall):
+    """The set of sources lives only in the running cycle, so what a cycle read before
+    it died has to come back from the log, or what it writes next looks like its own."""
+    _crashed_session(
+        brain_dir,
+        [
+            _opening(),
+            _reply_event(("a", "web_fetch", {"url": "https://example.com"})),
+            {"type": "tool_call", "round": 1, "id": "a", "name": "web_fetch"},
+            {"type": "tool_result", "round": 1, "id": "a", "name": "web_fetch", "result": "{}", "sources": ["web"]},
+        ],
+    )
+    registry = build_registry()
+    loop, _ = build_loop(
+        brain_dir,
+        tmp_path,
+        wall,
+        [
+            reply(
+                "",
+                call("write_fact", "b", name="pump", title="Pump", body="the pump looks broken to me"),
+            ),
+            reply("", end()),
+        ],
+        registry=registry,
+    )
+
+    result = await loop.run_cycle()
+
+    assert result.status == "ok"
+    assert brain_dir.read_fact("pump").provenance == ("web",)
+    assert loop.trace.external_sources == {"web"}
+
+
+async def test_a_note_sent_from_a_resumed_cycle_carries_the_tag(brain_dir, expert_dir, tmp_path, wall):
+    _crashed_session(
+        expert_dir,
+        [
+            _opening(),
+            _reply_event(("a", "drive_search", {"query": "x"})),
+            {"type": "tool_call", "round": 1, "id": "a", "name": "drive_search"},
+            {
+                "type": "tool_result",
+                "round": 1,
+                "id": "a",
+                "name": "drive_search",
+                "result": "{}",
+                "sources": ["google-drive"],
+            },
+        ],
+    )
+    loop, _ = build_loop(
+        expert_dir,
+        tmp_path,
+        wall,
+        [reply("", call("send_note", "b", to="brain", body="worth a look")), reply("", end())],
+        registry=build_registry(),
+        memories={"brain": brain_dir, "energy": expert_dir},
+    )
+
+    await loop.run_cycle()
+
+    assert [n.provenance for n in brain_dir.unread_notes()] == [("google-drive",)]
+
+
+async def test_reading_the_cycles_own_log_is_not_reading_outside_text(brain_dir, tmp_path, wall):
+    loop, _ = build_loop(
+        brain_dir,
+        tmp_path,
+        wall,
+        [
+            reply("", call("read_cycle_events", "a", **{"from": 1, "to": 1})),
+            reply("", call("write_fact", "b", name="own", title="Own", body="my own words, no page")),
+            reply("", end()),
+        ],
+        registry=build_registry(),
+    )
+
+    await loop.run_cycle()
+
+    assert brain_dir.read_fact("own").provenance == ()
+    results = [e for e in read_events(session_files(brain_dir.root / "sessions")[0]) if e["type"] == "tool_result"]
+    assert [e["sources"] for e in results] == [[], [], []]

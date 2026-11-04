@@ -32,6 +32,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ai_brain.memory import OWNER_SENDER, MemoryDir, safe_name
+from ai_brain.provenance import WRITTEN_AFTER_READING
 
 if TYPE_CHECKING:
     from ai_brain.supervisor import System
@@ -105,6 +106,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
                     "title": f.title,
                     "written_at": _iso(f.written_at),
                     "writes": f.writes,
+                    **({WRITTEN_AFTER_READING: list(f.provenance)} if f.provenance else {}),
                 }
                 for f in mem.fact_stats()
             ],
@@ -113,22 +115,34 @@ def build_mcp(system: System, token: str) -> MCPServer:
         }
 
     @mcp.tool()
-    def read_fact(agent: str, name: str) -> dict[str, str]:
-        """One fact's title and full body."""
+    def read_fact(agent: str, name: str) -> dict[str, Any]:
+        """One fact's title and full body, and any outside text it was written after."""
         fact = memory(agent).read_fact(checked(name))
         if fact is None:
             raise ToolError(f"{agent} has no fact {name!r}")
-        return {"name": fact.name, "title": fact.title, "body": fact.body}
+        return {
+            "name": fact.name,
+            "title": fact.title,
+            "body": fact.body,
+            WRITTEN_AFTER_READING: list(fact.provenance),
+        }
 
     @mcp.tool()
-    def read_facts(agent: str) -> list[dict[str, str]]:
+    def read_facts(agent: str) -> list[dict[str, Any]]:
         """Every fact of an agent in full -- for a refactor that needs the whole set."""
         mem = memory(agent)
         out = []
         for name in mem.list_facts():
             fact = mem.read_fact(name)
             if fact is not None:
-                out.append({"name": fact.name, "title": fact.title, "body": fact.body})
+                out.append(
+                    {
+                        "name": fact.name,
+                        "title": fact.title,
+                        "body": fact.body,
+                        **({WRITTEN_AFTER_READING: list(fact.provenance)} if fact.provenance else {}),
+                    }
+                )
         return out
 
     @mcp.tool()
@@ -220,7 +234,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
 
     @mcp.tool()
     def rename_fact(agent: str, name: str, new_name: str, new_title: str = "") -> str:
-        """Rename a fact, keeping its body (and its title unless new_title is given)."""
+        """Rename a fact, keeping its body, its tag (and its title unless new_title is given)."""
         mem = memory(agent)
         fact = mem.read_fact(checked(name))
         if fact is None:
@@ -228,7 +242,7 @@ def build_mcp(system: System, token: str) -> MCPServer:
         checked(new_name)
         if mem.read_fact(new_name) is not None:
             raise ToolError(f"{agent} already has a fact {new_name!r}")
-        mem.write_fact(new_name, new_title or fact.title, fact.body)
+        mem.write_fact(new_name, new_title or fact.title, fact.body, carried=fact.provenance)
         mem.delete_fact(name)
         return f"renamed {agent}/{name} -> {new_name}"
 
