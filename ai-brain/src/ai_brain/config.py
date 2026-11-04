@@ -89,8 +89,8 @@ DEFAULT_MAX_PROMPT_TOKENS = 400_000
 # CYCLE_MAX_ROUNDS_BY_MODEL but matched against the LLM_CHAIN entry itself
 # (``lan:qwen3.8:27b-mlx``) when the chain is built -- the window is fixed per
 # provider, not per round. No match falls back to the provider kind's own
-# default: ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
-# ai_brain.llm.ollama.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
+# default: ai_brain.profiles.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
+# ai_brain.profiles.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
 # consulted: its window is the API's, not ours to set. Only qwen3.8 on the
 # LAN Mac gets 128k; the rest are spelled out at their kind's default.
 DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384"

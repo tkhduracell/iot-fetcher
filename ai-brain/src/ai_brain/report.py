@@ -19,9 +19,10 @@ that answered its last round, since that is who it was up to by then.
 never says. An angle's offered count is exact. Its taken count is a proxy, the
 tool that angle is hard to follow without (``ANGLE_SIGNALS``), and reads "-" for
 the angles no tool gives away. Both are counted against the angle text as logged,
-so they can only overstate: a cycle that calls ``review_expert`` for another
-reason still counts. A cycle that never got a reply had no chance to follow
-anything, so it counts as neither.
+so the proxy can err both ways: a cycle that calls ``review_expert`` for another
+reason still counts, and one that followed "Judge method", found the reasoning
+sound and so reviewed nothing does not. A cycle that never got a reply had no
+chance to follow anything, so it counts as neither.
 """
 
 from __future__ import annotations
@@ -182,7 +183,9 @@ def build_report(cycles: list[CycleSummary]) -> dict:
                 "mean": round(statistics.fmean(rounds), 1) if rounds else 0,
                 "max": max(rounds, default=0),
             },
-            "at_cap": sum(1 for c in ended_here if c.cap and c.rounds >= c.cap),
+            # Cut off, so not one that called end_cycle on its last round: that
+            # is the nudge working.
+            "at_cap": sum(1 for c in ended_here if c.cap and c.rounds >= c.cap and not c.ended),
             "nudge_fired": len(nudged),
             "end_cycle_after_nudge": sum(1 for c in nudged if c.ended_after_nudge),
             "junk_fact_refusals": junk[model],

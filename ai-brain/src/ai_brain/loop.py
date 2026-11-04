@@ -714,9 +714,7 @@ class AgentLoop:
         self.constitution = constitution
         self.clock = clock
         self.pause_file = Path(pause_file)
-        self.max_rounds = max_rounds
         self.max_tokens = max_tokens
-        self.max_prompt_tokens = max_prompt_tokens
         # Only the two per-round settings, so its num_ctx and think answers are
         # not the real ones: the chain was built from the same environment and
         # holds the window and thinking level it asks for.
@@ -872,7 +870,7 @@ class AgentLoop:
         next_wake_s = self.heartbeat_s
         # Starts at the plain default and only ever moves once a reply has
         # actually come back. See caps.py.
-        caps = CapState(min(self.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING))
+        caps = CapState(min(self.profiles.max_rounds, CYCLE_MAX_ROUNDS_HARD_CEILING))
         trace.cap = caps.effective_cap
         # Fires once per cycle, WRAP_UP_ROUNDS_BEFORE_CAP short of whatever
         # effective_cap turns out to be at the time.
@@ -1593,7 +1591,7 @@ class AgentLoop:
         falls back to the bare ``model`` string for a caller that has none
         (a Message a test built by hand, or a provider that predates the
         ``key`` field). First pattern to match wins. No match at all is
-        ``self.max_rounds``, never the hard ceiling -- the ceiling only
+        the flat CYCLE_MAX_ROUNDS, never the hard ceiling -- the ceiling only
         clamps a match that is itself too generous.
         """
         return self.profiles.for_key(key or model).max_rounds
@@ -1603,7 +1601,7 @@ class AgentLoop:
 
         The budget is that of the model that answered the latest round
         (CYCLE_MAX_PROMPT_TOKENS_BY_MODEL, first match), else the flat
-        ``self.max_prompt_tokens``. 0 is the documented off switch -- same
+        CYCLE_MAX_PROMPT_TOKENS. 0 is the documented off switch -- same
         spelling as ``HTTP_PORT``'s.
         """
         budget = self.profiles.for_key(key).max_prompt_tokens

@@ -688,12 +688,13 @@ make report                       # ../volumes/ai-brain-memory; DAYS=7 for a win
 sudo docker exec ai-brain /app/.venv/bin/python -m ai_brain.report --days 7 [--json]
 ```
 
-Per model: cycles, rounds answered, rounds per cycle, how many cycles ended at their
-cap, how often the wrap-up nudge fired and `end_cycle` followed, junk-fact refusals,
-context trims and resumes. Then each angle: how often it was offered and, where a tool
-gives it away, a proxy for how often it was taken. A model never says which angle it
-followed, so that second number can only overstate. The report only reads, and it
-changes nothing. No guard is removed on this data yet: it is here so that one can be,
+Per model: cycles, rounds answered, rounds per cycle, how many cycles were cut off at
+their cap without `end_cycle`, how often the wrap-up nudge fired and `end_cycle`
+followed, junk-fact refusals, context trims and resumes. Then each angle: how often it
+was offered and, where a tool gives it away, a proxy for how often it was taken. A model
+never says which angle it followed, so that second number can err both ways: a tool
+called for another reason counts, and an angle followed without needing its tool does
+not. The report only reads, and it changes nothing. No guard is removed on this data yet: it is here so that one can be,
 with evidence, later.
 
 ## HTTP API

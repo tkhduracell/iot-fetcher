@@ -983,7 +983,8 @@ def cycle_logs(directory: Path, since: datetime | None = None) -> list[Path]:
     """One file per cycle, oldest first, for anything reading what cycles did.
 
     Not a compress's leftover temp file, and not a cycle twice: a power cut during
-    ``compress`` leaves both copies, and the later name, the .gz, is the one kept.
+    ``compress`` leaves both copies, and the later name is the one kept: the .gz
+    over a plain log, a .holes over the .gz. Either way the same events.
     """
     logs: dict[str, Path] = {}
     for path in session_files(directory):
