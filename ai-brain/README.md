@@ -402,6 +402,12 @@ The rounds actually used and the cap in force are both in the journal line
 (`rounds=12/32`) and the trace/API (`cap`), so `journal.md` and Grafana both
 show whether a cycle is running out of room or ending early.
 
+Every per-model setting on this page comes back through one lookup,
+`ModelProfiles.for_key` in `profiles.py`. `NUM_CTX_BY_MODEL`, `THINK_BY_MODEL`,
+`CYCLE_MAX_ROUNDS_BY_MODEL`, `CYCLE_MAX_PROMPT_TOKENS_BY_MODEL` and the measured
+daily limit in `KEY_RPD_OVERRIDES` are read from there; the variables themselves
+are unchanged. The round-cap rules are a pure function in `caps.py`.
+
 `CYCLE_MAX_PROMPT_TOKENS` (default `400000`, `0` disables it) is the same idea
 applied to token spend instead of round count: a cycle that keeps pulling in
 large tool results round after round without ever calling `end_cycle` can burn
@@ -674,6 +680,22 @@ outage never stops the brain thinking):
 | `ai_brain_loop_tokens_total` | `loop`, `kind` | Tokens each loop has spent since start (`prompt`, `completion`). Resets on restart; use `increase()`. The ledger counts per key; this is what says which loop is expensive. |
 | `ai_brain_ledger_remaining` | `model`, `kind` | Fraction of today's requests/tokens left, 0–1. |
 | `ai_brain_loop_last_cycle_seconds` | `loop` | Age of the last completed cycle. Absent until a loop has finished one — a zero would read as "just ran", which is the opposite of the truth. |
+
+Whether the cycle guards earn their keep is a question for the session logs:
+
+```sh
+make report                       # ../volumes/ai-brain-memory; DAYS=7 for a window
+sudo docker exec ai-brain /app/.venv/bin/python -m ai_brain.report --days 7 [--json]
+```
+
+Per model: cycles, rounds answered, rounds per cycle, how many cycles were cut off at
+their cap without `end_cycle`, how often the wrap-up nudge fired and `end_cycle`
+followed, junk-fact refusals, context trims and resumes. Then each angle: how often it
+was offered and, where a tool gives it away, a proxy for how often it was taken. A model
+never says which angle it followed, so that second number can err both ways: a tool
+called for another reason counts, and an angle followed without needing its tool does
+not. The report only reads, and it changes nothing. No guard is removed on this data yet: it is here so that one can be,
+with evidence, later.
 
 ## HTTP API
 

@@ -28,6 +28,8 @@ from ai_brain.discovery import OllamaFinder
 from ai_brain.llm import Message, Provider, ProviderError, Reply, ToolSpec
 from ai_brain.llm.ollama import OllamaProvider
 
+from ai_brain.profiles import LAN_DEFAULT_NUM_CTX
+
 log = logging.getLogger(__name__)
 
 LAN_ATTEMPTS = 3
@@ -38,13 +40,6 @@ LAN_ATTEMPTS = 3
 # host is not answering the port at all, no amount of patience helps.
 LAN_CONNECT_TIMEOUT_S = 3.0
 LAN_REQUEST_TIMEOUT_S = 900.0
-
-# The lan: host is a desktop machine discovered on the network, not the rpi5
-# running the rest of this stack -- its own hardware, not the constrained
-# in-compose ollama service, so its own num_ctx default is larger than
-# ai_brain.llm.ollama.DEFAULT_NUM_CTX. The fallback for a lan: entry that
-# NUM_CTX_BY_MODEL does not match -- see ai_brain.config.
-LAN_DEFAULT_NUM_CTX = 32768
 
 
 class LanOllamaProvider(Provider):

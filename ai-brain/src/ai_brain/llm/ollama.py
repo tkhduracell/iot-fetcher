@@ -33,6 +33,8 @@ from ai_brain.llm import (
     Usage,
 )
 
+from ai_brain.profiles import DEFAULT_NUM_CTX
+
 log = logging.getLogger(__name__)
 
 # Error bodies can be long; enough to identify the failure is enough to log.
@@ -45,23 +47,6 @@ _LOG_BODY_CHARS = 500
 # this is the rpi5 itself running a 3B model, not a desktop GPU running
 # something bigger.
 CALL_TIMEOUT_S = 600.0
-
-# The native /api/chat endpoint honours options.num_ctx per request; the
-# OpenAI-compatible /v1/chat/completions endpoint does not, which is why this
-# module talks to /api/chat rather than that one. Ollama's own server default
-# is 4096 unless overridden (here, or via OLLAMA_CONTEXT_LENGTH on the
-# server), which is far smaller than a cycle's persona+memory+tool-result
-# prompt -- the server silently truncates from the *front* of the prompt to
-# fit, dropping exactly the persona/system context a truncated prompt most
-# needs. Observed prompts from a real cycle run ~9.7k tokens, so 16384 is the
-# default rather than a smaller number: it clears that with headroom on a
-# Raspberry Pi 5 (8GB), at the cost of more RAM per loaded model. This is the
-# base default for OllamaProvider itself; the lan: provider (a desktop
-# machine on the LAN, not the rpi5) is configured with its own, larger
-# default -- see ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX. Either is overridden
-# per model by NUM_CTX_BY_MODEL in ai_brain.config. See ai-brain/README.md's Configuration
-# section for the tradeoff.
-DEFAULT_NUM_CTX = 16384
 
 # Qwen3.8's model card sampling for thinking mode. Used whenever a request
 # asks the model to think; a non-thinking request keeps the plain 0.7.

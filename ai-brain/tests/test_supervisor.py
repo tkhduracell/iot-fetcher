@@ -154,7 +154,7 @@ def test_build_passes_the_effort_knobs_to_every_loop(tmp_path):
     )
     system = build(settings, chain_factory=fake_chain)
     assert [
-        (loop.max_rounds, loop.max_tokens, loop.max_prompt_tokens)
+        (loop.profiles.max_rounds, loop.max_tokens, loop.profiles.max_prompt_tokens)
         for loop in system.loops.values()
     ] == [
         (21, 1234, 55555),

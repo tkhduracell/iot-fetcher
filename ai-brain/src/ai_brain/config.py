@@ -81,13 +81,16 @@ DEFAULT_CYCLE_MAX_ROUNDS_BY_MODEL = "gemini:*3.8*=32,lan:qwen3.8*=32,anthropic:*
 # cross.
 CYCLE_MAX_ROUNDS_HARD_CEILING = 64
 
+DEFAULT_MAX_ROUNDS = 16
+DEFAULT_MAX_PROMPT_TOKENS = 400_000
+
 
 # Per-model Ollama context window, same ``pattern=N`` shape as
 # CYCLE_MAX_ROUNDS_BY_MODEL but matched against the LLM_CHAIN entry itself
 # (``lan:qwen3.8:27b-mlx``) when the chain is built -- the window is fixed per
 # provider, not per round. No match falls back to the provider kind's own
-# default: ai_brain.llm.lan.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
-# ai_brain.llm.ollama.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
+# default: ai_brain.profiles.LAN_DEFAULT_NUM_CTX for lan:, and the rpi5-sized
+# ai_brain.profiles.DEFAULT_NUM_CTX for ollama:. Gemini entries are never
 # consulted: its window is the API's, not ours to set. Only qwen3.8 on the
 # LAN Mac gets 128k; the rest are spelled out at their kind's default.
 DEFAULT_NUM_CTX_BY_MODEL = "lan:qwen3.8*=131072,lan:qwen3*=32768,ollama:*=16384"
@@ -452,7 +455,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         dry_run=get("DRY_RUN") == "1",
         lan_subnets=_csv(get("LAN_SUBNETS")),
         lan_scan_s=get_int("LAN_SCAN_MIN", 10) * 60,
-        max_rounds=get_int("CYCLE_MAX_ROUNDS", 16),
+        max_rounds=get_int("CYCLE_MAX_ROUNDS", DEFAULT_MAX_ROUNDS),
         max_rounds_by_model=_max_rounds_by_model(env),
         max_tokens=get_int("CYCLE_MAX_TOKENS", 8000),
         # 0 disables the budget outright. 400000 is generous headroom below
@@ -460,7 +463,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         # cycle never gets near it, there specifically for the pathological
         # one that keeps pulling in large tool results round after round
         # without ever calling end_cycle.
-        max_prompt_tokens=get_int("CYCLE_MAX_PROMPT_TOKENS", 400_000),
+        max_prompt_tokens=get_int("CYCLE_MAX_PROMPT_TOKENS", DEFAULT_MAX_PROMPT_TOKENS),
         max_prompt_tokens_by_model=_max_prompt_tokens_by_model(env),
         thinking_budget=get_int("GEMINI_THINKING_BUDGET", -1),
         rpm=get_int("RPM", 8),

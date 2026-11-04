@@ -35,8 +35,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
-from ai_brain.config import match_by_model, think_value
+from ai_brain.config import think_value
 from ai_brain.ledger import Ledger, Limits, Priority, WINDOW_REASONS
+from ai_brain.profiles import ModelProfiles
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from ai_brain.config import Settings
@@ -293,19 +294,6 @@ class Provider(ABC):
 # exhaust, and the free-tier arithmetic stays about the free tier.
 UNMETERED = Limits(rpm=10_000, tpm=100_000_000, rpd=1_000_000)
 
-# gemini-3.8-flash's free-tier RPD is nowhere near the RPM/TPM/RPD every other
-# metered key gets from settings -- Google's own docs no longer publish the
-# number, so this is measured, not guessed: on 2026-09-22 it answered 12
-# calls, then every call for the rest of the day was a 429. One below that
-# observed ceiling, so the ledger's own rpd check blocks the key before a
-# cycle ever has to spend a real request discovering it is gone (see
-# EXHAUSTED_AFTER_429 in ledger.py -- without this, three separate loops each
-# burn one real 429 finding this out the hard way, every single day). A key
-# not listed here keeps the env-configured tier, unchanged.
-KEY_RPD_OVERRIDES: dict[str, int] = {
-    "gemini:gemini-3.8-flash": 11,
-}
-
 
 def _loops_for(key: str, settings: Settings) -> frozenset[str] | None:
     """Who may spend on ``key``: brain, experts, both (None) -- or nobody,
@@ -324,12 +312,14 @@ ANTHROPIC_POOL = "anthropic"
 
 def limits_from_settings(settings: Settings) -> dict[str, Limits]:
     """One budget per chain key: the env-configured tier, except for local
-    hosts (unmetered), any key in KEY_RPD_OVERRIDES (a lower, measured rpd)
-    and anthropic: keys (paced in dollars by the shared pool, with request
+    hosts (unmetered), a key whose profile has a measured rpd, and anthropic:
+    keys (paced in dollars by the shared pool, with request
     and token counts left effectively unlimited), each restricted to the
     loops BRAIN_MODELS / EXPERT_MODELS allow."""
     out: dict[str, Limits] = {}
+    profiles = ModelProfiles.from_settings(settings)
     for key in settings.llm_chain:
+        measured_rpd = profiles.for_key(key).rpd
         if key.startswith("lan:"):
             base = UNMETERED
         elif key.startswith("anthropic:"):
@@ -339,8 +329,8 @@ def limits_from_settings(settings: Settings) -> dict[str, Limits]:
                 rpd=UNMETERED.rpd,
                 usd_pool=ANTHROPIC_POOL,
             )
-        elif key in KEY_RPD_OVERRIDES:
-            base = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=KEY_RPD_OVERRIDES[key])
+        elif measured_rpd is not None:
+            base = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=measured_rpd)
         else:
             base = Limits(rpm=settings.rpm, tpm=settings.tpm, rpd=settings.rpd)
         out[key] = replace(base, loops=_loops_for(key, settings))
@@ -376,8 +366,10 @@ class ProviderChain:
     ) -> ProviderChain:
         providers: list[Provider] = []
         lan_finders: list[OllamaFinder] = []
+        profiles = ModelProfiles.from_settings(settings)
         for entry in settings.llm_chain:
             name, _, model = entry.partition(":")
+            profile = profiles.for_key(entry)
             if name == "lan":
                 # A model on some machine in the house. Which machine is not
                 # known until a scan finds one, so the provider carries a
@@ -385,15 +377,17 @@ class ProviderChain:
                 # finder even when several share a model name, since two
                 # entries might resolve to different machines.
                 from ai_brain.discovery import OllamaFinder, subnets_for
-                from ai_brain.llm.lan import LAN_DEFAULT_NUM_CTX, LanOllamaProvider
+                from ai_brain.llm.lan import LanOllamaProvider
 
                 lan_finder = OllamaFinder(
                     model, subnets_for(settings.lan_subnets, settings.ha_url)
                 )
                 lan_finders.append(lan_finder)
-                num_ctx = match_by_model(settings.num_ctx_by_model, entry, LAN_DEFAULT_NUM_CTX)
-                think = think_value(match_by_model(settings.think_by_model, entry, None))
-                providers.append(LanOllamaProvider(lan_finder, num_ctx=num_ctx, think=think))
+                providers.append(
+                    LanOllamaProvider(
+                        lan_finder, num_ctx=profile.num_ctx, think=think_value(profile.think)
+                    )
+                )
             elif name == "gemini":
                 # Imported lazily: the chain is usable (and testable) without
                 # the concrete provider module or its API client.
@@ -410,18 +404,22 @@ class ProviderChain:
                 # Imported lazily to match the gemini branch above.
                 from ai_brain.llm.claude import AnthropicProvider, effort_for
 
-                effort = effort_for(match_by_model(settings.think_by_model, entry, None))
                 providers.append(
-                    AnthropicProvider(model, settings.anthropic_api_key, effort=effort)
+                    AnthropicProvider(
+                        model, settings.anthropic_api_key, effort=effort_for(profile.think)
+                    )
                 )
             elif name == "ollama":
                 # Imported lazily to match the gemini branch above.
-                from ai_brain.llm.ollama import DEFAULT_NUM_CTX, OllamaProvider
+                from ai_brain.llm.ollama import OllamaProvider
 
-                num_ctx = match_by_model(settings.num_ctx_by_model, entry, DEFAULT_NUM_CTX)
-                think = think_value(match_by_model(settings.think_by_model, entry, None))
                 providers.append(
-                    OllamaProvider(model, settings.ollama_url, num_ctx=num_ctx, think=think)
+                    OllamaProvider(
+                        model,
+                        settings.ollama_url,
+                        num_ctx=profile.num_ctx,
+                        think=think_value(profile.think),
+                    )
                 )
             elif name == "fake":
                 from ai_brain.llm.fake import FakeProvider
