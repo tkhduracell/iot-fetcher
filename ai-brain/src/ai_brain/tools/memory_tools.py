@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 
+from ai_brain import identity
 from ai_brain.llm import ToolSpec
 from ai_brain.provenance import carry_tag
 from ai_brain.sessions import (
@@ -31,6 +32,7 @@ from ai_brain.tools import (
     wrap_external,
     wrap_internal,
 )
+from ai_brain.tools.propose import identity_junk_reason, rejection_guard
 
 BRAIN_ONLY = frozenset({"brain"})
 
@@ -285,8 +287,45 @@ async def _rewrite_goals(ctx: ToolContext, args: dict) -> str:
 
 
 async def _rewrite_identity(ctx: ToolContext, args: dict) -> str:
-    ctx.memory.rewrite_identity(str(args["body"]))
-    return ok({"rewritten": "identity"})
+    """Files a proposal. Writes nothing: not here, not on any path through here.
+
+    Filip's approval is what writes (``Executors.rewrite_identity``), so this
+    never touches ``ctx.memory``. A resumed cycle cannot replay it into a write
+    for the same reason, and because it is not in ``READ_ONLY_TOOLS`` a call
+    whose result was lost is reported as "outcome unknown", not run again.
+    """
+    approvals = ctx.extras.get("approvals")
+    if approvals is None:
+        return err("approvals are not configured in this process; your identity is unchanged")
+    reason = identity.clean_reason(str(args["reason"]))
+    if not reason:
+        return err("refused: say why, in one line -- Filip reads it on the card")
+    # The text as it will be stored, so the checks, the rejection memory and the
+    # proposal all see the same words.
+    payload = {"body": identity.clean_body(str(args["body"]))}
+    problem = identity.problem(payload["body"]) or identity_junk_reason(payload["body"])
+    if problem is not None:
+        return err(f"refused: {problem}")
+    blocked = rejection_guard(ctx, identity.KIND, payload)
+    if blocked is not None:
+        return err(blocked)
+    try:
+        proposal = await approvals.propose(identity.KIND, payload, reason, identity.TOPIC)
+    except ValueError as exc:
+        return err(str(exc))
+    except RuntimeError as exc:
+        return err(f"{exc}; nothing was proposed and your identity is unchanged, try again later")
+    return ok(
+        {
+            "status": "pending approval",
+            "id": proposal.id,
+            "identity_changed": False,
+            "note": (
+                "Filed for Filip. Your identity has not changed and will not unless he approves; "
+                "the outcome arrives as a note in your inbox. Do not describe it as done."
+            ),
+        }
+    )
 
 
 def register_memory_tools(registry: ToolRegistry) -> None:
@@ -504,10 +543,29 @@ def register_memory_tools(registry: ToolRegistry) -> None:
             ToolSpec(
                 name="rewrite_identity",
                 description=(
-                    "Replace the whole identity document with new text. Brain only. Use it "
-                    "sparingly, when how you work has genuinely changed."
+                    "Ask Filip to replace your whole identity document with new text. Brain "
+                    "only. This writes nothing: it files a proposal and posts a diff against "
+                    "your current identity to Slack, and returns 'pending approval'. Your "
+                    "identity changes only if he approves; if he rejects it or does not answer "
+                    "in 24 hours it stays as it is, and either way the outcome arrives as an "
+                    "inbox note. Never report it as changed before then. Use it sparingly, "
+                    "when how you work has genuinely changed. Pass the complete document you "
+                    f"want (no '---' frontmatter; {identity.MIN_CHARS}-{identity.MAX_CHARS} "
+                    "characters, no invisible characters), and in 'reason' one line on why -- "
+                    "he reads both. One request waits at a time. Text he already rejected is "
+                    "refused; different text may be asked. If a call comes back 'outcome "
+                    "unknown', check list_proposals before asking again."
                 ),
-                parameters=_schema({"body": {"type": "string"}}, ["body"]),
+                parameters=_schema(
+                    {
+                        "body": {"type": "string"},
+                        "reason": {
+                            "type": "string",
+                            "description": "Why, in one line, for Filip.",
+                        },
+                    },
+                    ["body", "reason"],
+                ),
             ),
             _rewrite_identity,
             BRAIN_ONLY,

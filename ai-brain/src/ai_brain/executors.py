@@ -17,6 +17,11 @@ argue its way past:
   name", plainly visible in the Slack message a human approves, unlike
   ``ha_service``'s combination of service + entity + arbitrary data.
 
+* **The brain's own identity.** ``rewrite_identity`` is the one executor that
+  changes the brain rather than the house. It writes only if ``identity.md`` is
+  still the file the proposal was based on, so an approval can never overwrite a
+  newer text Filip put there in the meantime.
+
 Executors are deliberately dumb: no retries, no queueing, no state. A failure
 raises, and ``Approvals`` is what decides that a raised exception means a
 proposal is ``failed`` rather than a cycle is over.
@@ -32,8 +37,10 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from ai_brain import identity
 from ai_brain.config import Settings
 from ai_brain.docker_api import container_url
+from ai_brain.memory import MemoryDir
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +94,14 @@ class QuietHours(Exception):
     """Raised instead of making noise between 22:00 and 07:00 local time."""
 
 
+class StaleBase(Exception):
+    """Raised when the file an approval was reasoned about is no longer the file.
+
+    Its message is what the proposal's ``failed`` result says, and so what the
+    brain reads in its inbox: it names what happened and what to do next.
+    """
+
+
 def in_quiet_hours(now: datetime, tz: str = DEFAULT_TZ) -> bool:
     local = now.astimezone(ZoneInfo(tz))
     return local.hour >= QUIET_FROM_HOUR or local.hour < QUIET_TO_HOUR
@@ -98,10 +113,13 @@ class Executors:
         settings: Settings,
         http: httpx.AsyncClient,
         clock: Callable[[], datetime],
+        brain: MemoryDir | None = None,
     ) -> None:
         self.settings = settings
         self.http = http
         self.clock = clock
+        # Only ``rewrite_identity`` touches it; without one that kind fails.
+        self.brain = brain
 
     async def sonos_say(self, text: str) -> str:
         if in_quiet_hours(self.clock()):
@@ -163,6 +181,31 @@ class Executors:
         _raise_for_status(response, "docker_restart")
         return f"restarted {container}"
 
+    async def rewrite_identity(self, body: str, base_hash: str) -> str:
+        if self.brain is None:
+            raise RuntimeError("rewrite_identity: no brain memory to write to")
+        # Before the dry-run shortcut, like the other refusals: a rehearsal must
+        # report what a live run would. The rules are the ones ``propose`` held
+        # the text to, applied again to what is about to be written.
+        problem = identity.problem(body)
+        if problem is not None:
+            raise ValueError(problem)
+        current = self.brain.persona_digest()
+        if current != base_hash:
+            raise StaleBase(
+                f"identity.md changed after this was proposed (it was {identity.short(base_hash)}, "
+                f"it is {identity.short(current)}), so nothing was written -- the newer text is "
+                "untouched. Read your identity again and propose against it if the change is "
+                "still wanted."
+            )
+        if self.settings.dry_run:
+            log.info("[dry-run] rewrite_identity %d chars", len(body))
+            return "dry-run"
+        # No await between the check and the write, so nothing in this process can
+        # land in between; the revision the brain keeps makes the old text recoverable.
+        self.brain.rewrite_identity(body)
+        return f"identity rewritten ({len(body.strip())} chars); the old text is in its history"
+
     async def run(self, kind: str, payload: dict) -> str:
         if kind == "sonos_say":
             return await self.sonos_say(_require(payload, "text", kind))
@@ -179,6 +222,10 @@ class Executors:
             )
         if kind == "docker_restart":
             return await self.docker_restart(_require(payload, "container", kind))
+        if kind == identity.KIND:
+            return await self.rewrite_identity(
+                _require(payload, "body", kind), _require(payload, "base_hash", kind)
+            )
         if kind == "idea":
             # Nothing to execute: the approval itself is the outcome, and it
             # comes back to the brain as an inbox note like any other.

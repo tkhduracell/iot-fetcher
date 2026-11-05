@@ -17,6 +17,7 @@ half-written file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -133,6 +134,16 @@ def safe_name(name: str) -> str:
     if not isinstance(name, str) or not SAFE_NAME.match(name):
         raise BadInput(f"unsafe memory name: {name!r}")
     return name
+
+
+def text_digest(text: str) -> str:
+    """A short, comparable name for a piece of text: ``sha256:<hex>``.
+
+    What an identity proposal records about the file it was based on, and about
+    the text it proposes. Compared, never parsed, so the prefix is just there to
+    say what kind of hash it is when it turns up in a log or on a card.
+    """
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _atomic_write(path: Path, body: str) -> None:
@@ -335,11 +346,35 @@ class MemoryDir:
             return ""
         return self._read(self.goals_path)
 
+    def persona_digest(self) -> str:
+        """``text_digest`` of the whole persona file, frontmatter included.
+
+        The whole file rather than the body, so a change to either is a change:
+        this is what an approval compares to know the file is still the one it
+        was reasoned about.
+        """
+        return text_digest(self._read(self.persona_path))
+
     def rewrite_identity(self, body: str) -> None:
+        """Replace the brain's identity. Reached only through an approved
+        ``rewrite_identity`` proposal (see ``executors``): the tool of that name
+        files one and writes nothing.
+
+        ``body`` is what the brain reads and writes -- ``persona_text`` leaves
+        the frontmatter out of its prompt -- so the file's own frontmatter (the
+        emoji) is carried over in front of it. Without that, an approved rewrite
+        would drop the emoji until the next boot's ``seed_from`` put it back.
+        A body that brings frontmatter of its own is written as it is.
+        """
         self._require_brain("rewrite_identity")
+        text = body
+        if not _FRONTMATTER.match(body):
+            front = _FRONTMATTER.match(self._read(self.persona_path))
+            if front:
+                text = front.group(0) + body
         self._record_mutation("rewrite_identity", "identity", self.persona_path)
-        self._keep_revision("identity", self.persona_path, body)
-        _atomic_write(self.persona_path, body)
+        self._keep_revision("identity", self.persona_path, text)
+        _atomic_write(self.persona_path, text)
 
     def rewrite_goals(self, body: str) -> None:
         self._require_brain("rewrite_goals")
@@ -927,15 +962,16 @@ class MemoryDir:
 
         Only text that cannot carry instructions belongs here: the constitution
         and the persona, which a person writes (the brain's identity is the one
-        exception -- it rewrites it, see below), and fact *names*, which
+        exception -- it proposes rewrites that Filip approves, see below), and fact *names*, which
         ``safe_name`` limits to ``[a-z0-9_.-]``. Free text an agent wrote --
         goals, gaps, the journal, the inbox -- may have been copied from a web
         page by way of the researcher, so none of it is in either half; see
         ``external_parts``.
 
         The brain's identity stays: it is the one place the system prompt says
-        who the brain is, and it is the brain's to rewrite. That is a decision
-        for Filip rather than a bug to fix quietly here.
+        who the brain is, and it is the brain's to rewrite -- but only with
+        Filip's approval, since this is the one self-written text that loads
+        into every later cycle's system message (see ``identity``).
         """
         stable = [f"# Constitution\n{constitution}"]
         stable.append(f"# {'Identity' if self.is_brain else 'Persona'}\n{self.persona_text()}")

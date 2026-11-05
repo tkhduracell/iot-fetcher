@@ -17,6 +17,11 @@ overwrite or delete of a fact, by an outside edit or by the agent's own cycle,
 keeps the previous body as a revision, as does every outside edit of a persona,
 goals or the constitution (see ``history``). ``restore_fact`` puts a fact back,
 so neither a refactor nor an agent's own tidying is final.
+
+``write_persona`` is a person's edit and stays direct, the brain's identity
+included. It is the brain's own ``rewrite_identity`` that is not: that files a
+proposal Filip approves in Slack, and an approval that finds the file changed
+since (by this tool, say) is not applied.
 """
 
 from __future__ import annotations
@@ -249,7 +254,8 @@ def build_mcp(system: System, token: str) -> MCPServer:
     @mcp.tool()
     def write_persona(agent: str, body: str) -> str:
         """Replace an agent's persona (the brain's identity) -- its "soul".
-        Keep any leading ---/key: value/--- block (emoji etc.)."""
+        Keep any leading ---/key: value/--- block (emoji etc.). Takes effect
+        directly: only the brain's own rewrite_identity needs approval."""
         memory(agent).rewrite_persona(body)
         return f"rewrote {agent} persona"
 

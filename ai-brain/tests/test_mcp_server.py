@@ -144,6 +144,28 @@ async def test_write_persona_works_for_experts_and_keeps_history(system):
     assert system.memories["energy"].identity_history()[0].body == before
 
 
+async def test_write_persona_on_the_brain_stays_direct_and_outranks_a_pending_proposal(system):
+    """Filip's own edit needs no approval, and a proposal filed before it is not
+    applied over it afterwards."""
+    brain = system.memories["brain"]
+    approvals = system.approvals
+
+    async def _post(topic, text, blocks=None):
+        return "ts-1"
+
+    approvals.on_message = _post
+    proposed = "I am the brain, and I would like to ask fewer questions of everyone. " * 4
+    await approvals.propose("rewrite_identity", {"body": proposed}, "r", "identity")
+    mcp = build_mcp(system, "t")
+
+    await call(mcp, "write_persona", agent="brain", body="---\nemoji: 🧠\n---\nFilip's own words")
+    assert brain.persona_text() == "Filip's own words"
+
+    done = await approvals.on_reaction("ts-1", "white_check_mark")
+    assert done.status == "failed"
+    assert brain.persona_text() == "Filip's own words"
+
+
 async def test_write_constitution_reaches_running_loops(system):
     mcp = build_mcp(system, "t")
     await call(mcp, "write_constitution", body="be kind")

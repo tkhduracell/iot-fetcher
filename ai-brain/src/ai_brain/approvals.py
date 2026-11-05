@@ -22,6 +22,13 @@ Two properties are worth stating because the tests pin them:
 * **Nothing silent.** Every terminal outcome -- executed, failed, rejected,
   blocked, expired -- drops a note into the brain's inbox, so the agent reads
   what became of its request on its next cycle instead of assuming.
+* **Identity is Filip's to change.** ``rewrite_identity`` is a kind like the
+  others: the brain files it, the card shows a diff against the current
+  identity, ✅ writes it through ``MemoryDir.rewrite_identity`` and ❌ or expiry
+  leave the file alone. It records a hash of the identity it was based on, and
+  an approval that finds the file changed since ends ``failed`` rather than
+  overwriting the newer text. See ``ai_brain.identity`` for why, and for what the
+  card shows.
 * **A stored pending proposal always has a reactable message.** ``SlackOut.post``
   returns ``"queued"`` when Slack was unreachable and the text went to the retry
   outbox instead. Storing that as the proposal's ``slack_ts`` would be the worst
@@ -44,6 +51,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from ai_brain import identity
 from ai_brain.docker_api import validate_container_name
 from ai_brain.executors import Executors, QuietHours
 from ai_brain.fence import fence
@@ -67,6 +75,11 @@ KINDS: dict[str, tuple[str, ...]] = {
     # that Filip wants it built; rejecting it puts it in rejection memory, so
     # the same idea is not pitched again for REJECTION_MEMORY_DAYS.
     "idea": ("title", "why"),
+    # The brain proposing a new identity.md. The payload carries the whole
+    # proposed body, and ``propose`` adds the hash of the identity it is based
+    # on. Not offered by the ``propose`` tool: it has a tool of its own, whose
+    # guards the generic one does not have.
+    identity.KIND: ("body",),
 }
 
 # Which payload key names *what a proposal is about*, for a given kind -- the
@@ -125,6 +138,13 @@ QUEUED = "queued"
 UNREACHABLE = "slack unavailable, not proposed"
 NOT_CONFIGURED = "slack not configured, not proposed"
 RESTARTED = "process restarted mid-execution; outcome unknown"
+IDENTITY_WRITTEN_BEFORE_RESTART = (
+    "process restarted mid-execution, after identity.md was written; it holds the proposed text"
+)
+IDENTITY_NOT_WRITTEN_BEFORE_RESTART = (
+    "process restarted mid-execution, before identity.md was written; it still has the old "
+    "text. Propose again if you still want the change"
+)
 
 APPROVE_EMOJI = "white_check_mark"
 REJECT_EMOJI = "x"
@@ -196,6 +216,9 @@ class Approvals:
             # container would otherwise cost Filip a Slack approval, only to
             # fail after he said yes.
             validate_container_name(payload["container"])
+        if kind == identity.KIND:
+            payload = self._identity_payload(payload)
+            reason = identity.clean_reason(reason)
 
         now = self.clock()
         proposal = Proposal(
@@ -216,23 +239,12 @@ class Approvals:
             self._finish(proposal, "failed", NOT_CONFIGURED)
             raise RuntimeError("slack not configured")
 
-        summary = (
-            # First, because _fit_section cuts a long card from the end, and a long
-            # reason or payload must not be what takes the warning off it.
-            f"{_provenance_line(proposal)}"
-            f"{_proposal_line(proposal)}\n\n"
-            f"```{json.dumps(payload)}```\n"
-            "React ✅ to approve, ❌ to reject, or use the buttons below."
-        )
+        summary, blocks = self._card(proposal)
         try:
             # The same text goes in both places on purpose: as ``text`` it is
             # the notification and the fallback, and as a section block it is
             # what is actually rendered beside the buttons.
-            posted = await self.on_message(
-                topic,
-                summary,
-                _approval_blocks(proposal.id, summary),
-            )
+            posted = await self.on_message(topic, summary, blocks)
         except Exception as exc:
             # Anything the poster raises -- the hourly cap, a transport error,
             # a client that is not connected -- means nothing was posted. The
@@ -252,6 +264,58 @@ class Approvals:
         proposal.slack_ts = posted
         self._store(proposal)
         return proposal
+
+    def _identity_payload(self, payload: dict) -> dict:
+        """The payload an identity proposal is stored with, or ``ValueError``.
+
+        Here and not only in the tool, so that no way of reaching ``propose`` can
+        skip it. The body is cleaned (redacted, one line-ending form) before it is
+        hashed, shown or kept; the hash of the identity file it is based on is
+        taken now, not trusted from the caller, and checked again at the write.
+        """
+        body = payload["body"]
+        if not isinstance(body, str):
+            raise ValueError("rewrite_identity body must be text")
+        body = identity.clean_body(body)
+        problem = identity.problem(body)
+        if problem is not None:
+            raise ValueError(problem)
+        if body.strip() == self.brain.persona_text():
+            raise ValueError("that is the identity you already have; nothing to change")
+        waiting = next((p for p in self.pending() if p.kind == identity.KIND), None)
+        if waiting is not None:
+            # One card at a time: two identity rewrites pending are two answers to
+            # the same question, and whichever is approved second finds the file
+            # changed. This also stops a call that was repeated (a resumed cycle
+            # asking again) from putting a second card in front of Filip.
+            raise ValueError(
+                f"proposal {waiting.id} is already waiting for Filip's answer on your "
+                "identity; wait for the outcome before proposing another"
+            )
+        return {"body": body, "base_hash": self.brain.persona_digest()}
+
+    def _card(self, proposal: Proposal) -> tuple[str, list[dict]]:
+        """The message a proposal is posted as: fallback text, and its blocks."""
+        if proposal.kind == identity.KIND:
+            text, sections = identity.card(
+                proposal_id=proposal.id,
+                reason=proposal.reason,
+                provenance_line=_provenance_line(proposal),
+                current=self.brain.persona_text(),
+                proposed=proposal.payload["body"],
+                base_digest=proposal.payload["base_hash"],
+                stored_at=f"brain/outbox/{proposal.id}.json",
+            )
+            return text, _approval_blocks(proposal.id, sections)
+        summary = (
+            # First, because _fit_section cuts a long card from the end, and a long
+            # reason or payload must not be what takes the warning off it.
+            f"{_provenance_line(proposal)}"
+            f"{_proposal_line(proposal)}\n\n"
+            f"```{json.dumps(proposal.payload)}```\n"
+            "React ✅ to approve, ❌ to reject, or use the buttons below."
+        )
+        return summary, _approval_blocks(proposal.id, [summary])
 
     # -- reacting ------------------------------------------------------
 
@@ -329,6 +393,22 @@ class Approvals:
         """
         stale = [p for p in self.all() if p.status == EXECUTING]
         for proposal in stale:
+            if proposal.kind == identity.KIND:
+                # The one outcome that is not unknown: the write is a single
+                # atomic replace, and nothing is running now that could still
+                # make it, so the file either holds the proposed text or never
+                # will. Say which instead of leaving the brain to guess.
+                written = self.brain.persona_text() == str(proposal.payload.get("body", "")).strip()
+                log.warning(
+                    "[approvals] %s was executing at startup; identity %s",
+                    proposal.id,
+                    "was written" if written else "was not written",
+                )
+                if written:
+                    self._finish(proposal, "executed", IDENTITY_WRITTEN_BEFORE_RESTART)
+                else:
+                    self._finish(proposal, "failed", IDENTITY_NOT_WRITTEN_BEFORE_RESTART)
+                continue
             log.warning("[approvals] %s was executing at startup; marking failed", proposal.id)
             self._finish(proposal, "failed", RESTARTED)
         return stale
@@ -398,7 +478,19 @@ class Approvals:
 
 def _proposal_line(proposal: Proposal) -> str:
     """"Proposal <id> (<kind>): <reason>" -- shared by the initial post and
-    the resolved edit, so the two never drift apart."""
+    the resolved edit, so the two never drift apart.
+
+    An identity proposal's reason is quoted and cut, and the text it asks for is
+    named by hash: this line is what stays on Slack after the diff is gone, so it
+    is also the record of what was answered."""
+    if proposal.kind == identity.KIND:
+        body = str(proposal.payload.get("body", ""))
+        return (
+            f"Proposal {proposal.id} ({proposal.kind}): "
+            f"{identity.inline(proposal.reason, identity.REASON_CARD_CHARS)} "
+            f"[{identity.short(identity.digest(body))}, {len(body.strip())} chars, "
+            f"kept in brain/outbox/{proposal.id}.json]"
+        )
     return f"Proposal {proposal.id} ({proposal.kind}): {proposal.reason}"
 
 
@@ -439,8 +531,11 @@ def resolved_text(proposal: Proposal) -> str:
     return f"{_proposal_line(proposal)}\n\n{wording}"
 
 
-def _approval_blocks(proposal_id: str, summary: str) -> list[dict]:
+def _approval_blocks(proposal_id: str, sections: list[str]) -> list[dict]:
     """Block Kit blocks for a proposal's message: what it asks, then the buttons.
+
+    ``sections`` is one text for most proposals; an identity rewrite spreads its
+    diff over several, since a section holds at most ``SECTION_LIMIT`` characters.
 
     The section block is not decoration. Once a message carries ``blocks``,
     Slack renders those and nothing else -- the top-level ``text`` becomes the
@@ -459,7 +554,10 @@ def _approval_blocks(proposal_id: str, summary: str) -> list[dict]:
         # Slack rejects a section whose text exceeds 3000 characters, which
         # would fail the post outright and leave the proposal unaskable; a
         # payload that long is already unreadable, so it is cut instead.
-        {"type": "section", "text": {"type": "mrkdwn", "text": _fit_section(summary)}},
+        *(
+            {"type": "section", "text": {"type": "mrkdwn", "text": _fit_section(text)}}
+            for text in sections
+        ),
         {
             "type": "actions",
             "elements": [
@@ -542,6 +640,8 @@ def proposal_target(kind: str, payload: dict) -> str:
         if kept:
             target += " " + json.dumps(kept, sort_keys=True)
         return target
+    if kind == identity.KIND and isinstance(payload, dict) and isinstance(payload.get("body"), str):
+        return identity.target(payload["body"])
     key = TARGET_KEY.get(kind)
     if key is None:
         return json.dumps(payload, sort_keys=True)

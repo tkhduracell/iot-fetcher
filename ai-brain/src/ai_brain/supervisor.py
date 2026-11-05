@@ -209,7 +209,7 @@ def build(
     register_slack_tools(registry)
     register_propose_tool(registry)
 
-    executors = Executors(settings, http, dt_clock)
+    executors = Executors(settings, http, dt_clock, memories["brain"])
     # ``on_message`` stays None until Slack is up; ``start_slack`` sets it.
     approvals = Approvals(memories["brain"], executors, dt_clock)
     # A proposal left ``executing`` by a killed process is nobody's job but

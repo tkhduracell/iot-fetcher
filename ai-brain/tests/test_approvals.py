@@ -706,6 +706,7 @@ def test_kinds_matches_the_executor_surface():
         "ha_service": ("service", "entity_id"),
         "docker_restart": ("container",),
         "idea": ("title", "why"),
+        "rewrite_identity": ("body",),
     }
 
 
