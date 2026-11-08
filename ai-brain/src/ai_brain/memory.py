@@ -172,6 +172,14 @@ class Note:
     created: datetime
     # Outside text the sending cycle had read when it wrote this. See provenance.py.
     provenance: tuple[str, ...] = ()
+    # What the sender said it is about and how much it matters ("urgent",
+    # "finding" or "fyi"); empty for notes that predate send_note's fields and
+    # for Slack/approval notes. See settled.py and AgentLoop._wake_hold_s.
+    topic: str = ""
+    level: str = ""
+
+
+NOTE_LEVELS = ("urgent", "finding", "fyi")
 
 
 @dataclass(frozen=True)
@@ -873,7 +881,7 @@ class MemoryDir:
 
     # -- inbox ---------------------------------------------------------
 
-    def drop_note(self, sender: str, body: str) -> Path:
+    def drop_note(self, sender: str, body: str, *, topic: str = "", level: str = "") -> Path:
         safe_name(sender)
         now = self.clock()
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -886,7 +894,14 @@ class MemoryDir:
             counter += 1
         sources = read_so_far()
         provenance = f"provenance: {','.join(sources)}\n" if sources else ""
-        _atomic_write(path, f"from: {sender}\nat: {_iso(now)}\n{provenance}\n{body}")
+        # Header lines, out of the body's reach: a body cannot promote itself
+        # to urgent by writing "level: urgent" on its first line.
+        tags = ""
+        if topic:
+            tags += f"topic: {safe_name(topic)}\n"
+        if level in NOTE_LEVELS:
+            tags += f"level: {level}\n"
+        _atomic_write(path, f"from: {sender}\nat: {_iso(now)}\n{provenance}{tags}\n{body}")
         return path
 
     def unread_notes(self) -> list[Note]:
@@ -1064,6 +1079,8 @@ class MemoryDir:
         sender = ""
         created = self.clock()
         provenance: tuple[str, ...] = ()
+        topic = ""
+        level = ""
         for line in head.splitlines():
             if line.startswith("from: "):
                 sender = line[len("from: ") :].strip()
@@ -1074,9 +1091,23 @@ class MemoryDir:
                     pass
             elif line.startswith("provenance: "):
                 provenance = _valid_sources(line[len("provenance: ") :].strip().split(","))
+            elif line.startswith("topic: "):
+                value = line[len("topic: ") :].strip()
+                topic = value if SAFE_NAME.fullmatch(value) else ""
+            elif line.startswith("level: "):
+                value = line[len("level: ") :].strip()
+                level = value if value in NOTE_LEVELS else ""
         if not sender:
             return None
-        return Note(path=path, sender=sender, body=body, created=created, provenance=provenance)
+        return Note(
+            path=path,
+            sender=sender,
+            body=body,
+            created=created,
+            provenance=provenance,
+            topic=topic,
+            level=level,
+        )
 
 
 def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> str:
@@ -1109,7 +1140,10 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
     left = budget
     for note in reversed(notes):
         label = _label(note.sender)
-        head = f"from: {label} ({_iso(note.created)}){_provenance_tag(note.provenance)}"
+        head = (
+            f"from: {label} ({_iso(note.created)}){_note_tags(note)}"
+            f"{_provenance_tag(note.provenance)}"
+        )
         source = f"note-{label}"
         owner = note.sender == OWNER_SENDER
         full = f"## {head}\n{fence(source, note.body, block=True)}"
@@ -1133,6 +1167,12 @@ def render_inbox(notes: list[Note], budget: int = MAX_CONTEXT_INBOX_CHARS) -> st
 
 def _block_or_empty(source: str, text: str) -> str:
     return fence(source, text, block=True) if text.strip() else "(empty)"
+
+
+def _note_tags(note: Note) -> str:
+    """A note's topic and level as written by the harness, not by its body."""
+    parts = [p for p in (note.level, note.topic) if p]
+    return f" [{', '.join(parts)}]" if parts else ""
 
 
 def _provenance_tag(sources: tuple[str, ...]) -> str:

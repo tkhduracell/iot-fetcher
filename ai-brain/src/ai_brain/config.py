@@ -245,6 +245,7 @@ class Settings:
     # expert's or the ledger's note may start. Filip's and approvals' notes
     # skip it. 0 turns the gate off.
     brain_min_wake_gap_s: int
+    brain_note_batch_s: int
     vm_url: str
     influx_token: str
     ha_url: str
@@ -434,6 +435,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         brain_heartbeat_s=get_int("BRAIN_HEARTBEAT_MIN", 240) * 60,
         expert_heartbeat_s=get_int("EXPERT_HEARTBEAT_MIN", 120) * 60,
         brain_min_wake_gap_s=max(0, get_int("BRAIN_MIN_WAKE_GAP_MIN", 30)) * 60,
+        brain_note_batch_s=max(0, get_int("BRAIN_NOTE_BATCH_MIN", 120)) * 60,
         vm_url=get("VM_URL", "http://database-auth:8427"),
         influx_token=get("INFLUX_TOKEN"),
         ha_url=get("HA_URL", "http://192.168.68.87:8123"),
