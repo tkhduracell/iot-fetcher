@@ -1,7 +1,7 @@
 [Unit]
 Description=eth0-first network failover (Wi-Fi only when eth0 is down)
 After=NetworkManager.service
-Requires=NetworkManager.service
+Wants=NetworkManager.service
 
 [Service]
 Type=simple

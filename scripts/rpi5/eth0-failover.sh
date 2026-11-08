@@ -40,7 +40,7 @@ up_since=""
 echo "starting: iface=$IFACE wifi_con=$WIFI_CON down_grace=${DOWN_GRACE}s up_grace=${UP_GRACE}s"
 
 while true; do
-  now="$EPOCHSECONDS"
+  now="${EPOCHSECONDS:-$(date +%s)}"
   if eth_healthy; then
     down_since=""
     [[ -n "$up_since" ]] || { up_since="$now"; echo "eth0 is up"; }
