@@ -455,9 +455,12 @@ async def test_answered_topic_stays_answered(brain_dir, tmp_path, wall):
     class _Slack:
         posts: list[str] = []
 
-        async def post(self, topic, text):
+        async def post(self, topic, text, **_options):
             self.posts.append(topic)
             return "1.0"
+
+        def quiet_until(self):
+            return None
 
         def resolve_topic(self, topic):
             return topic
@@ -1265,9 +1268,12 @@ class _Slack:
         self.posts: list[str] = []
         self.unanswered: list[str] = []
 
-    async def post(self, topic, text):
+    async def post(self, topic, text, **_options):
         self.posts.append(topic)
         return "1.0"
+
+    def quiet_until(self):
+        return None
 
     def resolve_topic(self, topic):
         return topic

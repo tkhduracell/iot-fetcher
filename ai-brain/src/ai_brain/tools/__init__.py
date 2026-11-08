@@ -91,6 +91,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "read_expert",
         "read_fact",
         "search_history",
+        "slack_open_questions",
         "system_status",
         "usage_status",
         "vm_metrics",

@@ -1,13 +1,14 @@
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from ai_brain.approvals import Proposal
 from ai_brain.config import load_settings
 from ai_brain.llm import ToolCall
-from ai_brain.slack_io import SlackIn, SlackOut, SlackRateCapped, start_slack
+from ai_brain.slack_io import SlackIn, SlackOut, SlackRateCapped, quiet_until, start_slack
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.tools.slack_tools import register_slack_tools
 
@@ -124,7 +125,14 @@ async def test_first_post_opens_dm_and_creates_a_top_level_thread(out, client, b
     assert client.methods("agents.sessions.setStatus") == []
 
     sessions = json.loads((brain_dir.root / "sessions.json").read_text())
-    assert sessions == {"pool": {"thread_ts": "1.1", "channel": "D1"}}
+    assert sessions == {
+        "pool": {
+            "thread_ts": "1.1",
+            "channel": "D1",
+            "last_ts": "1.1",
+            "last_at": START.isoformat(timespec="seconds"),
+        }
+    }
 
 
 async def test_second_post_threads_under_the_same_topic(out, client):
@@ -855,7 +863,12 @@ async def test_start_slack_wires_posting_into_approvals(
     # Approve/reject buttons are registered as actions, not events.
     from ai_brain.approvals import APPROVE_ACTION, REJECT_ACTION
 
-    assert set(built["handler"][0].actions) == {APPROVE_ACTION, REJECT_ACTION}
+    assert set(built["handler"][0].actions) == {
+        APPROVE_ACTION,
+        REJECT_ACTION,
+        "answer_yes",
+        "answer_no",
+    }
 
 
 # -- tools -------------------------------------------------------------
@@ -1037,7 +1050,8 @@ async def test_a_reaction_matching_no_proposal_does_not_wake(slack_in, app, woke
 async def test_sessions_exposes_the_stored_topic_map(out):
     await out.post("pool", "the pool is cold")
 
-    assert out.sessions() == {"pool": {"thread_ts": "1.1", "channel": "D1"}}
+    assert out.sessions()["pool"]["thread_ts"] == "1.1"
+    assert out.sessions()["pool"]["channel"] == "D1"
 
 
 def test_sessions_is_empty_before_anything_is_posted(out):
@@ -1072,7 +1086,8 @@ async def test_a_dm_in_the_assistant_thread_binds_chat_and_tags_the_note(
         _ack,
     )
 
-    assert out.sessions()["chat"] == {"thread_ts": "5.5", "channel": "D9"}
+    chat = out.sessions()["chat"]
+    assert (chat["thread_ts"], chat["channel"]) == ("5.5", "D9")
     assert brain_dir.unread_notes()[0].body == "topic: chat\nhur mar poolen?"
 
 
@@ -1155,7 +1170,8 @@ async def test_a_new_topic_gets_its_own_thread_even_with_chat_open(out, client, 
     assert client.methods("chat_postMessage") == [
         {"channel": "D1", "text": "vi producerar 4 kW", "thread_ts": None}
     ]
-    assert out.sessions()["solar"] == {"thread_ts": "1.1", "channel": "D1"}
+    solar = out.sessions()["solar"]
+    assert (solar["thread_ts"], solar["channel"]) == ("1.1", "D1")
     assert ts == "1.1"
 
 
@@ -1173,8 +1189,10 @@ async def test_posting_to_chat_itself_lands_in_the_bound_thread(out, client):
 
     await out.post("chat", "hej")
 
+    # "8.8" is 1970 to Slack and nothing else has happened in the thread, so
+    # it is stale and the reply is broadcast to the DM's main view as well.
     assert client.methods("chat_postMessage") == [
-        {"channel": "D7", "text": "hej", "thread_ts": "8.8"}
+        {"channel": "D7", "text": "hej", "thread_ts": "8.8", "reply_broadcast": True}
     ]
 
 
@@ -1392,5 +1410,522 @@ async def test_recent_topics_respects_the_limit(out):
 
 async def test_recent_topics_is_empty_on_a_fresh_brain(out):
     assert out.recent_topics() == []
+
+
+# -- outbox policy: stale-thread broadcast ---------------------------------
+
+
+async def test_a_reply_into_a_fresh_thread_is_not_broadcast(out, client, moving_clock):
+    await out.post("pool", "first")
+    moving_clock.state["now"] = START + timedelta(hours=71)
+
+    await out.post("pool", "second")
+
+    assert "reply_broadcast" not in client.methods("chat_postMessage")[1]
+
+
+async def test_a_reply_into_a_stale_thread_is_broadcast(out, client, moving_clock):
+    await out.post("pool", "first")
+    moving_clock.state["now"] = START + timedelta(hours=73)
+
+    await out.post("pool", "second")
+
+    second = client.methods("chat_postMessage")[1]
+    assert second["thread_ts"] == "1.1"
+    assert second["reply_broadcast"] is True
+
+
+async def test_a_top_level_post_is_never_broadcast(out, client):
+    await out.post("pool", "first")
+    assert "reply_broadcast" not in client.methods("chat_postMessage")[0]
+
+
+async def test_a_session_from_before_the_policy_is_judged_by_its_thread_ts(
+    out, client, brain_dir
+):
+    """A Sep/Oct thread with no last_at is stale straight away -- the case
+    that put 9 of 13 DMs where Filip never saw them."""
+    sept = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc).timestamp()
+    (brain_dir.root / "sessions.json").write_text(
+        json.dumps({"pool": {"thread_ts": f"{sept:.6f}", "channel": "D1"}})
+    )
+
+    await out.post("pool", "news")
+
+    assert client.methods("chat_postMessage")[0]["reply_broadcast"] is True
+
+
+async def test_filip_writing_in_the_thread_keeps_it_fresh(
+    slack_in, app, out, client, moving_clock
+):
+    await out.post("pool", "first")
+    moving_clock.state["now"] = START + timedelta(hours=70)
+    await app.handlers["message"](
+        {"channel_type": "im", "user": USER, "text": "ok", "thread_ts": "1.1"}, _ack
+    )
+    moving_clock.state["now"] = START + timedelta(hours=80)
+
+    await out.post("pool", "second")
+
+    assert "reply_broadcast" not in client.methods("chat_postMessage")[-1]
+
+
+async def test_the_stale_threshold_is_configurable(client, brain_dir, moving_clock):
+    out = SlackOut(client, USER, brain_dir, moving_clock, stale_thread_h=1)
+    await out.post("pool", "first")
+    moving_clock.state["now"] = START + timedelta(hours=2)
+
+    await out.post("pool", "second")
+
+    assert client.methods("chat_postMessage")[1]["reply_broadcast"] is True
+
+
+async def test_a_post_records_its_last_ts_and_time(out, moving_clock):
+    await out.post("pool", "first")
+    moving_clock.state["now"] = START + timedelta(minutes=5)
+    await out.post("pool", "second")
+
+    session = out.sessions()["pool"]
+    assert session["last_ts"] == "2.1"
+    assert session["last_at"] == (START + timedelta(minutes=5)).isoformat(timespec="seconds")
+    assert session["thread_ts"] == "1.1"
+
+
+# -- outbox policy: quiet hours ----------------------------------------------
+
+STHLM = ZoneInfo("Europe/Stockholm")
+
+
+@pytest.mark.parametrize(
+    ("local", "expected"),
+    [
+        (datetime(2026, 9, 6, 23, 0, tzinfo=STHLM), datetime(2026, 9, 7, 7, 0, tzinfo=STHLM)),
+        (datetime(2026, 9, 7, 3, 30, tzinfo=STHLM), datetime(2026, 9, 7, 7, 0, tzinfo=STHLM)),
+        (datetime(2026, 9, 6, 22, 0, tzinfo=STHLM), datetime(2026, 9, 7, 7, 0, tzinfo=STHLM)),
+        (datetime(2026, 9, 7, 7, 0, tzinfo=STHLM), None),
+        (datetime(2026, 9, 6, 12, 0, tzinfo=STHLM), None),
+    ],
+)
+def test_quiet_until_wraps_midnight_in_stockholm_time(local, expected):
+    assert quiet_until(local.astimezone(timezone.utc), (22, 7)) == expected
+
+
+def test_quiet_until_handles_a_window_that_does_not_wrap():
+    inside = datetime(2026, 9, 7, 2, 0, tzinfo=STHLM)
+    assert quiet_until(inside, (1, 6)) == datetime(2026, 9, 7, 6, 0, tzinfo=STHLM)
+    assert quiet_until(datetime(2026, 9, 7, 23, 0, tzinfo=STHLM), (1, 6)) is None
+
+
+def test_quiet_until_is_none_when_quiet_hours_are_off():
+    assert quiet_until(datetime(2026, 9, 7, 3, 0, tzinfo=STHLM), None) is None
+
+
+def test_quiet_until_ends_at_the_wall_clock_hour_across_dst():
+    # 2026-10-25 is the CEST->CET switch; 07:00 is still 07:00 local.
+    night = datetime(2026, 10, 24, 23, 0, tzinfo=STHLM)
+    end = quiet_until(night, (22, 7))
+    assert (end.hour, end.day) == (7, 25)
+    assert end.utcoffset() == timedelta(hours=1)
+
+
+# 23:00 Stockholm (CEST) on START's day, and 07:30 the next morning.
+NIGHT = datetime(2026, 9, 6, 21, 0, tzinfo=timezone.utc)
+MORNING = datetime(2026, 9, 7, 5, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def quiet_out(client, brain_dir, moving_clock):
+    return SlackOut(client, USER, brain_dir, moving_clock, quiet_hours=(22, 7))
+
+
+async def test_a_held_post_is_not_sent_and_not_in_the_retry_queue(
+    quiet_out, client, moving_clock
+):
+    moving_clock.state["now"] = NIGHT
+
+    held = quiet_out.hold("pool", "pH drifting")
+
+    assert held["until"] == datetime(2026, 9, 7, 7, 0, tzinfo=STHLM)
+    assert client.methods("chat_postMessage") == []
+    assert quiet_out.held_count() == 1
+    assert quiet_out.queued_count() == 0
+    # The retry tick must not send it in the middle of the night.
+    assert await quiet_out.flush_queue() == 0
+    assert client.methods("chat_postMessage") == []
+
+
+async def test_holding_charges_the_rate_cap(client, brain_dir, moving_clock):
+    out = SlackOut(client, USER, brain_dir, moving_clock, max_per_hour=1, quiet_hours=(22, 7))
+    moving_clock.state["now"] = NIGHT
+    out.hold("pool", "one")
+
+    with pytest.raises(SlackRateCapped):
+        out.hold("pool", "two")
+
+
+async def test_release_does_nothing_while_still_quiet(quiet_out, client, moving_clock):
+    moving_clock.state["now"] = NIGHT
+    quiet_out.hold("pool", "pH drifting")
+
+    assert await quiet_out.release_held() == 0
+    assert client.methods("chat_postMessage") == []
+    assert quiet_out.held_count() == 1
+
+
+async def test_release_sends_one_digest_then_each_item_into_its_thread(
+    quiet_out, client, moving_clock
+):
+    await quiet_out.post("pool", "pool thread")  # 12:00 local, thread 1.1
+    moving_clock.state["now"] = NIGHT
+    quiet_out.hold("pool", "pH drifting\nmore detail on a second line")
+    quiet_out.hold("energy", "export price spiked")
+    quiet_out.hold("pool", "filter pressure up", question=True)
+    moving_clock.state["now"] = MORNING
+
+    assert await quiet_out.release_held() == 3
+
+    posts = client.methods("chat_postMessage")[1:]
+    digest = posts[0]
+    assert "thread_ts" not in digest
+    assert digest["text"].splitlines() == [
+        "☀️ *Overnight: 3 updates* -- details in each topic's thread.",
+        "*pool*",
+        "• pH drifting",
+        "• ❓ filter pressure up",
+        "*energy*",
+        "• export price spiked",
+    ]
+    # Then the full text into each topic's own thread, never broadcast --
+    # the digest was the notification.
+    assert [(p["text"], p["thread_ts"]) for p in posts[1:]] == [
+        ("pH drifting\nmore detail on a second line", "1.1"),
+        ("export price spiked", None),
+        ("filter pressure up", "1.1"),
+    ]
+    assert all("reply_broadcast" not in p for p in posts[1:])
+    assert posts[3]["blocks"][1]["elements"][0]["action_id"] == "answer_yes"
+    assert quiet_out.held_count() == 0
+    assert await quiet_out.release_held() == 0
+
+
+async def test_a_failed_digest_keeps_everything_held(brain_dir, moving_clock):
+    client = FakeClient(fail_methods=frozenset({"chat_postMessage"}))
+    out = SlackOut(
+        client, USER, brain_dir, moving_clock, sleep=_no_sleep, quiet_hours=(22, 7)
+    )
+    moving_clock.state["now"] = NIGHT
+    out.hold("pool", "pH drifting")
+    moving_clock.state["now"] = MORNING
+
+    assert await out.release_held() == 0
+    assert out.held_count() == 1
+    assert out.queued_count() == 0
+
+
+async def test_a_held_correction_replaces_the_held_text(quiet_out, moving_clock):
+    moving_clock.state["now"] = NIGHT
+    quiet_out.hold("pool", "pH 7.9")
+    quiet_out.hold("energy", "unrelated")
+
+    held = quiet_out.hold("pool", "pH 7.6, misread", replaces_last=True)
+
+    assert held["replaced_held"] is True
+    assert quiet_out.held_count() == 2
+    texts = sorted(
+        json.loads(p.read_text())["text"] for p in quiet_out.held_dir.glob("*.json")
+    )
+    assert texts == ["pH 7.6, misread", "unrelated"]
+
+
+async def test_a_held_correction_with_nothing_held_edits_on_release(
+    quiet_out, client, moving_clock
+):
+    moving_clock.state["now"] = NIGHT - timedelta(hours=2)  # 21:00 local
+    await quiet_out.post("pool", "pH 7.9")
+    moving_clock.state["now"] = NIGHT
+    quiet_out.hold("pool", "pH 7.6, misread", replaces_last=True)
+    moving_clock.state["now"] = MORNING
+
+    await quiet_out.release_held()
+
+    [update] = client.methods("chat_update")
+    assert update["ts"] == "1.1"
+    assert update["text"] == "✏️ Updated: pH 7.6, misread"
+    # Original post plus the digest; the correction itself was an edit.
+    assert len(client.methods("chat_postMessage")) == 2
+
+
+# -- outbox policy: corrections edit -----------------------------------------
+
+
+async def test_edit_last_updates_the_last_message_in_place(out, client, moving_clock):
+    await out.post("pool", "pool is 19 C")
+    moving_clock.state["now"] = START + timedelta(hours=2)
+
+    ts = await out.edit_last("pool", "pool is 21 C, sensor lagged")
+
+    assert ts == "1.1"
+    [update] = client.methods("chat_update")
+    assert update["channel"] == "D1"
+    assert update["ts"] == "1.1"
+    assert update["text"] == "✏️ Updated: pool is 21 C, sensor lagged"
+    assert len(client.methods("chat_postMessage")) == 1
+
+
+async def test_edit_last_refuses_a_message_older_than_a_day(out, client, moving_clock):
+    await out.post("pool", "pool is 19 C")
+    moving_clock.state["now"] = START + timedelta(hours=25)
+
+    assert await out.edit_last("pool", "correction") is None
+    assert client.methods("chat_update") == []
+
+
+async def test_edit_last_refuses_once_filip_has_replied(slack_in, app, out, client, moving_clock):
+    await out.post("pool", "pool is 19 C")
+    moving_clock.state["now"] = START + timedelta(minutes=10)
+    await app.handlers["message"](
+        {"channel_type": "im", "user": USER, "text": "thanks", "thread_ts": "1.1"}, _ack
+    )
+
+    assert await out.edit_last("pool", "correction") is None
+
+
+async def test_edit_last_with_no_history_returns_none(out):
+    assert await out.edit_last("pool", "correction") is None
+
+
+async def test_edit_last_falls_back_when_slack_refuses_the_edit(brain_dir, moving_clock):
+    client = FakeClient(fail_methods=frozenset({"chat_update"}))
+    out = SlackOut(client, USER, brain_dir, moving_clock)
+    await out.post("pool", "pool is 19 C")
+
+    assert await out.edit_last("pool", "correction") is None
+
+
+async def test_edit_last_targets_the_newest_bot_message_not_the_root(out, client):
+    await out.post("pool", "root")
+    await out.post("pool", "reply")
+
+    assert await out.edit_last("pool", "fixed reply") == "2.1"
+
+
+async def test_slack_post_tool_reports_an_edit(registry, make_ctx, out, client):
+    ctx = make_ctx("brain", slack_out=out)
+    await call(registry, ctx, "slack_post", topic="pool", text="19 C")
+
+    result = await call(
+        registry, ctx, "slack_post", topic="pool", text="21 C", replaces_last=True
+    )
+
+    assert result["action"] == "updated"
+    assert len(client.methods("chat_postMessage")) == 1
+
+
+# -- outbox policy: questions ------------------------------------------------
+
+
+async def test_a_question_post_carries_yes_no_buttons_and_is_tracked(out, client, moving_clock):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    [message] = client.methods("chat_postMessage")
+    section, actions = message["blocks"]
+    assert section["text"]["text"] == "Run the pump tonight?"
+    assert [(b["action_id"], b["value"]) for b in actions["elements"]] == [
+        ("answer_yes", "pool"),
+        ("answer_no", "pool"),
+    ]
+    moving_clock.state["now"] = START + timedelta(days=2)
+    assert out.open_questions() == [
+        {
+            "topic": "pool",
+            "asked_at": START.isoformat(timespec="seconds"),
+            "age_days": 2.0,
+            "text": "Run the pump tonight?",
+        }
+    ]
+
+
+async def test_a_plain_post_opens_no_question(out):
+    await out.post("pool", "fyi")
+    assert out.open_questions() == []
+
+
+async def test_filip_replying_in_the_thread_answers_the_question(slack_in, app, out):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    await app.handlers["message"](
+        {"channel_type": "im", "user": USER, "text": "ja", "thread_ts": "1.1"}, _ack
+    )
+
+    assert out.open_questions() == []
+    assert out.sessions()["pool"]["answered_at"]
+
+
+async def test_a_new_question_on_an_answered_topic_is_open_again(slack_in, app, out):
+    await out.post("pool", "Q1?", question=True)
+    await app.handlers["message"](
+        {"channel_type": "im", "user": USER, "text": "ja", "thread_ts": "1.1"}, _ack
+    )
+
+    await out.post("pool", "Q2?", question=True)
+
+    assert [q["text"] for q in out.open_questions()] == ["Q2?"]
+
+
+async def test_a_queued_question_is_still_a_question_once_flushed(brain_dir, moving_clock):
+    client = FakeClient(fail_methods=frozenset({"chat_postMessage"}))
+    out = SlackOut(client, USER, brain_dir, moving_clock, sleep=_no_sleep)
+    assert await out.post("pool", "Run it?", question=True) == "queued"
+
+    client.fail_methods = frozenset()
+    assert await out.flush_queue() == 1
+
+    assert [q["topic"] for q in out.open_questions()] == ["pool"]
+    assert client.methods("chat_postMessage")[-1]["blocks"][1]["type"] == "actions"
+
+
+def _answer_click(action_id: str, topic: str = "pool", ts: str = "1.1") -> dict:
+    return {
+        "user": {"id": USER},
+        "actions": [{"action_id": action_id, "value": topic}],
+        "message": {"ts": ts, "text": "Run the pump tonight?"},
+        "channel": {"id": "D1"},
+    }
+
+
+async def test_a_yes_click_becomes_an_owner_note_and_wakes_the_brain(
+    slack_in, app, out, client, brain_dir, approvals, woken
+):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    await app.actions["answer_yes"](_answer_click("answer_yes"), _ack)
+
+    [note] = brain_dir.unread_notes()
+    assert note.sender == "filip"
+    assert note.body == "topic: pool\nAnswer: yes"
+    assert woken == ["brain"]
+    # Never mistaken for an approval.
+    assert approvals.buttons == []
+    assert out.open_questions() == []
+    assert out.sessions()["pool"]["answer"] == "yes"
+
+
+async def test_an_answer_click_replaces_the_buttons_with_the_answer(slack_in, app, out, client):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    await app.actions["answer_no"](_answer_click("answer_no"), _ack)
+
+    [update] = client.methods("chat_update")
+    assert update["ts"] == "1.1"
+    assert update["text"] == "Run the pump tonight?\n\n*Answer:* ❌ no"
+    assert [b["type"] for b in update["blocks"]] == ["section"]
+
+
+async def test_an_answer_is_owed_a_reply(slack_in, app, out, brain_dir):
+    from ai_brain.tools.slack_tools import owed_replies
+
+    await out.post("pool", "Run the pump tonight?", question=True)
+    await app.actions["answer_yes"](_answer_click("answer_yes"), _ack)
+
+    assert owed_replies(brain_dir.unread_notes()) == {"pool"}
+
+
+async def test_a_second_click_on_the_same_question_is_ignored(
+    slack_in, app, out, brain_dir, woken
+):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    await app.actions["answer_yes"](_answer_click("answer_yes"), _ack)
+    await app.actions["answer_no"](_answer_click("answer_no"), _ack)
+
+    assert len(brain_dir.unread_notes()) == 1
+    assert woken == ["brain"]
+
+
+async def test_an_answer_click_from_anyone_else_is_ignored(slack_in, app, out, brain_dir):
+    await out.post("pool", "Run the pump tonight?", question=True)
+    click = _answer_click("answer_yes")
+    click["user"] = {"id": "U-someone"}
+
+    await app.actions["answer_yes"](click, _ack)
+
+    assert brain_dir.unread_notes() == []
+
+
+async def test_an_answer_with_an_unknown_topic_falls_back_to_the_thread(
+    slack_in, app, out, brain_dir
+):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    await app.actions["answer_yes"](_answer_click("answer_yes", topic="gone"), _ack)
+
+    assert brain_dir.unread_notes()[0].body == "topic: pool\nAnswer: yes"
+
+
+async def test_slack_open_questions_tool_reads_slack_out(registry, make_ctx, out):
+    await out.post("pool", "Run the pump tonight?", question=True)
+
+    result = await call(registry, make_ctx("brain", slack_out=out), "slack_open_questions")
+
+    assert [q["topic"] for q in result["open_questions"]] == ["pool"]
+
+
+async def test_experts_may_not_list_open_questions(registry, make_ctx, out):
+    result = await call(registry, make_ctx("energy", slack_out=out), "slack_open_questions")
+    assert "error" in result
+
+
+# -- outbox policy: config -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", (22, 7)),
+        ("22-07", (22, 7)),
+        ("23-6", (23, 6)),
+        ("off", None),
+        ("OFF", None),
+        ("none", None),
+        ("07-07", None),
+        ("garbage", (22, 7)),
+        ("25-07", (22, 7)),
+    ],
+)
+def test_quiet_hours_setting(raw, expected):
+    assert load_settings({"SLACK_QUIET_HOURS": raw}).slack_quiet_hours == expected
+
+
+def test_stale_thread_hours_setting():
+    assert load_settings({}).slack_stale_thread_h == 72
+    assert load_settings({"SLACK_STALE_THREAD_H": "24"}).slack_stale_thread_h == 24
+
+
+async def test_start_slack_passes_the_policy_settings_to_slack_out(
+    brain_dir, approvals, woken, monkeypatch
+):
+    import slack_bolt.adapter.socket_mode.aiohttp as bolt_socket
+    import slack_bolt.async_app as bolt_app
+
+    class StubApp(FakeApp):
+        def __init__(self, **_kwargs):
+            super().__init__()
+
+    monkeypatch.setattr(bolt_app, "AsyncApp", StubApp)
+    monkeypatch.setattr(bolt_socket, "AsyncSocketModeHandler", lambda app, token: None)
+    settings = load_settings(
+        {
+            "SLACK_BOT_TOKEN": "xoxb-x",
+            "SLACK_APP_TOKEN": "xapp-x",
+            "SLACK_USER_ID": USER,
+            "SLACK_QUIET_HOURS": "23-06",
+            "SLACK_STALE_THREAD_H": "48",
+        }
+    )
+
+    out, _ = await start_slack(settings, brain_dir, approvals, woken.append)
+
+    assert out.quiet_hours == (23, 6)
+    assert out.stale_thread_s == 48 * 3600
 
 
