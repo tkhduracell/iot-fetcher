@@ -57,6 +57,37 @@ Four properties shape the code more than the API does:
   far (a hang, a dead process), so ``LOADING_TIMEOUT_S`` is long: a lan:
   cycle legitimately runs half an hour, and a 15-minute watchdog used to
   paint a slow-but-successful reply red.
+
+The outbox policy below exists because of one week (2026-11-01..08): the brain
+sent Filip 13 DMs and got no replies. Nine were replies inside threads from
+Sep/Oct, which never show in the DM's main view; four went out between 01:00
+and 04:00; several were the brain correcting its own previous message, three
+messages for one finding; and the questions among them went unanswered and
+were read back as "low priority". Each rule answers one of those:
+
+* **A reply into a stale thread is broadcast.** ``sessions.json`` also keeps
+  ``last_ts``/``last_at`` (the bot's own last post in the topic) and
+  ``owner_at`` (Filip's last message there). A post into a thread whose newest
+  activity is older than ``stale_thread_h`` goes out with
+  ``reply_broadcast=True``, so it also lands in the DM's main view instead of
+  only in a thread nobody has open. A session written before these fields
+  existed falls back to its ``thread_ts`` -- Slack's own epoch timestamp --
+  which is exactly the Sep/Oct case.
+* **Quiet hours hold, they do not drop.** ``hold`` writes a post to
+  ``outbox/slack/held/`` instead of sending it (the decision of *what* to
+  hold is the ``slack_post`` tool's: urgent posts and owed replies bypass).
+  ``release_held`` runs on a minute tick and, the first time it sees quiet
+  hours over, sends one top-level digest and then each item into its own
+  thread, unbroadcast -- the digest is the notification, the thread posts are
+  what keeps a topic's history and reply routing intact.
+* **A correction edits, it does not stack.** ``edit_last`` rewrites the
+  topic's last bot message (``✏️ Updated: ...``) if it is under a day old and
+  Filip has not spoken in the thread since -- editing something he already
+  answered would rewrite what he was answering.
+* **A question is tracked until it is answered.** A question post carries
+  Yes/No buttons and records ``asked_at``; Filip writing in the thread or
+  clicking a button sets ``answered_at``. ``open_questions`` is what lets the
+  brain tell "no answer yet" apart from "no".
 """
 
 from __future__ import annotations
@@ -67,9 +98,10 @@ import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ai_brain.memory import OWNER_SENDER
 
@@ -92,6 +124,21 @@ ERROR_REACTION = "red_circle"
 # on the lan: provider that was measured at ~33 minutes; the old 15 minutes
 # painted a slow-but-fine reply red.
 LOADING_TIMEOUT_S = 3600.0
+LOCAL_TZ = ZoneInfo("Europe/Stockholm")
+DEFAULT_STALE_THREAD_H = 72
+# How old the bot's last message may be and still be edited in place by a
+# correction. Past a day the original has been read (or slept on), and a
+# silent edit of it is more likely to be missed than a fresh message.
+EDIT_WINDOW_S = 24 * 3600
+UPDATED_PREFIX = "✏️ Updated: "
+# Yes/No answer buttons on a question post. Distinct from the approval
+# buttons' ids (approvals.APPROVE_ACTION/REJECT_ACTION): Bolt routes by
+# action_id, and an answer must never be mistaken for approving a proposal.
+ANSWER_YES_ACTION = "answer_yes"
+ANSWER_NO_ACTION = "answer_no"
+ANSWER_ACTIONS = {ANSWER_YES_ACTION: "yes", ANSWER_NO_ACTION: "no"}
+QUESTION_EXCERPT_CHARS = 200
+DIGEST_EXCERPT_CHARS = 160
 SUGGESTED_PROMPTS = [
     {"title": "Status", "message": "Vad jobbar du med just nu?"},
     {"title": "El", "message": "Hur mycket el producerar vi just nu?"},
@@ -177,6 +224,75 @@ def _is_new_variant_of(new: str, existing: str) -> bool:
     return new.startswith(existing + "-")
 
 
+def quiet_until(now: datetime, quiet_hours: tuple[int, int] | None) -> datetime | None:
+    """When the quiet window ``now`` falls in ends (local time), or None.
+
+    ``quiet_hours`` is ``(start, end)`` in Stockholm hours, end exclusive; a
+    window may wrap midnight (``22-07``) or not (``01-06``). The end is built
+    from the local *date* rather than by adding hours to ``now``, so a DST
+    change inside the window still ends it at the wall-clock hour Filip set.
+    """
+    if quiet_hours is None:
+        return None
+    start, end = quiet_hours
+    local = now.astimezone(LOCAL_TZ)
+    hour = local.hour
+    quiet = (hour >= start or hour < end) if start > end else (start <= hour < end)
+    if not quiet:
+        return None
+    day = local.date() if hour < end else local.date() + timedelta(days=1)
+    return datetime(day.year, day.month, day.day, end, tzinfo=LOCAL_TZ)
+
+
+def question_blocks(text: str, topic: str) -> list[dict]:
+    """Block Kit for a question: the text, then Yes / No buttons.
+
+    The buttons' ``value`` is the topic, so a click is routed back to the
+    right thread even when the message is not the topic's thread root.
+    """
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Yes"},
+                    "action_id": ANSWER_YES_ACTION,
+                    "value": topic,
+                    "style": "primary",
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "No"},
+                    "action_id": ANSWER_NO_ACTION,
+                    "value": topic,
+                },
+            ],
+        },
+    ]
+
+
+def _excerpt(text: str, limit: int) -> str:
+    """The first non-empty line of ``text``, cut at ``limit`` characters."""
+    line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+
+
+def _parse_time(raw: object) -> datetime | None:
+    """An ISO timestamp from sessions.json, or None if absent or unreadable."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+
+
+def _iso(moment: datetime) -> str:
+    return moment.isoformat(timespec="seconds")
+
+
 class SlackOut:
     """Posts into per-topic threads, and keeps the topic->thread map."""
 
@@ -188,6 +304,11 @@ class SlackOut:
         clock: Callable[[], datetime],
         max_per_hour: int = MAX_PER_HOUR,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        stale_thread_h: float = DEFAULT_STALE_THREAD_H,
+        # Off unless the caller passes a window: ``start_slack`` hands in the
+        # configured one (default 22-07). Off by default here so a test, or
+        # any caller that has not thought about it, never sees a post held.
+        quiet_hours: tuple[int, int] | None = None,
     ) -> None:
         self.client = client
         self.user_id = user_id
@@ -195,6 +316,8 @@ class SlackOut:
         self.clock = clock
         self.max_per_hour = max_per_hour
         self.sleep = sleep
+        self.stale_thread_s = float(stale_thread_h) * 3600
+        self.quiet_hours = quiet_hours
         self._channel: str | None = None
         self._recent: list[float] = []
         # topic -> (channel, message_ts, marked_at). One entry per topic: a
@@ -212,6 +335,13 @@ class SlackOut:
     @property
     def queue_dir(self) -> Path:
         return self.brain.outbox_dir / "slack"
+
+    @property
+    def held_dir(self) -> Path:
+        # A subdirectory of the retry queue, which ``flush_queue`` globs
+        # non-recursively -- so a held post is never mistaken for a failed one
+        # and sent in the middle of the night by the retry tick.
+        return self.queue_dir / "held"
 
     # -- the pending spinner ---------------------------------------------
 
@@ -310,7 +440,14 @@ class SlackOut:
 
     # -- posting -------------------------------------------------------
 
-    async def post(self, topic: str, text: str, blocks: list[dict] | None = None) -> str:
+    async def post(
+        self,
+        topic: str,
+        text: str,
+        blocks: list[dict] | None = None,
+        *,
+        question: bool = False,
+    ) -> str:
         """Post ``text`` under ``topic``. Returns the ts, or ``"queued"``.
 
         The cap is *checked* before the send and *charged* after it succeeds.
@@ -324,15 +461,78 @@ class SlackOut:
         clients that do not render blocks. ``topic`` is resolved against
         existing sessions first (see ``resolve_topic``), so ``pool-pump-bug``
         lands in an existing ``pool-pump`` thread instead of opening its own.
+
+        ``question`` adds Yes/No buttons (``question_blocks``) and starts
+        tracking the topic as an open question -- see ``open_questions``.
         """
         topic = self.resolve_topic(topic)
         self._check_cap()
-        ts = await self._send(topic, text, blocks)
+        ts = await self._send(topic, text, blocks, question=question)
         if ts != "queued":
             self._charge_rate()
         return ts
 
-    async def _send(self, topic: str, text: str, blocks: list[dict] | None = None) -> str:
+    async def edit_last(self, topic: str, text: str, *, question: bool = False) -> str | None:
+        """Rewrite the topic's last bot message as a correction, if allowed.
+
+        Returns the edited message's ts, or None when the caller should post
+        normally instead: no bot message recorded for the topic, the last one
+        older than ``EDIT_WINDOW_S``, Filip having written in the thread since
+        (he may be answering the very thing this would rewrite), or Slack
+        refusing the edit. The three-messages-for-one-finding pattern this
+        replaces was each a fresh notification for what was really one
+        thought; an edit is not a notification at all, so it is not charged
+        against the hourly cap either.
+
+        ``chat_update`` replaces the whole message, so ``blocks`` are always
+        sent -- leaving them out would keep an old question's buttons under a
+        text that no longer asks anything.
+        """
+        topic = self.resolve_topic(topic)
+        sessions = self._read_sessions()
+        session = sessions.get(topic)
+        if not session or not session.get("last_ts"):
+            return None
+        now = self.clock()
+        last_at = _parse_time(session.get("last_at"))
+        if last_at is None or (now - last_at).total_seconds() >= EDIT_WINDOW_S:
+            return None
+        owner_at = _parse_time(session.get("owner_at"))
+        if owner_at is not None and owner_at >= last_at:
+            return None
+        ts = str(session["last_ts"])
+        channel = str(session.get("channel") or "")
+        new_text = UPDATED_PREFIX + text
+        blocks = (
+            question_blocks(new_text, topic)
+            if question
+            else [{"type": "section", "text": {"type": "mrkdwn", "text": new_text}}]
+        )
+        try:
+            await self.client.chat_update(channel=channel, ts=ts, text=new_text, blocks=blocks)
+        except Exception as exc:  # noqa: BLE001 - falling back to a normal post loses nothing
+            log.info("[slack] chat_update for %s failed (%s), posting instead", topic, _slack_error(exc))
+            return None
+        if question:
+            self._record_question(session, ts, text, now)
+        elif session.get("question_ts") == ts:
+            # The buttons are gone from that message now; it no longer asks.
+            for key in ("asked_at", "question_ts", "question_text"):
+                session.pop(key, None)
+        sessions[topic] = session
+        self._write_sessions(sessions)
+        await self._clear_pending(topic)
+        return ts
+
+    async def _send(
+        self,
+        topic: str,
+        text: str,
+        blocks: list[dict] | None = None,
+        *,
+        question: bool = False,
+        allow_broadcast: bool = True,
+    ) -> str:
         """Post without touching the rate cap. Returns the ts, or ``"queued"``.
 
         Every topic other than ``chat`` gets its own thread, always -- even
@@ -346,9 +546,19 @@ class SlackOut:
         worth a thread of its own -- an ordinary top-level post, not an Agents
         session; see the module docstring for why the session chrome that used
         to follow this post (naming and status-dotting it) is gone.
+
+        A reply into a thread with no activity for ``stale_thread_s`` is sent
+        with ``reply_broadcast`` -- see the module docstring. Decided here, at
+        send time, rather than when the post was first asked for, so a post
+        that sat in the retry queue is judged on the thread as it is now.
+        ``allow_broadcast=False`` is for ``release_held``, whose digest has
+        already put the news in the main view once.
         """
         sessions = self._read_sessions()
         session = sessions.get(topic)
+        now = self.clock()
+        if question and blocks is None:
+            blocks = question_blocks(text, topic)
         try:
             # A session records the channel it lives in; the assistant thread
             # is not always in the DM we would open ourselves.
@@ -357,10 +567,12 @@ class SlackOut:
             kwargs = {"channel": channel, "text": text, "thread_ts": thread_ts}
             if blocks is not None:
                 kwargs["blocks"] = blocks
+            if allow_broadcast and session is not None and self._is_stale(session, now):
+                kwargs["reply_broadcast"] = True
             response = await self._retry(self.client.chat_postMessage, **kwargs)
         except Exception:
             log.warning("[slack] post to %s failed, queueing", topic, exc_info=True)
-            self._enqueue(topic, text, blocks)
+            self._enqueue(topic, text, blocks, question=question)
             return "queued"
 
         ts = str(response["ts"])
@@ -368,8 +580,13 @@ class SlackOut:
             # A brand new topic: this post is the thread's own top-level
             # message, so the thread is recognisable (and its notification
             # deep-links correctly) without any further Slack call.
-            sessions[topic] = {"thread_ts": ts, "channel": channel}
-            self._write_sessions(sessions)
+            session = {"thread_ts": ts, "channel": channel}
+        session["last_ts"] = ts
+        session["last_at"] = _iso(now)
+        if question:
+            self._record_question(session, ts, text, now)
+        sessions[topic] = session
+        self._write_sessions(sessions)
         # A real reply landed for this topic: whatever spinner was left on
         # Filip's message is answered now, watchdog or not.
         await self._clear_pending(topic)
@@ -393,6 +610,7 @@ class SlackOut:
                 item = json.loads(path.read_text(encoding="utf-8"))
                 topic, text = str(item["topic"]), str(item["text"])
                 blocks = item.get("blocks")
+                question = bool(item.get("question"))
             except (ValueError, KeyError, TypeError):
                 log.warning("[slack] discarding unreadable queued post %s", path.name)
                 path.unlink()
@@ -406,7 +624,7 @@ class SlackOut:
                 log.info("[slack] rate cap reached while flushing, %s left queued", path.name)
                 break
 
-            if await self._send(topic, text, blocks) == "queued":
+            if await self._send(topic, text, blocks, question=question) == "queued":
                 # ``_send`` wrote a fresh copy on its way out; drop that and
                 # keep the original, which still holds this message's place.
                 self._drop_newest_queued()
@@ -416,6 +634,215 @@ class SlackOut:
             path.unlink()
             sent += 1
         return sent
+
+    # -- quiet hours -----------------------------------------------------
+
+    def quiet_until(self) -> datetime | None:
+        """When the current quiet window ends (Stockholm time), or None."""
+        return quiet_until(self.clock(), self.quiet_hours)
+
+    def hold(
+        self,
+        topic: str,
+        text: str,
+        *,
+        question: bool = False,
+        replaces_last: bool = False,
+    ) -> dict[str, Any]:
+        """Keep a post back until quiet hours end. Returns what happened.
+
+        Charged against the hourly cap exactly as a sent post would be: the
+        cap is there to stop a confused loop, and a loop that fills the held
+        directory overnight would otherwise all arrive at 07:00 as one huge
+        digest. ``release_held`` does not charge again.
+
+        A ``replaces_last`` correction of something that is itself still held
+        just replaces that held text -- the overnight version of editing
+        rather than stacking. Otherwise the flag is kept and applied on
+        release (``edit_last`` against whatever the topic's last sent message
+        is by then).
+        """
+        topic = self.resolve_topic(topic)
+        self._check_cap()
+        self._charge_rate()
+        until = self.quiet_until()
+        if replaces_last:
+            for path in reversed(sorted(self.held_dir.glob("*.json"))):
+                item = self._read_item(path)
+                if item is None or item.get("topic") != topic:
+                    continue
+                item["text"] = text
+                item["question"] = bool(item.get("question")) or question
+                _atomic_write(path, json.dumps(item))
+                return {"topic": topic, "replaced_held": True, "until": until}
+        self._write_item(
+            self.held_dir,
+            {
+                "topic": topic,
+                "text": text,
+                "question": question,
+                "replaces_last": replaces_last,
+                "held_at": _iso(self.clock()),
+            },
+        )
+        return {"topic": topic, "replaced_held": False, "until": until}
+
+    def held_count(self) -> int:
+        if not self.held_dir.exists():
+            return 0
+        return len(list(self.held_dir.glob("*.json")))
+
+    async def release_held(self) -> int:
+        """Once quiet hours are over, send what was held. Returns the count.
+
+        One top-level digest first -- a single notification at the end of the
+        night instead of one per thought, and visible in the DM's main view
+        where a reply inside an old thread is not. Then each item goes into
+        its own topic thread, unbroadcast: the digest already announced it,
+        and the thread post is what keeps that topic's history whole and
+        makes Filip's reply there route back to the right topic.
+
+        A digest Slack refuses leaves everything held for the next tick. A
+        thread post that fails falls into the ordinary retry queue via
+        ``_send``, so the held copy is dropped either way. A process that dies
+        between the digest and the thread posts sends the digest again next
+        time -- a duplicate summary is a better failure than a lost message.
+        """
+        if self.quiet_until() is not None or not self.held_dir.exists():
+            return 0
+        items: list[tuple[Path, dict]] = []
+        for path in sorted(self.held_dir.glob("*.json")):
+            item = self._read_item(path)
+            if item is None or "topic" not in item or "text" not in item:
+                log.warning("[slack] discarding unreadable held post %s", path.name)
+                path.unlink(missing_ok=True)
+                continue
+            items.append((path, item))
+        if not items:
+            return 0
+
+        try:
+            channel = await self._open_dm()
+            await self._retry(
+                self.client.chat_postMessage, channel=channel, text=self._digest_text(items)
+            )
+        except Exception:
+            log.warning("[slack] digest of %d held posts failed, keeping them", len(items), exc_info=True)
+            return 0
+
+        for path, item in items:
+            topic, text = str(item["topic"]), str(item["text"])
+            question = bool(item.get("question"))
+            edited = None
+            if item.get("replaces_last"):
+                edited = await self.edit_last(topic, text, question=question)
+            if edited is None:
+                await self._send(topic, text, question=question, allow_broadcast=False)
+            path.unlink(missing_ok=True)
+        return len(items)
+
+    @staticmethod
+    def _digest_text(items: list[tuple[Path, dict]]) -> str:
+        """One bullet per held item, grouped under its topic, in held order."""
+        grouped: dict[str, list[dict]] = {}
+        for _, item in items:
+            grouped.setdefault(str(item["topic"]), []).append(item)
+        noun = "update" if len(items) == 1 else "updates"
+        lines = [f"☀️ *Overnight: {len(items)} {noun}* -- details in each topic's thread."]
+        for topic, entries in grouped.items():
+            lines.append(f"*{topic}*")
+            for entry in entries:
+                mark = "❓ " if entry.get("question") else ""
+                lines.append(f"• {mark}{_excerpt(str(entry['text']), DIGEST_EXCERPT_CHARS)}")
+        return "\n".join(lines)
+
+    # -- question state ----------------------------------------------------
+
+    def note_owner_message(self, topic: str) -> None:
+        """Filip wrote in ``topic``'s thread: record it, and answer any question.
+
+        ``owner_at`` is what ``_is_stale`` and ``edit_last`` read; a message
+        in the thread answers whatever question the topic has open, whatever
+        it says -- the brain reads the words, this only tracks that he spoke.
+        """
+        sessions = self._read_sessions()
+        session = sessions.get(topic)
+        if not isinstance(session, dict):
+            return
+        now = _iso(self.clock())
+        session["owner_at"] = now
+        if session.get("asked_at") and not session.get("answered_at"):
+            session["answered_at"] = now
+        self._write_sessions(sessions)
+
+    def mark_answered(self, topic: str, message_ts: str, answer: str) -> bool:
+        """Record a button answer. False if this message was already answered.
+
+        Keyed on the message, not the topic: a thread reply sets
+        ``answered_at`` too, and the button under the question must still
+        count after that -- only a second click on the same message (before
+        ``chat_update`` has removed the buttons) is a duplicate.
+        """
+        sessions = self._read_sessions()
+        session = sessions.get(topic)
+        if not isinstance(session, dict):
+            return True
+        if session.get("button_answered_ts") == message_ts:
+            return False
+        now = _iso(self.clock())
+        session["button_answered_ts"] = message_ts
+        session["answer"] = answer
+        session["owner_at"] = now
+        session["answered_at"] = now
+        self._write_sessions(sessions)
+        return True
+
+    def open_questions(self) -> list[dict[str, Any]]:
+        """Questions asked and not yet answered, oldest first."""
+        now = self.clock()
+        open_: list[dict[str, Any]] = []
+        for topic, session in self._read_sessions().items():
+            if not isinstance(session, dict) or session.get("answered_at"):
+                continue
+            asked = _parse_time(session.get("asked_at"))
+            if asked is None:
+                continue
+            open_.append(
+                {
+                    "topic": topic,
+                    "asked_at": session["asked_at"],
+                    "age_days": round((now - asked).total_seconds() / 86400, 1),
+                    "text": str(session.get("question_text") or ""),
+                }
+            )
+        open_.sort(key=lambda q: q["asked_at"])
+        return open_
+
+    @staticmethod
+    def _record_question(session: dict, ts: str, text: str, now: datetime) -> None:
+        session["asked_at"] = _iso(now)
+        session["question_ts"] = ts
+        session["question_text"] = _excerpt(text, QUESTION_EXCERPT_CHARS)
+        for key in ("answered_at", "answer", "button_answered_ts"):
+            session.pop(key, None)
+
+    def _is_stale(self, session: dict, now: datetime) -> bool:
+        """Whether a thread's newest activity is older than ``stale_thread_s``.
+
+        Newest of: the bot's last post, Filip's last message, and the thread
+        root's own ts (Slack's epoch seconds) -- the last being all a session
+        written before this policy has, which is what makes those old Sep/Oct
+        threads count as stale straight away rather than after a fresh post
+        has reset them.
+        """
+        moments = [_parse_time(session.get(k)) for k in ("last_at", "owner_at")]
+        latest = max((m.timestamp() for m in moments if m is not None), default=None)
+        try:
+            root = float(session.get("thread_ts") or 0)
+        except (TypeError, ValueError):
+            root = 0.0
+        latest = max(latest or 0.0, root)
+        return latest > 0 and now.timestamp() - latest > self.stale_thread_s
 
     # -- topic routing ---------------------------------------------------
 
@@ -540,26 +967,47 @@ class SlackOut:
                 await self.sleep(backoff)
         raise last  # type: ignore[misc]
 
-    def _enqueue(self, topic: str, text: str, blocks: list[dict] | None = None) -> None:
-        """Write one queued post under a name that cannot collide.
+    def _enqueue(
+        self,
+        topic: str,
+        text: str,
+        blocks: list[dict] | None = None,
+        *,
+        question: bool = False,
+    ) -> None:
+        item: dict = {"topic": topic, "text": text}
+        if blocks is not None:
+            item["blocks"] = blocks
+        if question:
+            # So the flush that finally delivers it still opens the question.
+            item["question"] = True
+        self._write_item(self.queue_dir, item)
+
+    def _write_item(self, directory: Path, item: dict) -> None:
+        """Write one queued/held post under a name that cannot collide.
 
         The clock alone is not unique: it can be frozen or coarse, and two posts
         in the same second (or a re-queue during a flush) would otherwise
         overwrite each other and silently drop a message. The counter suffix
         keeps the timestamp ordering that ``flush_queue`` sorts on.
         """
-        self.queue_dir.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
         stamp = self.clock().strftime("%Y%m%dT%H%M%S%f")
         counter = 0
         while True:
-            path = self.queue_dir / f"{stamp}-{counter}.json"
+            path = directory / f"{stamp}-{counter}.json"
             if not path.exists():
                 break
             counter += 1
-        item: dict = {"topic": topic, "text": text}
-        if blocks is not None:
-            item["blocks"] = blocks
         _atomic_write(path, json.dumps(item))
+
+    @staticmethod
+    def _read_item(path: Path) -> dict | None:
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return item if isinstance(item, dict) else None
 
     def _drop_newest_queued(self) -> None:
         """Remove the copy ``_send`` just enqueued, keeping the original."""
@@ -620,6 +1068,8 @@ class SlackIn:
         self.app.event("reaction_added")(self.on_reaction)
         self.app.action(APPROVE_ACTION)(self.on_button)
         self.app.action(REJECT_ACTION)(self.on_button)
+        for action_id in ANSWER_ACTIONS:
+            self.app.action(action_id)(self.on_button)
         self.app.event("agent_session_stopped")(self.on_session_stopped)
         # Subscribed to because Slack sends them; handled only so Bolt stops
         # logging "unhandled request" for events we deliberately ignore.
@@ -674,6 +1124,10 @@ class SlackIn:
             self.out.bind_chat(channel=str(event.get("channel") or ""), thread_ts=thread_ts)
             if topic is None:
                 topic = CHAT_TOPIC
+            # Filip spoke in this thread: it is not stale, an edit of the
+            # bot's last message would now rewrite what he is replying to,
+            # and any question the topic had open has its answer.
+            self.out.note_owner_message(topic)
         log.info("[slack] note from filip (%d chars, topic=%s)", len(body), topic)
         if topic is not None:
             body = f"topic: {topic}\n{body}"
@@ -702,7 +1156,7 @@ class SlackIn:
             self.wake("brain")
 
     async def on_button(self, body: dict, ack: Ack = None) -> None:
-        """An Approve/Reject button click.
+        """An Approve/Reject button click, or a Yes/No answer to a question.
 
         Bolt hands ``action`` handlers the whole interaction payload, not an
         ``event`` -- the clicked button (and its ``value``, the proposal id)
@@ -721,11 +1175,49 @@ class SlackIn:
             return
         action_id = str(actions[0].get("action_id", ""))
         message_ts = str(body.get("message", {}).get("ts", ""))
+        if action_id in ANSWER_ACTIONS:
+            await self._on_answer(body, actions[0], ANSWER_ACTIONS[action_id])
+            return
         proposal = await self.approvals.on_button(message_ts, action_id)
         if proposal is not None:
             channel = str(body.get("channel", {}).get("id", ""))
             await self._resolve_message(channel, message_ts, proposal)
             self.wake("brain")
+
+    async def _on_answer(self, body: dict, action: dict, answer: str) -> None:
+        """A Yes/No click: the same note a typed reply in the thread would be.
+
+        The note is shaped exactly like ``on_message``'s for a threaded
+        message -- ``topic: <name>`` then the body -- so ``owed_replies`` owes
+        the topic a reply and the brain reads it like anything else Filip
+        says. The topic comes from the button's ``value`` (``question_blocks``
+        sets it), falling back to the thread the message sits in.
+
+        Note and wake first, the message edit after: the edit is decoration,
+        and a Slack hiccup on it must not cost the brain the answer.
+        """
+        message = body.get("message") or {}
+        message_ts = str(message.get("ts") or "")
+        channel = str((body.get("channel") or {}).get("id") or "")
+        topic = str(action.get("value") or "")
+        if topic not in self.out.sessions():
+            topic = (
+                self.out.topic_for_thread(str(message.get("thread_ts") or message_ts))
+                or CHAT_TOPIC
+            )
+        if not self.out.mark_answered(topic, message_ts, answer):
+            log.info("[slack] duplicate %s answer on %s ignored", answer, topic)
+            return
+        log.info("[slack] button answer from filip (%s, topic=%s)", answer, topic)
+        if message_ts and channel:
+            await self.out.mark_pending(topic, channel, message_ts)
+        self.brain.drop_note(NOTE_SENDER, f"topic: {topic}\nAnswer: {answer}")
+        self.wake("brain")
+        if message_ts and channel:
+            original = str(message.get("text") or "").strip()
+            verdict = "✅ yes" if answer == "yes" else "❌ no"
+            text = f"{original}\n\n*Answer:* {verdict}" if original else f"*Answer:* {verdict}"
+            await self.out.mark_resolved(channel, message_ts, text)
 
     async def on_session_stopped(self, event: dict, ack: Ack = None) -> None:
         await _ack(ack)
@@ -798,7 +1290,14 @@ async def start_slack(
     # middleware has nothing to verify -- and demands a signing secret we have
     # no reason to hold.
     app = bolt_app.AsyncApp(token=settings.slack_bot_token, request_verification_enabled=False)
-    out = SlackOut(app.client, settings.slack_user_id, brain, now_utc)
+    out = SlackOut(
+        app.client,
+        settings.slack_user_id,
+        brain,
+        now_utc,
+        stale_thread_h=settings.slack_stale_thread_h,
+        quiet_hours=settings.slack_quiet_hours,
+    )
     SlackIn(app, brain, approvals, out, wake, settings.slack_user_id).register()
     approvals.on_message = out.post
     return out, bolt_socket.AsyncSocketModeHandler(app, settings.slack_app_token)
