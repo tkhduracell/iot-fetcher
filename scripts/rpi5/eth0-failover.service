@@ -1,0 +1,13 @@
+[Unit]
+Description=eth0-first network failover (Wi-Fi only when eth0 is down)
+After=NetworkManager.service
+Requires=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/eth0-failover.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
