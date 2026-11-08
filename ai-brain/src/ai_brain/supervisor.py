@@ -41,8 +41,15 @@ from ai_brain.loop import AgentLoop
 from ai_brain.memory import MemoryDir
 from ai_brain.metrics import MetricsWriter, render
 from ai_brain.repo import RepoSnapshot
+from ai_brain.settled import (
+    SETTLED_CHECK_SENDER,
+    SettledRegistry,
+    reopened_note,
+    vm_evidence,
+)
 from ai_brain.tools import ToolContext, ToolRegistry
 from ai_brain.tools.backend import register_backend_tools
+from ai_brain.tools.http import request
 from ai_brain.tools.memory_tools import register_memory_tools
 from ai_brain.tools.propose import register_propose_tool
 from ai_brain.tools.slack_tools import register_slack_tools
@@ -57,6 +64,7 @@ EXPIRE_EVERY_S = 600
 DAY_ROLL_EVERY_S = 60
 NEW_DAY_NOTE = "new day, budget restored"
 LEDGER_SENDER = "ledger"
+SETTLED_CHECK_EVERY_S = 3600
 FLUSH_EVERY_S = 300
 # Hourly: a changeover reminder needs hour resolution, the calendar changes rarely.
 AIRBNB_EVERY_S = 3600
@@ -217,6 +225,7 @@ def build(
     approvals.recover_stale()
 
     loops: dict[str, AgentLoop] = {}
+    settled = SettledRegistry(memories["brain"].root, dt_clock)
 
     def wake(name: str) -> None:
         loop = loops.get(name)
@@ -247,6 +256,7 @@ def build(
                 "loops": loops,
                 "chain": chain,
                 "repo": repo,
+                "settled": settled,
             },
         )
         loops[name] = AgentLoop(
@@ -268,6 +278,7 @@ def build(
             call_timeout_s=settings.call_timeout_s,
             events=events,
             min_wake_gap_s=settings.brain_min_wake_gap_s if is_brain else 0,
+            note_batch_s=settings.brain_note_batch_s if is_brain else 0,
             session_retention_days=settings.session_retention_days,
             session_max_mb=settings.session_max_mb,
             resume_max_age_s=settings.resume_max_age_s,
@@ -328,6 +339,32 @@ def day_roll_watcher(system: System) -> Callable[[], Awaitable[None]]:
         log.info("quota day rolled to %s; brain notified", today)
 
     return watch
+
+
+def settled_check_watcher(system: System) -> Callable[[], Awaitable[None]]:
+    """Re-test settled topics' evidence; reopen and tell the brain on failure.
+
+    Runs hourly; the registry itself decides what is due (weekly per topic),
+    so a restart never re-checks everything at once nor skips a week.
+    """
+    brain = system.loops["brain"]
+    settled = brain.ctx.extras["settled"]
+
+    async def request_fn(method: str, url: str, **kwargs):
+        return await request(brain.ctx, method, url, **kwargs)
+
+    evidence = vm_evidence(request_fn, system.settings.vm_url, system.settings.influx_token)
+
+    async def check() -> None:
+        lines = await settled.check(evidence)
+        if lines:
+            system.memories["brain"].drop_note(
+                SETTLED_CHECK_SENDER, reopened_note(lines), topic="settled-check", level="urgent"
+            )
+            system.wake("brain")
+            log.info("settled check reopened %d topic(s)", len(lines))
+
+    return check
 
 
 def repo_refresh_watcher(system: System) -> Callable[[], Awaitable[None]]:
@@ -408,6 +445,7 @@ async def run(settings: Settings) -> None:
     expire_proposals = expiry_watcher(system)
     watch_day_roll = day_roll_watcher(system)
     refresh_repo = repo_refresh_watcher(system)
+    check_settled = settled_check_watcher(system)
 
     finders = getattr(system.chain, "lan_finders", [])
     if finders:
@@ -438,6 +476,7 @@ async def run(settings: Settings) -> None:
         )
     tasks.append(asyncio.create_task(_every(METRICS_EVERY_S, publish_metrics)))
     tasks.append(asyncio.create_task(_every(EXPIRE_EVERY_S, expire_proposals)))
+    tasks.append(asyncio.create_task(_every(SETTLED_CHECK_EVERY_S, check_settled)))
     tasks.append(asyncio.create_task(_every(DAY_ROLL_EVERY_S, watch_day_roll)))
     tasks.append(
         asyncio.create_task(_every(settings.repo_refresh_h * 3600, refresh_repo))
