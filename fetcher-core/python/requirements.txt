@@ -88,7 +88,7 @@ ngenicpy==0.5.2
     # via iot-fetcher (pyproject.toml)
 passlib==1.7.4
     # via plugp100
-plugp100==6.0.1
+plugp100==6.0.2
     # via iot-fetcher (pyproject.toml)
 propcache==0.5.4
     # via
