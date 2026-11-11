@@ -1,7 +1,7 @@
 IMAGE := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/watchdog:latest
 
 build:
-	docker build -t $(IMAGE) .
+	docker build -t $(IMAGE) -f Dockerfile ..
 
 push: build
 	gcloud auth configure-docker europe-docker.pkg.dev

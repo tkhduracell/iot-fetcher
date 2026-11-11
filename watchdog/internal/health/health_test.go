@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tkhduracell/iot-fetcher/influxmetrics"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/dockerx"
-	"github.com/tkhduracell/iot-fetcher/watchdog/internal/metrics"
 )
 
 type fakeDocker struct {

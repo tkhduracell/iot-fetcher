@@ -1,7 +1,7 @@
 // Package metrics writes InfluxDB line-protocol points to VictoriaMetrics /
-// InfluxDB v3 Cloud. The endpoint shape mirrors pool-pump-planner/influx.go
-// (POST /api/v2/write, Authorization: Token …) so both Go services hit the
-// same surface.
+// InfluxDB v3 Cloud (POST /api/v2/write, Authorization: Token …). It is the
+// single shared implementation used by watchdog, sigenergy-bridge and
+// pool-pump-planner (the latter only uses Point and its LineProtocol encoder).
 package metrics
 
 import (
@@ -10,9 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,9 +34,9 @@ func NewPoint(m string) *Point {
 	}
 }
 
-func (p *Point) Tag(k, v string) *Point        { p.Tags[k] = v; return p }
-func (p *Point) Field(k string, v any) *Point  { p.Fields[k] = v; return p }
-func (p *Point) At(t time.Time) *Point         { p.Time = t; return p }
+func (p *Point) Tag(k, v string) *Point       { p.Tags[k] = v; return p }
+func (p *Point) Field(k string, v any) *Point { p.Fields[k] = v; return p }
+func (p *Point) At(t time.Time) *Point        { p.Time = t; return p }
 
 // LineProtocol serialises a point to a single line of Influx line protocol
 // with second precision. Exported so tests can golden-file compare.
@@ -90,21 +91,11 @@ func encodeField(v any) string {
 }
 
 func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }
 
 func sortedAnyKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }
 
 func escapeMeasurement(s string) string {
@@ -152,11 +143,11 @@ const maxWriteAttempts = 3
 var writeRetryBackoff = 500 * time.Millisecond
 
 // maxWriteDuration caps the total wall-clock a single Write (all attempts and
-// backoffs) may consume. Write runs synchronously on the controller's single
-// select loop, so an unbounded retry against a hung VM would freeze clamp/
-// unclamp handling. Kept well below the default 60s poll interval so a metrics
-// outage can never outlast one poll cycle. Package-level so tests can shorten
-// it.
+// backoffs) may consume. Write runs synchronously on the caller's single
+// select loop (watchdog health checks, sigenergy-bridge clamp/unclamp
+// handling), so an unbounded retry against a hung VM would stall it. Kept
+// well below the callers' default 30s/60s poll intervals so a metrics outage
+// can never outlast one cycle. Package-level so tests can shorten it.
 var maxWriteDuration = 15 * time.Second
 
 // statusError carries a non-2xx HTTP response so the retry logic can tell a
@@ -255,3 +246,8 @@ func isRetryableWriteErr(err error) bool {
 	}
 	return true
 }
+
+// Nop discards points; used when no INFLUX_HOST is configured.
+type Nop struct{}
+
+func (Nop) Write(context.Context, []*Point) error { return nil }

@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'pool-pump-planner/**'
+      - 'influxmetrics/**'
       - '.github/workflows/build-pool-pump-planner.yml'
 
   pull_request:
@@ -13,6 +14,7 @@ on:
       - main
     paths:
       - 'pool-pump-planner/**'
+      - 'influxmetrics/**'
       - '.github/workflows/build-pool-pump-planner.yml'
 
 jobs:
@@ -26,6 +28,14 @@ jobs:
       with:
         go-version-file: ./pool-pump-planner/go.mod
         cache: false
+
+    - name: Go vet (influxmetrics)
+      working-directory: ./influxmetrics
+      run: go vet ./...
+
+    - name: Go test (influxmetrics)
+      working-directory: ./influxmetrics
+      run: go test ./...
 
     - name: Go vet
       working-directory: ./pool-pump-planner
@@ -72,7 +82,8 @@ jobs:
       uses: docker/build-push-action@v7
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
-        context: ./pool-pump-planner/
+        context: .
+        file: ./pool-pump-planner/Dockerfile
         platforms: linux/arm64
         push: true
         tags: europe-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/images/pool-pump-planner:latest
@@ -83,7 +94,8 @@ jobs:
       uses: docker/build-push-action@v7
       if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
       with:
-        context: ./pool-pump-planner/
+        context: .
+        file: ./pool-pump-planner/Dockerfile
         platforms: linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max

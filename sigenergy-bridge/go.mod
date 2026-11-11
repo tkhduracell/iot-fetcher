@@ -8,3 +8,7 @@ require (
 )
 
 require github.com/goburrow/serial v0.1.0 // indirect
+
+require github.com/tkhduracell/iot-fetcher/influxmetrics v0.0.0
+
+replace github.com/tkhduracell/iot-fetcher/influxmetrics => ../influxmetrics
