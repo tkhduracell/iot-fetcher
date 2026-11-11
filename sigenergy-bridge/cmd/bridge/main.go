@@ -8,10 +8,10 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/tkhduracell/iot-fetcher/influxmetrics"
 	"github.com/tkhduracell/iot-fetcher/sigenergy-bridge/internal/config"
 	"github.com/tkhduracell/iot-fetcher/sigenergy-bridge/internal/controller"
 	"github.com/tkhduracell/iot-fetcher/sigenergy-bridge/internal/ha"
-	"github.com/tkhduracell/iot-fetcher/sigenergy-bridge/internal/metrics"
 	"github.com/tkhduracell/iot-fetcher/sigenergy-bridge/internal/modbus"
 )
 

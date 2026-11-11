@@ -8,4 +8,6 @@ services:
     build: ./ai-assistant
 
   pool-pump-planner:
-    build: ./pool-pump-planner
+    build:
+      context: .
+      dockerfile: pool-pump-planner/Dockerfile

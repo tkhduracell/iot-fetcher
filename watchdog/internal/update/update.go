@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tkhduracell/iot-fetcher/influxmetrics"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/dockerx"
-	"github.com/tkhduracell/iot-fetcher/watchdog/internal/metrics"
 )
 
 type Updater struct {
