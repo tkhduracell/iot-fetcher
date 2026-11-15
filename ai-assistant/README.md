@@ -11,7 +11,7 @@ Home automation AI assistant powered by the Claude Agent SDK with MCP tools for 
 gcloud auth login
 
 # Set your project
-gcloud config set project filiplindqvist-com-ea66d
+gcloud config set project "$GCP_PROJECT_ID"
 
 # Create the OAuth consent screen (first time only)
 # Go to: https://console.cloud.google.com/apis/credentials/consent

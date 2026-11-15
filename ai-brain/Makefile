@@ -1,4 +1,4 @@
-IMAGE_NAME := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-brain:latest
+IMAGE_NAME := europe-docker.pkg.dev/$(GCP_PROJECT_ID)/images/ai-brain:latest
 
 .PHONY: build push test dev report
 

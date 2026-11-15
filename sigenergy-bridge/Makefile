@@ -1,4 +1,4 @@
-IMAGE := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/sigenergy-bridge:latest
+IMAGE := europe-docker.pkg.dev/$(GCP_PROJECT_ID)/images/sigenergy-bridge:latest
 
 build:
 	docker build -t $(IMAGE) .
