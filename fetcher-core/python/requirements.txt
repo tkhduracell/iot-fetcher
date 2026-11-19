@@ -80,7 +80,7 @@ jsons==1.6.3
     # via plugp100
 macaddress==2.0.2
     # via tplinkrouterc6u
-multidict==6.7.1
+multidict==7.2.1
     # via
     #   aiohttp
     #   yarl
