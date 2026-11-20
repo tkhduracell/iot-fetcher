@@ -33,5 +33,9 @@
     "postcss": "^8.5.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.8.0"
+  },
+  "overrides": {
+    "mariadb": "^3.5.5",
+    "mysql2": "^3.24.6"
   }
 }
