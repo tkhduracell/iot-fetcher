@@ -1,4 +1,4 @@
-IMAGE := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/pool-pump-planner:latest
+IMAGE := europe-docker.pkg.dev/$(GCP_PROJECT_ID)/images/pool-pump-planner:latest
 
 build:
 	docker build -t $(IMAGE) .

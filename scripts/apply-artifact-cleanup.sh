@@ -3,7 +3,7 @@
 # Pass --no-dry-run as the first argument to activate deletions; default is dry-run (preview).
 set -euo pipefail
 
-PROJECT="filiplindqvist-com-ea66d"
+PROJECT="${GCP_PROJECT_ID:?set GCP_PROJECT_ID}"
 LOCATION="europe"
 REPO="images"
 

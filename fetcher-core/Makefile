@@ -1,9 +1,9 @@
 build:
-	docker build -t europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest .
+	docker build -t europe-docker.pkg.dev/$(GCP_PROJECT_ID)/images/iot-fetcher:latest .
 
 push: build
 	gcloud auth configure-docker europe-docker.pkg.dev
-	docker push europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
+	docker push europe-docker.pkg.dev/$(GCP_PROJECT_ID)/images/iot-fetcher:latest
 
 run-webui:
 	@echo "\nStarting Next.js webui on port 3000...\n"

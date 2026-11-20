@@ -41,7 +41,7 @@ services:
       - database
 
   https-proxy:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/https-proxy:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/https-proxy:latest
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -59,7 +59,7 @@ services:
       - "wud.watch.digest=true"
 
   ai-assistant:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-assistant:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/ai-assistant:latest
     hostname: ai-assistant
     restart: unless-stopped
     extra_hosts:
@@ -73,7 +73,7 @@ services:
       - "wud.watch.digest=true"
 
   iot-fetcher:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/iot-fetcher:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/iot-fetcher:latest
     restart: unless-stopped
     environment:
       - TZ=Europe/Stockholm
@@ -89,7 +89,7 @@ services:
       - "wud.watch.digest=true"
 
   pool-pump-planner:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/pool-pump-planner:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/pool-pump-planner:latest
     restart: unless-stopped
     environment:
       - TZ=Europe/Stockholm
@@ -100,7 +100,7 @@ services:
       - "wud.watch.digest=true"
 
   sigenergy-bridge:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/sigenergy-bridge:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/sigenergy-bridge:latest
     restart: unless-stopped
     network_mode: host
     depends_on:
@@ -111,7 +111,7 @@ services:
       - "wud.watch.digest=true"
 
   gdrive-rag:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/gdrive-rag:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/gdrive-rag:latest
     hostname: gdrive-rag
     restart: unless-stopped
     volumes:
@@ -123,7 +123,7 @@ services:
       - "wud.watch.digest=true"
 
   ai-brain:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-brain:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/ai-brain:latest
     hostname: ai-brain
     restart: unless-stopped
     environment:
@@ -192,7 +192,7 @@ services:
       - "wud.watch.digest=true"
 
   garmin-influx-bridge:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/garmin-fetch:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/garmin-fetch:latest
     restart: unless-stopped
     volumes:
       - garmin-tokens:/home/appuser/.garminconnect
@@ -222,7 +222,7 @@ services:
       - TZ=Europe/Stockholm
 
   watchdog:
-    image: europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/watchdog:latest
+    image: europe-docker.pkg.dev/${GCP_PROJECT_ID:?set GCP_PROJECT_ID in .env}/images/watchdog:latest
     restart: unless-stopped
     network_mode: host
     volumes:

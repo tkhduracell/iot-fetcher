@@ -1,4 +1,4 @@
-IMAGE_NAME := europe-docker.pkg.dev/filiplindqvist-com-ea66d/images/ai-assistant:latest
+IMAGE_NAME := europe-docker.pkg.dev/$(GCP_PROJECT_ID)/images/ai-assistant:latest
 
 .PHONY: build push run dev
 
