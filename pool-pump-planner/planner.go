@@ -5,6 +5,8 @@ import (
 	"log"
 	"math"
 	"time"
+
+	"github.com/tkhduracell/iot-fetcher/influxmetrics"
 )
 
 type planStats struct {
@@ -353,17 +355,17 @@ func solve(cfg *Config, slots []time.Time, prices, solar []float64, targetHours 
 // 96 slot points plus a single summary point. Pure — no IO — so tests can
 // assert the tag/field shape directly.
 func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar, solarRaw []float64, stats planStats,
-	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) []*Point {
-	applyTags := func(p *Point) *Point {
+	waterTemp float64, waterOK bool, targetHours int, mode, missing string, extraTags map[string]string) []*metrics.Point {
+	applyTags := func(p *metrics.Point) *metrics.Point {
 		for k, v := range extraTags {
 			p.Tag(k, v)
 		}
 		return p
 	}
 
-	points := make([]*Point, 0, len(slots)+1)
+	points := make([]*metrics.Point, 0, len(slots)+1)
 	for t, slot := range slots {
-		p := applyTags(NewPoint("pool_iqpump_plan").
+		p := applyTags(metrics.NewPoint("pool_iqpump_plan").
 			Tag("horizon", "24h").
 			Tag("mode", mode)).
 			Field("on", sch[t]).
@@ -400,7 +402,7 @@ func buildPlanPoints(cfg *Config, slots []time.Time, sch []int, prices, solar, s
 		missingTag = "none"
 	}
 
-	summary := applyTags(NewPoint("pool_iqpump_plan_summary").
+	summary := applyTags(metrics.NewPoint("pool_iqpump_plan_summary").
 		Tag("horizon", "24h").
 		Tag("mode", mode).
 		Tag("missing_inputs", missingTag)).

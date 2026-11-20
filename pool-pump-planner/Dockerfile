@@ -7,10 +7,14 @@ RUN apt-get update \
 
 # Stage 2: build the Go binary
 FROM golang:1.26-bookworm AS build
+# Build context is the repo root (the shared influxmetrics module is a sibling,
+# referenced by a replace directive in go.mod).
 WORKDIR /src
-COPY go.mod ./
+COPY influxmetrics ./influxmetrics
+WORKDIR /src/pool-pump-planner
+COPY pool-pump-planner/go.mod ./
 RUN go mod download
-COPY *.go ./
+COPY pool-pump-planner/*.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/pool-pump-planner .
 
 # Stage 3: final image

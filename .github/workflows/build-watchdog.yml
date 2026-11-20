@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'watchdog/**'
+      - 'influxmetrics/**'
       - '.github/workflows/build-watchdog.yml'
 
   pull_request:
@@ -13,6 +14,7 @@ on:
       - main
     paths:
       - 'watchdog/**'
+      - 'influxmetrics/**'
       - '.github/workflows/build-watchdog.yml'
 
 jobs:
@@ -26,6 +28,14 @@ jobs:
       with:
         go-version-file: ./watchdog/go.mod
         cache: false
+
+    - name: Go vet (influxmetrics)
+      working-directory: ./influxmetrics
+      run: go vet ./...
+
+    - name: Go test (influxmetrics)
+      working-directory: ./influxmetrics
+      run: go test ./...
 
     - name: Go vet
       working-directory: ./watchdog
@@ -72,7 +82,8 @@ jobs:
       uses: docker/build-push-action@v7
       if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       with:
-        context: ./watchdog/
+        context: .
+        file: ./watchdog/Dockerfile
         platforms: linux/arm64
         push: true
         tags: europe-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/images/watchdog:latest
@@ -83,7 +94,8 @@ jobs:
       uses: docker/build-push-action@v7
       if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
       with:
-        context: ./watchdog/
+        context: .
+        file: ./watchdog/Dockerfile
         platforms: linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max

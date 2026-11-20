@@ -16,10 +16,10 @@ import (
 
 	"github.com/distribution/reference"
 
+	"github.com/tkhduracell/iot-fetcher/influxmetrics"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/config"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/dockerx"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/health"
-	"github.com/tkhduracell/iot-fetcher/watchdog/internal/metrics"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/update"
 )
 

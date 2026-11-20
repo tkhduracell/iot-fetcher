@@ -27,3 +27,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 )
+
+require github.com/tkhduracell/iot-fetcher/influxmetrics v0.0.0
+
+replace github.com/tkhduracell/iot-fetcher/influxmetrics => ../influxmetrics

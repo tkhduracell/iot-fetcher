@@ -1,10 +1,14 @@
 # Stage 1: build the Go binary
 FROM golang:1.26-bookworm AS build
+# Build context is the repo root (the shared influxmetrics module is a sibling,
+# referenced by a replace directive in go.mod).
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY influxmetrics ./influxmetrics
+WORKDIR /src/sigenergy-bridge
+COPY sigenergy-bridge/go.mod sigenergy-bridge/go.sum ./
 RUN go mod download
-COPY cmd ./cmd
-COPY internal ./internal
+COPY sigenergy-bridge/cmd ./cmd
+COPY sigenergy-bridge/internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/sigenergy-bridge ./cmd/bridge
 
 # Stage 2: minimal runtime

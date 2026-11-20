@@ -11,8 +11,8 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/tkhduracell/iot-fetcher/influxmetrics"
 	"github.com/tkhduracell/iot-fetcher/watchdog/internal/dockerx"
-	"github.com/tkhduracell/iot-fetcher/watchdog/internal/metrics"
 )
 
 type fakeDocker struct {
