@@ -35,7 +35,7 @@ from mcp.client.sse import sse_client
 
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
-from ai_brain.tools.http import stream_tail
+from ai_brain.tools.http import newest_lines_within, stream_tail
 
 HA_LOOPS = frozenset({"brain", "house-ops"})
 
@@ -59,6 +59,9 @@ LOG_TAIL_BYTES = 256 * 1024
 DEFAULT_LOG_LINES = 50
 MAX_LOG_LINES = 200
 MAX_LOG_CONTEXT = 10
+# Same budget and reason as docker_logs: trim the old end here, before the
+# loop's head-keeping cap can drop the newest lines.
+LOG_RESULT_CHARS = 12_000
 
 # What grep prints between two non-adjacent hunks, and for the same reason: a
 # reader must be able to tell "the next line" from "somewhere further down".
@@ -193,6 +196,7 @@ async def _ha_error_log(ctx: ToolContext, args: dict) -> str:
     else:
         matched = len(lines)
         kept = lines[-wanted:]
+    kept, dropped = newest_lines_within(kept, LOG_RESULT_CHARS)
 
     return ok(
         {
@@ -203,6 +207,7 @@ async def _ha_error_log(ctx: ToolContext, args: dict) -> str:
             "returned": len(kept),
             "matched": matched,
             "truncated_to_tail": truncated,
+            "older_lines_dropped": dropped,
         }
     )
 

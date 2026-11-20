@@ -145,6 +145,28 @@ async def stream_tail(
     return response, bytes(body), truncated, None
 
 
+def newest_lines_within(lines: list[str], max_chars: int) -> tuple[list[str], int]:
+    """Keep the newest ``lines`` whose joined text fits in ``max_chars``.
+
+    The loop caps every tool result by keeping its *head*, which for a log is
+    the oldest lines -- a 200-line tail of a chatty container is ~30-45k chars,
+    so the cut silently dropped exactly the recent lines being debugged and
+    made a busy log read as a quiet one. A log tool trims itself from the old
+    end first, so the loop's cap never has to. Returns the kept lines and how
+    many older ones were dropped.
+    """
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        cost = len(line) + 1
+        if kept and used + cost > max_chars:
+            break
+        kept.append(line[-max_chars:])
+        used += cost
+    kept.reverse()
+    return kept, len(lines) - len(kept)
+
+
 def decode_json(response: httpx.Response, label: str) -> tuple[Any, str | None]:
     try:
         return response.json(), None

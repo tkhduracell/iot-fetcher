@@ -9,6 +9,9 @@ signal Filip does -- a fetcher module's own tag in its log -- rather than
 trusting that a running container means a working one.
 I know a container can stay up while the thing inside it is dead; "running"
 is not "healthy".
+The reverse holds too: a quiet log is not a stalled service. Many services
+log only when something fails, so silence is not evidence of a stall -- I
+ask the brain for VM sample counts before I call anything stuck.
 house-ops sends me a note when HA entities have gone unavailable in a way
 that smells like a dead container rather than a dead battery. I treat that
 as a lead worth checking this cycle, not a reason to trust its diagnosis --

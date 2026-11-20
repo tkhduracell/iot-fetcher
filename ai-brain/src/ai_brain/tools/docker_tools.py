@@ -15,7 +15,7 @@ from __future__ import annotations
 from ai_brain.docker_api import container_url
 from ai_brain.llm import ToolSpec
 from ai_brain.tools import Tool, ToolContext, ToolRegistry, err, int_arg, ok, wrap_external
-from ai_brain.tools.http import decode_json, request, stream_tail
+from ai_brain.tools.http import decode_json, newest_lines_within, request, stream_tail
 
 DOCKER_LOOPS = frozenset({"brain", "infra"})
 
@@ -28,6 +28,9 @@ SOURCE = "docker"
 LOG_TAIL_BYTES = 256 * 1024
 DEFAULT_LOG_LINES = 50
 MAX_LOG_LINES = 200
+# Under the loop's 16k MAX_TOOL_RESULT_CHARS with room for the JSON and fence,
+# so the loop's head-keeping cut never lands on a log.
+LOG_RESULT_CHARS = 12_000
 
 
 async def _docker_ps(ctx: ToolContext, _args: dict) -> str:
@@ -109,12 +112,15 @@ async def _docker_logs(ctx: ToolContext, args: dict) -> str:
     lines = body.decode("utf-8", "replace").splitlines()
     if truncated and lines:
         lines = lines[1:]
+    kept, dropped = newest_lines_within(lines[-wanted:], LOG_RESULT_CHARS)
 
     return ok(
         {
-            "log": wrap_external(SOURCE, "\n".join(lines[-wanted:])),
-            "returned": len(lines[-wanted:]),
+            "log": wrap_external(SOURCE, "\n".join(kept)),
+            "returned": len(kept),
             "truncated_to_tail": truncated,
+            # Older lines left out to fit the result; the newest are always kept.
+            "older_lines_dropped": dropped,
         }
     )
 

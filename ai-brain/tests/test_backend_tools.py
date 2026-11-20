@@ -1687,3 +1687,34 @@ async def test_one_byte_over_the_cap_is_truncated(ctx):
     assert problem is None
     assert len(body) == 64
     assert truncated is True
+
+
+@respx.mock
+async def test_docker_logs_drops_old_lines_not_new_ones_to_fit(registry, ctx, monkeypatch):
+    # 200 long lines are far over the loop's 16k cap, which keeps the head;
+    # the tool has to trim the old end itself or the newest lines vanish.
+    monkeypatch.setattr("ai_brain.tools.docker_tools.LOG_RESULT_CHARS", 500)
+    log = "".join(f"line {n:03d} " + "x" * 80 + "\n" for n in range(199)) + "the newest line\n"
+    respx.get("http://docker-proxy:2375/containers/iot-fetcher/logs").mock(
+        return_value=httpx.Response(200, text=log)
+    )
+    out = await call(registry, ctx, "docker_logs", container="iot-fetcher", lines=200)
+
+    assert "the newest line" in out["log"]
+    assert "line 000" not in out["log"]
+    assert out["older_lines_dropped"] > 0
+    assert out["returned"] + out["older_lines_dropped"] == 200
+
+
+@respx.mock
+async def test_ha_error_log_drops_old_lines_not_new_ones_to_fit(registry, ctx, monkeypatch):
+    monkeypatch.setattr("ai_brain.tools.ha.LOG_RESULT_CHARS", 500)
+    log = "".join(f"line {n:03d} " + "x" * 80 + "\n" for n in range(199)) + "the newest line\n"
+    respx.get("http://ha:8123/api/error_log").mock(
+        return_value=httpx.Response(200, text=log)
+    )
+    out = await call(registry, ctx, "ha_error_log", lines=200)
+
+    assert "the newest line" in out["log"]
+    assert "line 000" not in out["log"]
+    assert out["older_lines_dropped"] > 0
