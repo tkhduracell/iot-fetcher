@@ -3,6 +3,7 @@ import { poolpumpInaktiv } from './poolpump-inaktiv.ts';
 import { energiPerFas } from './energi-per-fas.ts';
 import { deltaTVarmevaxlaren } from './delta-t-varmevaxlaren.ts';
 import { volvoMetricsStale } from './volvo-metrics-stale.ts';
+import { sigenergyStale } from './sigenergy-stale.ts';
 
 const FOLDER_UID_FALLBACK = 'beveqmuomx5hcd';
 
@@ -12,7 +13,7 @@ const FOLDER_UID_FALLBACK = 'beveqmuomx5hcd';
  * inside a group share an evaluation cadence — see GROUP_INTERVAL.
  */
 export function buildAlerts(folderUID = FOLDER_UID_FALLBACK): alerting.RuleGroup[] {
-  const rules = [poolpumpInaktiv(), energiPerFas(), deltaTVarmevaxlaren(), volvoMetricsStale()];
+  const rules = [poolpumpInaktiv(), energiPerFas(), deltaTVarmevaxlaren(), volvoMetricsStale(), sigenergyStale()];
 
   // Stamp the resolved folder UID onto each rule. The Foundation SDK
   // requires it on Rule (it's part of the persisted shape), even though
