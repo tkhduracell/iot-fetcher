@@ -143,6 +143,7 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `BRAIN_HEARTBEAT_MIN` | `240` | Minutes between brain cycles. The brain reflects on the experts rather than watching the house, so it wakes rarely. |
 | `EXPERT_HEARTBEAT_MIN` | `120` | Minutes between each expert's cycles. |
 | `BRAIN_MIN_WAKE_GAP_MIN` | `30` | Least minutes from the end of one brain cycle to the start of one rung by an expert's `send_note` or the ledger. The note waits unread in the inbox until then. Notes from Filip (Slack, MCP) and from approvals still wake the brain at once. `0` turns the gate off. |
+| `BRAIN_NOTE_BATCH_MIN` | `120` | Least minutes from the end of one brain cycle to the start of one rung by an expert note that is not `urgent`. A `finding` waits here so several become one cycle; an `urgent` note waits only `BRAIN_MIN_WAKE_GAP_MIN`; an `fyi` note does not ring at all. `0` falls back to `BRAIN_MIN_WAKE_GAP_MIN`. See [Settled topics](#settled-topics). |
 | `VM_URL` | `http://database-auth:8427` | VictoriaMetrics through vmauth. |
 | `INFLUX_TOKEN` | — | Bearer token for VM reads and for writing its own metrics. |
 | `HA_URL` | `http://192.168.68.87:8123` | Home Assistant base URL. |
@@ -424,6 +425,32 @@ budget rather than the round cap. Once the budget has stopped a cycle the stop
 is sticky for the rest of it: a later round answered by a model whose own
 `CYCLE_MAX_ROUNDS_BY_MODEL` entry would otherwise raise the cap cannot undo
 it.
+
+## Settled topics
+
+`brain/settled.json` is what the brain has decided, as records the harness can
+act on rather than prose in `goals.md`. Each entry has a `topic` slug, a one-line
+`claim`, and optional `evidence`: a PromQL expression that returns non-zero for
+as long as the claim holds. The brain edits it with `settle_topic` /
+`unsettle_topic`; every loop can `list_settled`.
+
+- **Notes on a settled topic are held back.** An expert's `send_note` to the
+  brain must carry a `topic`. On a settled topic (or a more specific variant of
+  one, such as a dated slug) the note is not delivered unless its `level` is
+  `urgent`, and the sender is told why. The entry counts how many were held.
+- **Levels batch the brain's wakes.** `urgent` rings after
+  `BRAIN_MIN_WAKE_GAP_MIN`, `finding` after `BRAIN_NOTE_BATCH_MIN`, and `fyi`
+  waits for the next heartbeat. Notes from Filip and approvals still start a
+  cycle at once.
+- **Evidence is re-checked weekly.** An hourly watcher re-runs each topic's
+  query once it is 7 days since the last check. Empty or all-zero reopens the
+  topic and sends the brain an urgent note. VM being unreachable changes
+  nothing. A topic settled without evidence is an assumption, which expires
+  after 30 days.
+
+Why: in the week of 2026-11-01, a third of the brain's Opus cycles were one
+round of "this is settled", woken by re-reports. And "nightly restarts normal"
+stayed settled although no nightly restart exists.
 
 ## Approvals
 

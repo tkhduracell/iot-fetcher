@@ -714,6 +714,7 @@ class AgentLoop:
         call_timeout_s: int = 60,
         events: EventBus | None = None,
         min_wake_gap_s: int = 0,
+        note_batch_s: int = 0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         session_retention_days: int = 30,
         session_max_mb: int = 200,
@@ -762,6 +763,7 @@ class AgentLoop:
         # See _wake_hold_s. 0 (the default, and every expert) means a ring
         # always starts a cycle at once.
         self.min_wake_gap_s = max(0, int(min_wake_gap_s))
+        self.note_batch_s = max(0, int(note_batch_s))
         self.last_cycle: CycleResult | None = None
         self.last_cycle_at: float = 0.0
         self.cycle_counts: dict[str, int] = {}
@@ -1573,14 +1575,22 @@ class AgentLoop:
         caller, decides: the senders of what is actually unread are the
         truth, and no call site has to remember to say how urgent it is.
         """
-        if self.min_wake_gap_s <= 0 or self.memory is None:
+        if self.memory is None:
             return 0.0
-        left = self.last_cycle_at + self.min_wake_gap_s - self.clock()
-        if left <= 0:
+        unread = self.memory.unread_notes()
+        if any(n.sender in URGENT_SENDERS for n in unread):
             return 0.0
-        if any(n.sender in URGENT_SENDERS for n in self.memory.unread_notes()):
+        # An expert's urgent note waits out only the short gap; anything else
+        # waits for the batch window, so a stream of findings becomes one cycle
+        # reading them together rather than one Opus cycle per note (a third
+        # of the brain's cycles in the week of 2026-11-01 were one round of
+        # "noted, settled, no action").
+        urgent = any(n.level == "urgent" for n in unread)
+        gap = self.min_wake_gap_s if urgent else max(self.min_wake_gap_s, self.note_batch_s)
+        if gap <= 0:
             return 0.0
-        return left
+        left = self.last_cycle_at + gap - self.clock()
+        return max(0.0, left)
 
     # -- internals -----------------------------------------------------
 

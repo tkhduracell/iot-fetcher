@@ -44,7 +44,12 @@ def test_expert_sees_fewer_tools_than_brain(registry):
     brain = {s.name for s in registry.specs_for("brain")}
     expert = {s.name for s in registry.specs_for("energy")}
     assert {"rewrite_goals", "rewrite_identity"} <= brain
-    assert brain - expert == {"rewrite_goals", "rewrite_identity"}
+    assert brain - expert == {
+        "rewrite_goals",
+        "rewrite_identity",
+        "settle_topic",
+        "unsettle_topic",
+    }
     shared = {
         "append_journal",
         "write_fact",

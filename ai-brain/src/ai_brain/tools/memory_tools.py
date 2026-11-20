@@ -13,7 +13,10 @@ import re
 
 from ai_brain import identity
 from ai_brain.llm import ToolSpec
+from ai_brain.errors import BadInput
+from ai_brain.memory import NOTE_LEVELS
 from ai_brain.provenance import carry_tag
+from ai_brain.settled import topic_slug
 from ai_brain.sessions import (
     MAX_READ_EVENTS,
     MAX_SEARCH_LIMIT,
@@ -189,9 +192,85 @@ async def _send_note(ctx: ToolContext, args: dict) -> str:
     if target is None:
         known = ", ".join(sorted(ctx.memories))
         return err(f"unknown loop: {to} (known: {known})")
-    target.drop_note(ctx.loop, str(args["body"]))
-    ctx.wake(to)
-    return ok({"sent_to": to})
+    level = str(args.get("level") or "finding").lower()
+    if level not in NOTE_LEVELS:
+        return err(f"level must be one of {', '.join(NOTE_LEVELS)}")
+    topic = topic_slug(args.get("topic") or "")
+    settled = ctx.extras.get("settled")
+    if to == "brain" and ctx.loop != "brain" and settled is not None:
+        if not topic:
+            return err(
+                "a note to the brain needs a 'topic' (a short slug like "
+                "'sigen-night-grid-charge'); call list_settled first -- a note on a "
+                "settled topic is only delivered when it is urgent"
+            )
+        entry = settled.match(topic)
+        if entry is not None and level != "urgent":
+            # Held back, not lost: the sender reads why, and the count shows the
+            # brain how often a settled topic is still being re-reported.
+            settled.count_suppressed(entry.topic)
+            return ok(
+                {
+                    "delivered": False,
+                    "reason": (
+                        f"'{entry.topic}' is settled: {entry.claim} -- not delivered. "
+                        "Send it again with level=urgent only if the settled pattern "
+                        "has broken, and say what changed."
+                    ),
+                }
+            )
+    target.drop_note(ctx.loop, str(args["body"]), topic=topic, level=level)
+    # fyi waits for the receiver's own next wake; the rest ring, and the
+    # receiver's gate (AgentLoop._wake_hold_s) decides how soon that starts a cycle.
+    if level != "fyi":
+        ctx.wake(to)
+    return ok({"sent_to": to, "delivered": True, "level": level})
+
+
+def _settled(ctx: ToolContext):
+    settled = ctx.extras.get("settled")
+    if settled is None:
+        raise BadInput("settled topics are not available in this process")
+    return settled
+
+
+async def _list_settled(ctx: ToolContext, args: dict) -> str:
+    return ok(
+        {
+            "settled": [
+                {
+                    "topic": e.topic,
+                    "claim": e.claim,
+                    "evidence": e.evidence or None,
+                    "status": e.status,
+                    "notes_held_back": e.suppressed,
+                }
+                for e in _settled(ctx).all()
+            ]
+        }
+    )
+
+
+async def _settle_topic(ctx: ToolContext, args: dict) -> str:
+    try:
+        entry = _settled(ctx).settle(
+            str(args["topic"]), str(args["claim"]), str(args.get("evidence") or "")
+        )
+    except ValueError as exc:
+        return err(str(exc))
+    hint = (
+        "re-checked weekly; reopened if it stops returning non-zero"
+        if entry.evidence
+        else "no evidence: an assumption that expires in 30 days unless re-settled with evidence"
+    )
+    return ok({"settled": entry.topic, "status": entry.status, "note": hint})
+
+
+async def _unsettle_topic(ctx: ToolContext, args: dict) -> str:
+    entry = _settled(ctx).unsettle(str(args["topic"]))
+    if entry is None:
+        return err(f"not a settled topic: {args['topic']}")
+    return ok({"unsettled": entry.topic})
 
 
 async def _end_cycle(ctx: ToolContext, args: dict) -> str:
@@ -501,11 +580,22 @@ def register_memory_tools(registry: ToolRegistry) -> None:
             ToolSpec(
                 name="send_note",
                 description=(
-                    "Send a note to another agent's inbox and wake it. Use it to delegate "
-                    "work or report something the other agent owns; you cannot note yourself."
+                    "Send a note to another agent's inbox. Use it to delegate work or report "
+                    "something the other agent owns; you cannot note yourself. 'topic' is a "
+                    "short slug for what it is about, required for notes to the brain -- "
+                    "reuse the same slug for the same subject, without dates. 'level': "
+                    "'urgent' (something broke or needs action now), 'finding' (default; "
+                    "new and worth the receiver's time, batched into its next wake) or "
+                    "'fyi' (no wake; read at its next scheduled cycle). A note to the brain "
+                    "on a settled topic (see list_settled) is not delivered unless urgent."
                 ),
                 parameters=_schema(
-                    {"to": {"type": "string"}, "body": {"type": "string"}},
+                    {
+                        "to": {"type": "string"},
+                        "body": {"type": "string"},
+                        "topic": {"type": "string"},
+                        "level": {"type": "string", "enum": list(NOTE_LEVELS)},
+                    },
                     ["to", "body"],
                 ),
             ),
@@ -568,6 +658,52 @@ def register_memory_tools(registry: ToolRegistry) -> None:
                 ),
             ),
             _rewrite_identity,
+            BRAIN_ONLY,
+        ),
+        (
+            ToolSpec(
+                name="list_settled",
+                description=(
+                    "List the settled topics: what the brain has decided, with the evidence "
+                    "behind it. Check it before sending the brain a note -- a note on a "
+                    "settled topic is held back unless it is urgent (the pattern broke)."
+                ),
+                parameters=_NO_ARGS,
+            ),
+            _list_settled,
+            None,
+        ),
+        (
+            ToolSpec(
+                name="settle_topic",
+                description=(
+                    "Mark a topic settled so the experts' notes on it stop waking you. "
+                    "'topic' is a short slug without dates; 'claim' one line on what is "
+                    "settled. 'evidence' is a PromQL expression that returns a non-zero "
+                    "value for as long as the claim holds -- it is re-run weekly and the "
+                    "topic reopened (with a note to you) when it stops. Without evidence "
+                    "the claim is an assumption and expires in 30 days. Settling an "
+                    "existing topic replaces it."
+                ),
+                parameters=_schema(
+                    {
+                        "topic": {"type": "string"},
+                        "claim": {"type": "string"},
+                        "evidence": {"type": "string"},
+                    },
+                    ["topic", "claim"],
+                ),
+            ),
+            _settle_topic,
+            BRAIN_ONLY,
+        ),
+        (
+            ToolSpec(
+                name="unsettle_topic",
+                description="Reopen a settled topic, so notes on it reach you again.",
+                parameters=_schema({"topic": {"type": "string"}}, ["topic"]),
+            ),
+            _unsettle_topic,
             BRAIN_ONLY,
         ),
     ):

@@ -3404,3 +3404,17 @@ def test_brain_rotation_includes_judging_itself():
     judge = [a for a in BRAIN_ANGLES if a.startswith("Judge yourself")]
     assert len(judge) == 1
     assert "self_review" in judge[0] and "kind idea" in judge[0]
+
+
+def test_wake_hold_batches_findings_but_not_urgent_notes(make_loop, wall, brain_dir):
+    loop, _ = make_loop([], min_wake_gap_s=30 * 60, note_batch_s=120 * 60)
+    loop.last_cycle_at = wall() - 10 * 60
+
+    brain_dir.drop_note("energy", "new finding", topic="pv", level="finding")
+    assert loop._wake_hold_s() == pytest.approx(110 * 60)
+
+    brain_dir.drop_note("energy", "inverter down", topic="pv", level="urgent")
+    assert loop._wake_hold_s() == pytest.approx(20 * 60)
+
+    brain_dir.drop_note("approvals", "proposal p1 approved")
+    assert loop._wake_hold_s() == 0.0

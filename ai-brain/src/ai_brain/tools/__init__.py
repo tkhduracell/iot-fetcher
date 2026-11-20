@@ -87,6 +87,7 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "ha_error_log",
         "list_facts",
         "list_proposals",
+        "list_settled",
         "read_cycle_events",
         "read_expert",
         "read_fact",
