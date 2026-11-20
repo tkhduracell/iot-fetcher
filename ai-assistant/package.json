@@ -35,6 +35,7 @@
     "typescript": "^5.8.0"
   },
   "overrides": {
+    "ip-address": "^10.7.4",
     "mariadb": "^3.5.5",
     "mysql2": "^3.24.6"
   }
