@@ -61,6 +61,7 @@ FLUSH_EVERY_S = 300
 # Hourly: a changeover reminder needs hour resolution, the calendar changes rarely.
 AIRBNB_EVERY_S = 3600
 WATCHDOG_EVERY_S = 60
+RELEASE_EVERY_S = 60
 RESTART_DELAY_S = 30
 
 
@@ -447,6 +448,9 @@ async def run(settings: Settings) -> None:
     if system.slack_out is not None:
         tasks.append(asyncio.create_task(_every(FLUSH_EVERY_S, system.slack_out.flush_queue)))
         tasks.append(asyncio.create_task(_every(WATCHDOG_EVERY_S, system.slack_out.check_watchdog)))
+        # A no-op until quiet hours end; then the held posts go out as one
+        # digest within a minute of the hour.
+        tasks.append(asyncio.create_task(_every(RELEASE_EVERY_S, system.slack_out.release_held)))
         if settings.airbnb_ical_url:
             from ai_brain.airbnb import reminder_watcher
 

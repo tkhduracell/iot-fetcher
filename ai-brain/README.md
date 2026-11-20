@@ -155,6 +155,8 @@ Copy `.env.example` to `.env`. Every variable below is read by
 | `SLACK_BOT_TOKEN` | — | `xoxb-…`. Without both Slack tokens, Slack is skipped entirely. |
 | `SLACK_APP_TOKEN` | — | `xapp-…`, Socket Mode. |
 | `SLACK_USER_ID` | — | Your Slack user id; the only DM the brain talks to. |
+| `SLACK_STALE_THREAD_H` | `72` | A reply into a topic thread with no activity for this many hours is also broadcast to the DM's main view (`reply_broadcast`), so it isn't buried in an old thread. |
+| `SLACK_QUIET_HOURS` | `22-07` | Stockholm hours (`start-end`, end exclusive) during which non-urgent `slack_post`s are held and sent as one morning digest. Urgent posts and replies to your own messages go out at once. `off` disables. |
 | `DRY_RUN` | `0` | Exactly `"1"` means no side effect leaves the process. |
 | `RPM` | `8` | Requests per minute, per model key. |
 | `TPM` | `200000` | Tokens per minute, per model key. |

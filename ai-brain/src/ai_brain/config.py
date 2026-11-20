@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -260,6 +261,12 @@ class Settings:
     slack_bot_token: str
     slack_app_token: str
     slack_user_id: str
+    # Hours after which a reply into an existing topic thread is also
+    # broadcast to the DM's main view -- see SlackOut._send.
+    slack_stale_thread_h: int
+    # (start, end) local Stockholm hours during which non-urgent posts are
+    # held for a morning digest, or None when quiet hours are off.
+    slack_quiet_hours: tuple[int, int] | None
     dry_run: bool
     lan_subnets: list[str]
     lan_scan_s: int
@@ -284,6 +291,37 @@ class Settings:
     session_max_mb: int
     resume_max_age_s: int
     resume_max_deaths: int
+
+
+DEFAULT_QUIET_HOURS = (22, 7)
+NO_QUIET_HOURS = frozenset({"off", "none"})
+
+
+def _quiet_hours(raw: str) -> tuple[int, int] | None:
+    """``SLACK_QUIET_HOURS`` as ``(start, end)`` local hours, or None for off.
+
+    ``22-07`` means 22:00 up to (not including) 07:00 Stockholm time; a window
+    may wrap midnight or not. Blank means the default, ``off``/``none`` turns
+    it off, and so does an empty window like ``07-07``. A malformed value
+    falls back to the default with a warning rather than refusing to boot: a
+    typo here should cost Filip a quiet night's default, not the brain.
+    """
+    value = raw.strip().lower()
+    if not value:
+        return DEFAULT_QUIET_HOURS
+    if value in NO_QUIET_HOURS:
+        return None
+    try:
+        start_s, end_s = value.split("-")
+        start, end = int(start_s), int(end_s)
+    except ValueError:
+        start, end = -1, -1
+    if not (0 <= start <= 23 and 0 <= end <= 23):
+        logging.getLogger(__name__).warning(
+            "SLACK_QUIET_HOURS=%r is not HH-HH; using %02d-%02d", raw, *DEFAULT_QUIET_HOURS
+        )
+        return DEFAULT_QUIET_HOURS
+    return None if start == end else (start, end)
 
 
 def _csv(raw: str) -> list[str]:
@@ -452,6 +490,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         slack_bot_token=get("SLACK_BOT_TOKEN"),
         slack_app_token=get("SLACK_APP_TOKEN"),
         slack_user_id=get("SLACK_USER_ID"),
+        # A week of review showed 9 of 13 DMs landing as replies inside
+        # threads from Sep/Oct, invisible in the DM's main view. 72h: a thread
+        # Filip touched this week is still one he is following.
+        slack_stale_thread_h=max(0, get_int("SLACK_STALE_THREAD_H", 72)),
+        slack_quiet_hours=_quiet_hours(get("SLACK_QUIET_HOURS")),
         dry_run=get("DRY_RUN") == "1",
         lan_subnets=_csv(get("LAN_SUBNETS")),
         lan_scan_s=get_int("LAN_SCAN_MIN", 10) * 60,

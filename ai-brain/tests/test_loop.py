@@ -87,9 +87,12 @@ class FakeSlackOut:
         self.posts: list[str] = []
         self.unanswered: list[str] = []
 
-    async def post(self, topic: str, text: str) -> str:
+    async def post(self, topic: str, text: str, **_options) -> str:
         self.posts.append(topic)
         return "1.0"
+
+    def quiet_until(self):
+        return None
 
     async def mark_unanswered(self, topic: str) -> None:
         self.unanswered.append(topic)
