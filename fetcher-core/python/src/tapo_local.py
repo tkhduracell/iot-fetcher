@@ -153,7 +153,7 @@ async def _tapo():
                 # Clean up device connection
                 try:
                     await device.client.close()
-                except:
+                except Exception:
                     pass
 
             except Exception as device_error:

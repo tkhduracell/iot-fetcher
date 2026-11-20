@@ -32,8 +32,8 @@ def ngenic():
         return
     try:
         _ngenic()
-    except:
-        logger.exception("[ngenic] Failed to execute ngenice module")
+    except Exception:
+        logger.exception("[ngenic] Failed to execute ngenic module")
 
 
 def ngenic_backfill():
@@ -248,10 +248,13 @@ def _ngenic():
                             .tag("node_type", type.name)
                             .field(measurement.get_type().value, float(measurement["value"]))
                         )
-                except:
+                except Exception:
+                    logger.exception("[ngenic] Failed to read measurements for node %s", node.uuid())
                     if type == NodeType.CONTROLLER:
                         measurement: Optional[Measurement] = node.measurement(
                             MeasurementType.TEMPERATURE)
+                        if measurement is None:
+                            continue
                         points.append(
                             Point("ngenic_node_sensor_measurement_value")
                             .tag("node", node.uuid())

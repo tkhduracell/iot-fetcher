@@ -32,7 +32,7 @@ def get_elpris_price_url(area: str, day_offset: int):
 def elpris():
     try:
         _elpris()
-    except:
+    except Exception:
         logger.exception("[elpris] Failed to execute elpris module")
 
 
