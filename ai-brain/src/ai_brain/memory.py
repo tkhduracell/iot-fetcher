@@ -871,6 +871,70 @@ class MemoryDir:
         records.reverse()
         return records[: max(n, 0)]
 
+    # -- frozen facts ----------------------------------------------------
+    #
+    # A note asking an expert to stop rewriting a settled fact is a prompt
+    # rule, and a small model can ignore it (house-ops reopened the same
+    # settled fact after two reviews). A freeze is the same request enforced
+    # in code: the expert's write_fact refuses the name until it expires.
+    # Kept in the brain's own reviews/ dir, next to the verdict that set it,
+    # so the brain still never writes into an expert's memory.
+
+    def _freeze_path(self, expert: str) -> Path:
+        return self.reviews_dir / f"{safe_name(expert)}.frozen.json"
+
+    def _read_freezes(self, expert: str) -> dict:
+        try:
+            data = json.loads(self._freeze_path(expert).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def freeze_fact(
+        self, expert: str, fact: str, *, days: float, writes_left: int, reason: str
+    ) -> float:
+        """Freeze ``expert``'s fact ``fact`` for ``days``. ``writes_left`` writes
+        still pass first, so the expert can make the fix the review asked for.
+        Returns the expiry timestamp."""
+        self._require_brain("freeze_fact")
+        safe_name(fact)
+        until = self.clock().timestamp() + days * 86400
+        freezes = self._live_freezes(expert)
+        freezes[fact] = {"until": until, "writes_left": max(writes_left, 0), "reason": reason}
+        self.reviews_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(self._freeze_path(expert), json.dumps(freezes, indent=2, sort_keys=True))
+        return until
+
+    def _live_freezes(self, expert: str) -> dict:
+        now = self.clock().timestamp()
+        live = {}
+        for name, entry in self._read_freezes(expert).items():
+            try:
+                if float(entry["until"]) > now:
+                    live[name] = entry
+            except (KeyError, TypeError, ValueError):
+                continue
+        return live
+
+    def frozen_facts(self, expert: str) -> dict[str, dict]:
+        """The unexpired freezes on ``expert``'s facts, by fact name."""
+        return self._live_freezes(expert)
+
+    def take_frozen_write(self, expert: str, fact: str) -> dict | None:
+        """Called before ``expert`` writes ``fact``. ``None`` means the write may
+        go ahead (not frozen, or a granted write was used up by this call);
+        otherwise the freeze entry that blocks it."""
+        freezes = self._live_freezes(expert)
+        entry = freezes.get(fact)
+        if entry is None:
+            return None
+        left = int(entry.get("writes_left", 0) or 0)
+        if left <= 0:
+            return entry
+        entry["writes_left"] = left - 1
+        _atomic_write(self._freeze_path(expert), json.dumps(freezes, indent=2, sort_keys=True))
+        return None
+
     # -- inbox ---------------------------------------------------------
 
     def drop_note(self, sender: str, body: str) -> Path:

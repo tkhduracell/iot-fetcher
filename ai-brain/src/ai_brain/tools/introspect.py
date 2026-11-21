@@ -54,6 +54,19 @@ REVIEW_SENDER = "brain"
 PERSONA_PREVIEW_LINES = 10
 JOURNAL_DAYS = 2
 
+# review_expert freezes: how long by default, and the longest allowed.
+FREEZE_DEFAULT_DAYS = 14
+FREEZE_MAX_DAYS = 60
+# A verdict repeated on the same expert within this window means the note did
+# not work, so the brain is told to reach for a freeze rather than a third note.
+REPEAT_WINDOW_DAYS = 7
+
+# A fact rewritten this often is probably being re-litigated or re-dated rather
+# than learned: prompt bloat the brain should prune or freeze.
+CHURN_MIN_WRITES = 10
+CHURN_MIN_AGE_DAYS = 3
+CHURN_WRITES_PER_DAY = 1.0
+
 # code_* limits -- generous enough for one file or one grep pass, capped hard
 # enough that a runaway read cannot swamp the conversation the way
 # MAX_TOOL_RESULT_CHARS exists to catch as a last resort (loop.py).
@@ -282,9 +295,41 @@ def _last_review(ctx: ToolContext, name: str) -> dict | None:
     return review
 
 
+def _churning(stats: list, now: float) -> list[dict]:
+    """Facts rewritten at least daily for a while: rewrite-heavy, not learning."""
+    rows = []
+    for stat in stats:
+        age_days = (now - stat.first_written_at) / 86400
+        if age_days < CHURN_MIN_AGE_DAYS or stat.writes < CHURN_MIN_WRITES:
+            continue
+        per_day = stat.writes / age_days
+        if per_day >= CHURN_WRITES_PER_DAY:
+            rows.append({"name": stat.name, "writes": stat.writes, "per_day": round(per_day, 1)})
+    return rows
+
+
+def _frozen(ctx: ToolContext, name: str) -> dict:
+    brain = ctx.memories.get("brain")
+    return brain.frozen_facts(name) if brain is not None else {}
+
+
 def _one_expert_overview(ctx: ToolContext, memory: MemoryDir) -> dict:
     stats = memory.fact_stats()
-    return {
+    churning = _churning(stats, memory.clock().timestamp())
+    extra: dict = {}
+    if churning:
+        extra["rewrite_heavy_facts"] = churning
+        extra["rewrite_heavy_hint"] = (
+            "rewritten at least daily: likely re-dated or re-litigated rather than new "
+            "knowledge. Consider review_expert with freeze_fact, or asking it to merge or delete."
+        )
+    frozen = _frozen(ctx, memory.name)
+    if frozen:
+        extra["frozen_facts"] = {
+            fact: {"until": e.get("until"), "writes_left": e.get("writes_left", 0)}
+            for fact, e in frozen.items()
+        }
+    return extra | {
         "name": memory.name,
         "persona_preview": _persona_preview(memory),
         "facts": [
@@ -335,6 +380,10 @@ async def _expert_overview(ctx: ToolContext, args: dict) -> str:
                 "open_gaps": len(memory.gaps()),
                 "unread_notes": len(memory.unread_notes()),
                 "last_review_verdict": review.get("verdict") if review else None,
+                "rewrite_heavy_facts": len(
+                    _churning(memory.fact_stats(), memory.clock().timestamp())
+                ),
+                "frozen_facts": len(_frozen(ctx, expert_name)),
             }
         )
     return ok({"experts": rows})
@@ -404,18 +453,67 @@ async def _review_expert(ctx: ToolContext, args: dict) -> str:
     # tool-output fence alone.
     findings = redact(str(args["findings"]))
 
+    freeze_name = str(args.get("freeze_fact") or "").strip()
+    if freeze_name and freeze_name not in memory.list_facts():
+        known = ", ".join(memory.list_facts())
+        return err(f"review_expert: {name} has no fact {freeze_name} (known: {known})")
+    try:
+        freeze_days = float(args.get("freeze_days") or FREEZE_DEFAULT_DAYS)
+    except (TypeError, ValueError):
+        return err("review_expert: freeze_days must be a number")
+    freeze_days = min(max(freeze_days, 1.0), FREEZE_MAX_DAYS)
+
     brain = ctx.memory  # review_expert is brain-only, so ctx.memory is the brain's own
     now = brain.clock().timestamp()
-    brain.append_review(name, {"ts": now, "verdict": verdict, "findings": findings})
+    window = now - REPEAT_WINDOW_DAYS * 86400
+    repeats = sum(
+        1
+        for r in brain.recent_reviews(name, n=50)
+        if r.get("verdict") == verdict and float(r.get("ts", 0) or 0) >= window
+    )
+    record: dict = {"ts": now, "verdict": verdict, "findings": findings}
+    if freeze_name:
+        record["froze"] = freeze_name
+    brain.append_review(name, record)
+
+    result: dict = {"reviewed": name, "verdict": verdict}
+    freeze_line = ""
+    if freeze_name:
+        # A non-good verdict asks for a fix, so one write still passes; after
+        # that the fact is locked. A 'good' freeze locks it as it stands.
+        writes_left = 0 if verdict == "good" else 1
+        until = brain.freeze_fact(
+            name,
+            freeze_name,
+            days=freeze_days,
+            writes_left=writes_left,
+            reason=f"{verdict} review",
+        )
+        result["frozen"] = {"fact": freeze_name, "until": until, "writes_left": writes_left}
+        freeze_line = (
+            f"\nFact '{freeze_name}' is now frozen for {freeze_days:g} days: "
+            + ("you get one write to fix it, then" if writes_left else "")
+            + " write_fact will refuse it. Treat it as settled."
+        )
+    elif verdict != "good" and repeats >= 1:
+        result["repeat"] = repeats + 1
+        result["hint"] = (
+            f"this is the same '{verdict}' verdict on {name} {repeats + 1} times in "
+            f"{REPEAT_WINDOW_DAYS} days, so the note is not working. A rule in a note is "
+            "easy for a model to ignore; freeze_fact enforces it in code."
+        )
 
     if verdict != "good":
         # Same delivery path send_note uses: drop the note in the target's
         # inbox and wake it, rather than a second copy of that logic here.
-        body = f"Brain review: {verdict} -- {findings}\nFix or delete the affected facts."
+        body = (
+            f"Brain review: {verdict} -- {findings}\nFix or delete the affected facts."
+            + freeze_line
+        )
         memory.drop_note(REVIEW_SENDER, body)
         ctx.wake(name)
 
-    return ok({"reviewed": name, "verdict": verdict})
+    return ok(result)
 
 
 # ======================================================================
@@ -1173,13 +1271,18 @@ def register_introspect(registry: ToolRegistry) -> None:
                     "expert. Any verdict but 'good' also drops a note in the expert's inbox "
                     "('Brain review: ..., fix or delete the affected facts') and wakes it -- "
                     "this is the only way you correct an expert; you never edit its memory "
-                    "directly."
+                    "directly. Pass 'freeze_fact' (one of its fact names) to lock a settled "
+                    "fact in code for 'freeze_days' (default 14, max 60): after one write "
+                    "for the fix (none for 'good'), its write_fact refuses that name. Use it "
+                    "when a note alone has not stopped it reopening a settled question."
                 ),
                 parameters=_schema(
                     {
                         "name": {"type": "string"},
                         "verdict": {"type": "string", "enum": list(VERDICTS)},
                         "findings": {"type": "string"},
+                        "freeze_fact": {"type": "string"},
+                        "freeze_days": {"type": "number"},
                     },
                     ["name", "verdict", "findings"],
                 ),
