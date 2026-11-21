@@ -546,7 +546,7 @@ facts, journal and gaps. The brain is the one loop that can see across all of
 them, and the only one whose job is to reflect on what it finds:
 
 - **`expert_overview(name?)`** — a one-line row per expert (facts, open gaps,
-  unread inbox, its last review verdict) when `name` is omitted, or one
+  unread inbox, its last review verdict, rewrite-heavy and frozen fact counts) when `name` is omitted, or one
   expert's persona preview, fact list, gaps, unread count, last cycle, recent
   journal and last review when it is given.
 - **`read_expert(name, what, fact?, days?)`** — read that expert's `persona`,
@@ -564,6 +564,19 @@ them, and the only one whose job is to reflect on what it finds:
   `<findings>`. Fix or delete the affected facts." — and wakes it, the same
   delivery path `send_note` uses. The expert decides what to do with the note
   on its own next cycle; the brain never edits the expert's memory itself.
+- **Freezing a settled fact.** A note is a rule in the prompt, and a small model
+  can ignore it. `review_expert(..., freeze_fact=<name>, freeze_days=14)` turns
+  "this is settled" into code: the freeze is kept in the brain's own
+  `reviews/<name>.frozen.json`, and the expert's `write_fact` refuses that name
+  until it expires (max 60 days). A non-`good` verdict grants one write first, so
+  the expert can make the fix the review asked for; a `good` freeze locks the
+  fact as it stands. Deleting stays allowed, and the MCP tools (Filip) bypass it.
+  When the same non-`good` verdict hits the same expert twice in 7 days without a
+  freeze, the result says so and points at `freeze_fact`.
+- **Rewrite-heavy facts.** `expert_overview` flags facts with at least 10 writes
+  at one or more a day (and at least 3 days old) as `rewrite_heavy_facts`:
+  usually a fact being re-dated or re-litigated rather than new knowledge, which
+  bloats every later prompt. The summary row counts them, and frozen facts.
 
 An hourly angle ("Review one expert...", see `BRAIN_ANGLES` in `loop.py`)
 puts this in the brain's own rotation, so a stale or contradicted fact gets

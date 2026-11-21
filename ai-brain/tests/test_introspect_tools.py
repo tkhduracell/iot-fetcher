@@ -281,6 +281,8 @@ async def test_expert_overview_lists_a_row_per_expert(registry, make_ctx, expert
             "open_gaps": 0,
             "unread_notes": 0,
             "last_review_verdict": None,
+            "rewrite_heavy_facts": 0,
+            "frozen_facts": 0,
         }
     ]
 
@@ -1015,3 +1017,90 @@ async def test_code_overview_without_a_snapshot_reports_unavailable(registry, ma
 async def test_code_tools_without_a_repo_extra_report_unavailable(registry, make_ctx):
     out = await call(registry, make_ctx(), "code_read", path="README.md")
     assert "unavailable" in out["error"]
+
+
+# -- review_expert freeze / repeat, expert_overview churn --------------------
+
+
+def _register_write_fact(registry):
+    from ai_brain.tools.memory_tools import register_memory_tools
+
+    register_memory_tools(registry)
+
+
+async def test_review_expert_freeze_allows_one_fix_then_refuses(
+    registry, make_ctx, brain_dir, expert_dir
+):
+    _register_write_fact(registry)
+    expert_dir.write_fact("avfuktare", "Avfuktare timer", "open question")
+
+    out = await call(
+        registry, make_ctx(), "review_expert",
+        name="energy", verdict="repetitive", findings="settled", freeze_fact="avfuktare",
+    )
+    assert out["frozen"]["fact"] == "avfuktare"
+    assert out["frozen"]["writes_left"] == 1
+    assert "frozen for 14 days" in expert_dir.unread_notes()[0].body
+    assert brain_dir.recent_reviews("energy", 1)[0]["froze"] == "avfuktare"
+
+    energy = make_ctx("energy")
+    fix = await call(registry, energy, "write_fact", name="avfuktare", title="Avfuktare timer", body="Settled: the evening dip is a clock timer, 16:40-19:00 daily.")
+    assert fix["written"] == "avfuktare"
+    again = await call(registry, energy, "write_fact", name="avfuktare", title="Avfuktare timer", body="Reopened: maybe the dip follows the spot price after all.")
+    assert "frozen by a brain review" in again["error"]
+    assert expert_dir.read_fact("avfuktare").body == "Settled: the evening dip is a clock timer, 16:40-19:00 daily."
+    # Other facts are untouched.
+    other = await call(registry, energy, "write_fact", name="pool", title="Pool status", body="Pool has been cold for two weeks, pump on winter setting.")
+    assert other["written"] == "pool"
+
+
+async def test_freeze_expires(registry, make_ctx, brain_dir, expert_dir, clock):
+    _register_write_fact(registry)
+    expert_dir.write_fact("avfuktare", "Avfuktare timer", "x")
+    await call(
+        registry, make_ctx(), "review_expert",
+        name="energy", verdict="good", findings="fine", freeze_fact="avfuktare", freeze_days=2,
+    )
+    energy = make_ctx("energy")
+    blocked = await call(registry, energy, "write_fact", name="avfuktare", title="Avfuktare timer", body="Settled: clock timer, no follow-up needed per review.")
+    assert "error" in blocked
+
+    from datetime import timedelta
+
+    clock.state["now"] += timedelta(days=3)
+    assert brain_dir.frozen_facts("energy") == {}
+    passed = await call(registry, energy, "write_fact", name="avfuktare", title="Avfuktare timer", body="Settled: clock timer, no follow-up needed per review.")
+    assert passed["written"] == "avfuktare"
+
+
+async def test_review_expert_freeze_unknown_fact_is_an_error(registry, make_ctx, expert_dir):
+    out = await call(
+        registry, make_ctx(), "review_expert",
+        name="energy", verdict="stale", findings="x", freeze_fact="nope",
+    )
+    assert "has no fact nope" in out["error"]
+    assert expert_dir.unread_notes() == []
+
+
+async def test_review_expert_repeat_verdict_suggests_freeze(registry, make_ctx):
+    first = await call(registry, make_ctx(), "review_expert", name="energy", verdict="repetitive", findings="a")
+    assert "repeat" not in first
+    second = await call(registry, make_ctx(), "review_expert", name="energy", verdict="repetitive", findings="b")
+    assert second["repeat"] == 2
+    assert "freeze_fact" in second["hint"]
+
+
+async def test_expert_overview_flags_rewrite_heavy_facts(registry, make_ctx, expert_dir, clock):
+    from datetime import timedelta
+
+    expert_dir.write_fact("panic_series", "Panic series", "v0")
+    clock.state["now"] += timedelta(days=4)
+    for i in range(11):
+        expert_dir.write_fact("panic_series", "Panic series", f"v{i + 1}")
+    expert_dir.write_fact("steady", "Steady", "once")
+
+    out = await call(registry, make_ctx(), "expert_overview", name="energy")
+
+    assert [f["name"] for f in out["rewrite_heavy_facts"]] == ["panic_series"]
+    assert out["rewrite_heavy_facts"][0]["writes"] == 12
+    assert "freeze_fact" in out["rewrite_heavy_hint"]

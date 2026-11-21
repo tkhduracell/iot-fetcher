@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ai_brain import identity
 from ai_brain.llm import ToolSpec
@@ -142,6 +144,14 @@ async def _append_journal(ctx: ToolContext, args: dict) -> str:
     return ok({"appended": True})
 
 
+_LOCAL_TZ = ZoneInfo("Europe/Stockholm")
+
+
+def _stockholm(ts: float) -> str:
+    """A timestamp as local time, the way the constitution asks times be written."""
+    return datetime.fromtimestamp(ts, _LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+
+
 async def _write_fact(ctx: ToolContext, args: dict) -> str:
     name = str(args["name"])
     title = str(args["title"])
@@ -149,6 +159,16 @@ async def _write_fact(ctx: ToolContext, args: dict) -> str:
     junk_reason = junk_fact_reason(title, body)
     if junk_reason is not None:
         return err(f"refused: {junk_reason}")
+    brain = ctx.memories.get("brain")
+    if brain is not None and brain is not ctx.memory:
+        frozen = brain.take_frozen_write(ctx.loop, name)
+        if frozen is not None:
+            return err(
+                f"refused: '{name}' is frozen by a brain review until "
+                f"{_stockholm(float(frozen['until']))} ({frozen.get('reason', '')}). "
+                "It is settled: do not reopen it. If you have new evidence, send_note "
+                "it to the brain instead."
+            )
     # Read before writing: once written, name is its own exact match and
     # would never show up as a "similar" existing name against itself.
     similar = _similar_fact_names(name, ctx.memory.list_facts())
